@@ -1,5 +1,9 @@
 # ARC-Bench
 
+[![🤗 Dataset](https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-ARC--Bench-yellow)](https://huggingface.co/datasets/AIMING-Lab-UNC/ARC-Bench)
+
+Also available on the Hugging Face Hub: **[AIMING-Lab-UNC/ARC-Bench](https://huggingface.co/datasets/AIMING-Lab-UNC/ARC-Bench)** (`load_dataset("AIMING-Lab-UNC/ARC-Bench")`).
+
 A self-contained **55-topic** open-ended autonomous-research benchmark spanning
 five domains — **ML (25), high-energy physics (10), quantum (10), biology (7),
 and statistics (3)**. Each framework receives the same per-topic manifest

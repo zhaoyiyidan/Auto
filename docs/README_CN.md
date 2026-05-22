@@ -21,6 +21,7 @@
 
 <p align="center">
   <a href="https://arxiv.org/abs/2605.20025"><img src="https://img.shields.io/badge/arXiv-2605.20025-b31b1b?logo=arxiv&logoColor=white" alt="arXiv"></a>
+  <a href="https://huggingface.co/datasets/AIMING-Lab-UNC/ARC-Bench"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-ARC--Bench-yellow" alt="ARC-Bench on Hugging Face"></a>
   <a href="../LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
   <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white" alt="Python 3.11+"></a>
   <a href="#测试"><img src="https://img.shields.io/badge/Tests-2699%20passed-brightgreen?logo=pytest&logoColor=white" alt="2699 Tests Passed"></a>
@@ -68,7 +69,7 @@
 ---
 
 ## 🔥 News
-- **[05/19/2026]** **v0.5.0** — **多领域实验智能体 + ARC-Bench** — 两大更新。**(1) 领域专家执行智能体：** 实验阶段（第 10–13 阶段）不再局限于默认的 ML 沙箱，而是按学科路由到专业智能体——**高能物理**（ColliderAgent：拉格朗日量 → FeynRules → MadGraph5 → Delphes，经 Magnus 云）、**生物学**（COBRApy 全基因组代谢建模）与**统计学**（模拟研究智能体），并由通用 Docker 执行器覆盖化学/材料。流水线会根据研究领域自动选择执行器。**(2) ARC-Bench：** 一个 **55 个主题**的开放式自主研究基准，覆盖 **ML（25）、高能物理（10）、量子（10）、生物（7）、统计（3）**，每个主题都附带清单（manifest）与评分量规（rubric），位于 `experiments/arc_bench/`。**[→ 领域集成指南](DOMAIN_INTEGRATION_GUIDE.md)**
+- **[05/19/2026]** **v0.5.0** — **多领域实验智能体 + ARC-Bench** — 两大更新。**(1) 领域专家执行智能体：** 实验阶段（第 10–13 阶段）不再局限于默认的 ML 沙箱，而是按学科路由到专业智能体——**高能物理**（ColliderAgent：拉格朗日量 → FeynRules → MadGraph5 → Delphes，经 Magnus 云）、**生物学**（COBRApy 全基因组代谢建模）与**统计学**（模拟研究智能体），并由通用 Docker 执行器覆盖化学/材料。流水线会根据研究领域自动选择执行器。**(2) ARC-Bench：** 一个 **55 个主题**的开放式自主研究基准，覆盖 **ML（25）、高能物理（10）、量子（10）、生物（7）、统计（3）**，每个主题都附带清单（manifest）与评分量规（rubric），位于 `experiments/arc_bench/`，并已发布到 [🤗 Hugging Face](https://huggingface.co/datasets/AIMING-Lab-UNC/ARC-Bench)。**[→ 领域集成指南](DOMAIN_INTEGRATION_GUIDE.md)**
 - **[04/01/2026]** **v0.4.0** — **人机协作 Co-Pilot 系统** — AutoResearchClaw 不再是纯自动化工具。新增 HITL 系统支持 6 种干预模式（`full-auto`、`gate-only`、`checkpoint`、`step-by-step`、`co-pilot`、`custom`），支持逐阶段策略配置与深度人机协作。包括：Idea Workshop（假设共创）、Baseline Navigator（实验设计审核）、Paper Co-Writer（协作撰写论文）、SmartPause（基于置信度的动态暂停）、ALHF 干预学习、反幻觉声明验证、成本预算护栏、流水线分支并行探索假设，以及 CLI 命令（`attach`/`status`/`approve`/`reject`/`guide`）。**[→ 完整 HITL 指南](HITL_GUIDE.md)**
 - **[03/30/2026]** **灵活技能加载** — AutoResearchClaw 现已支持从任何学科加载开源和自定义技能。内置 20 个预加载技能作为即用参考，覆盖科学写作、实验设计、化学、生物等领域，包括社区贡献的 [A-Evolve](https://github.com/A-EVO-Lab/a-evolve) 自进化技能。通过 `researchclaw skills install` 加载或将 `SKILL.md` 放入 `.claude/skills/`。参见[技能库](#-技能库)。
 - **[03/22/2026]** [v0.3.2](https://github.com/aiming-lab/AutoResearchClaw/releases/tag/v0.3.2) — **跨平台支持 + 重大稳定性更新** — AutoResearchClaw 现已支持任何 ACP 兼容的 AI 代理后端（Claude Code、Codex CLI、Copilot CLI、Gemini CLI、Kimi CLI），并通过 OpenClaw 桥接支持消息平台（Discord、Telegram、飞书、微信）。新增 CLI-agent 代码生成后端，将 Stage 10 和 13 委托给外部 CLI agent，支持预算控制和超时管理。同时包含反数据捏造系统（VerifiedRegistry + 实验诊断与修复循环），100+ 个 bug 修复，模块化 executor 重构，`--resume` 自动检测，LLM 重试加固，以及社区反馈修复。

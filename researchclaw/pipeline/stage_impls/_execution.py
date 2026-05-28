@@ -61,15 +61,20 @@ def _workspace_refine_prompt(
         f"ORIGINAL EXPERIMENT PLAN:\n{exp_plan}\n\n"
         f"KNOWN PROJECT FILES FROM PRIOR STAGES:\n{project_files}\n\n"
         f"PRIOR RUN SUMMARIES:\n{summaries}\n\n"
-        "Required completion protocol:\n"
-        "1. Inspect the existing workspace and modify the appropriate files.\n"
-        "2. Prepare the command that should launch the improved experiment.\n"
-        "3. Commit your code changes with git.\n"
-        f"4. Write {manifest_filename} in the workspace root or .researchclaw/.\n"
-        "5. The manifest must contain code_commit, launch.command, launch.cwd, "
-        "launch.env, launch.resources, and result_paths.\n"
-        "6. Do not submit the job yourself; ResearchClaw's submitter will run "
-        "the launch command from the manifest.\n"
+        "Completion contract (MUST):\n"
+        "1. MUST inspect the existing workspace before editing.\n"
+        "2. MUST improve the existing repository in place, using its structure.\n"
+        "3. MUST prepare a launch command or script for the improved run.\n"
+        "4. MUST git add and git commit the code changes you made.\n"
+        f"5. MUST write {manifest_filename} in the workspace root or .researchclaw/.\n"
+        "6. MUST include code_commit, launch.command, launch.cwd, launch.env, "
+        "launch.resources, and result_paths in the manifest.\n\n"
+        "Boundaries (MUST NOT):\n"
+        "1. MUST NOT submit the job yourself. Do not submit the job yourself; "
+        "ResearchClaw's submitter will run the manifest command.\n"
+        "2. MUST NOT fabricate a job_id or final result registry entry.\n"
+        "3. MUST NOT assume a fixed entrypoint, file layout, or script name.\n"
+        "4. MUST NOT emit code blocks for ResearchClaw to parse as the output.\n"
     )
 
 
@@ -944,7 +949,7 @@ def _execute_iterative_refine(
     if workspace_native_enabled:
         from researchclaw.experiment.submitter import create_submitter
         from researchclaw.experiment.workspace_agent import create_workspace_agent
-        from researchclaw.pipeline.workspace_orchestrator import run_workspace_pipeline
+        from researchclaw.pipeline.workspace_orchestrator import run_workspace_agent_task
 
         workspace_cfg = config.experiment.workspace_agent
         exp_plan_text = _read_prior_artifact(run_dir, "exp_plan.yaml") or ""
@@ -959,7 +964,7 @@ def _execute_iterative_refine(
         )
         agent = create_workspace_agent(config, llm=llm, prompts=prompts)
         submitter = create_submitter(config)
-        result = run_workspace_pipeline(
+        result = run_workspace_agent_task(
             workspace_path=Path(workspace_cfg.workspace_path),
             run_dir=stage_dir,
             stage=13,
@@ -967,6 +972,7 @@ def _execute_iterative_refine(
             submitter=submitter,
             prompt=prompt,
             timeout_sec=workspace_cfg.timeout_sec,
+            close_policy=workspace_cfg.close_policy,
         )
         log.update(
             {

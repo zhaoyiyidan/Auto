@@ -658,7 +658,7 @@ def _repair_via_workspace_agent(
     try:
         from researchclaw.experiment.submitter import create_submitter
         from researchclaw.experiment.workspace_agent import create_workspace_agent
-        from researchclaw.pipeline.workspace_orchestrator import run_workspace_pipeline
+        from researchclaw.pipeline.workspace_orchestrator import run_workspace_agent_task
 
         workspace_cfg = config.experiment.workspace_agent
         stage_dir = run_dir / f"stage-14-workspace-repair-v{cycle}"
@@ -673,7 +673,7 @@ def _repair_via_workspace_agent(
         )
         agent = create_workspace_agent(config, llm=llm)
         submitter = create_submitter(config)
-        result = run_workspace_pipeline(
+        result = run_workspace_agent_task(
             workspace_path=Path(workspace_cfg.workspace_path),
             run_dir=stage_dir,
             stage=14,
@@ -681,6 +681,8 @@ def _repair_via_workspace_agent(
             submitter=submitter,
             prompt=prompt,
             timeout_sec=workspace_cfg.timeout_sec,
+            iteration=cycle,
+            close_policy=getattr(workspace_cfg, "close_policy", "keep"),
         )
         if not result.ok:
             logger.warning("Workspace-native repair failed: %s", result.error)

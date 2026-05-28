@@ -115,14 +115,22 @@ experiment:
     timeout_sec: 600             # Max seconds for OpenCode generation
     max_retries: 1               # Retry count on failure
     workspace_cleanup: true      # Remove temp workspace after collection
-  # CLI-based code generation backend (Stages 10 & 13).
-  # provider: "llm" (default) | "claude_code" | "codex"
-  # cli_agent:
-  #   provider: "codex"
-  #   base_url: "https://your-provider.example.com/v1"
-  #   api_key_env: "CUSTOM_API_KEY"
-  #   model: ""
-  #   timeout_sec: 600
+  # Existing-workspace ACP code agent path (Stages 10, 13, and repairs).
+  # The code agent edits workspace_path directly, commits with git, and writes
+  # run_manifest.json. ResearchClaw records provenance and submits via submitter.
+  # workspace_agent:
+  #   enabled: true
+  #   transport: "acp"
+  #   workspace_path: "/path/to/existing/repo"
+  #   session_name: "researchclaw-code-${run_id}"
+  #   agent: "claude"        # or "codex"
+  #   acpx_command: ""       # empty = auto-detect acpx
+  #   timeout_sec: 1800
+  #   max_turns: 50
+  #   manifest_filename: "run_manifest.json"
+  #   close_policy: "keep"   # keep | close
+  # submitter:
+  #   type: "local"          # local | slurm | ssh_slurm | manual | custom_python
 
 # ============================================================================
 # SSH Remote Examples

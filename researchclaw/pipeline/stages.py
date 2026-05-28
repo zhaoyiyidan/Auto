@@ -128,6 +128,7 @@ GATE_ROLLBACK: dict[Stage, Stage] = {
 
 DECISION_ROLLBACK: dict[str, Stage] = {
     "pivot": Stage.HYPOTHESIS_GEN,       # Discard hypotheses, re-generate
+    "extend": Stage.HYPOTHESIS_GEN,      # Keep evidence, generate follow-ups
     "refine": Stage.ITERATIVE_REFINE,    # Keep hypotheses, re-run experiments
 }
 

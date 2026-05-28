@@ -713,6 +713,7 @@ def execute_pipeline(
                 )
                 # BUG-211: Promote best stage-14 before proceeding with
                 # empty data — an earlier iteration may have real metrics.
+                _clear_extension_context(run_dir)
                 _promote_best_stage14(run_dir, config)
             elif pivot_count < MAX_DECISION_PIVOTS:
                 rollback_target = DECISION_ROLLBACK[result.decision]
@@ -728,6 +729,10 @@ def execute_pipeline(
                     and result.decision == "refine"
                 ):
                     rollback_target = Stage.EXPERIMENT_RUN
+                if result.decision == "extend":
+                    _write_extension_context(run_dir)
+                elif result.decision in ("pivot", "refine"):
+                    _clear_extension_context(run_dir)
                 _record_decision_history(
                     run_dir, result.decision, rollback_target, pivot_count + 1
                 )
@@ -807,6 +812,8 @@ def execute_pipeline(
                 print(
                     f"[{run_id}] Max pivot attempts reached — forcing PROCEED"
                 )
+
+                _clear_extension_context(run_dir)
 
                 # BUG-205: After forced PROCEED, promote the BEST stage-14
                 # experiment summary across all REFINE iterations.
@@ -1274,6 +1281,82 @@ def _version_rollback_stages(
             logger.debug(
                 "Versioned (rename) %s → %s", stage_dir.name, version_dir.name
             )
+
+
+def _read_stage_artifact(run_dir: Path, stage: Stage, filename: str) -> str:
+    """Read a current stage artifact, falling back to latest versioned copy."""
+
+    current = run_dir / f"stage-{int(stage):02d}" / filename
+    if current.exists():
+        try:
+            return current.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
+    candidates = sorted(run_dir.glob(f"stage-{int(stage):02d}_v*/{filename}"))
+    for candidate in reversed(candidates):
+        try:
+            return candidate.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+    return ""
+
+
+def _write_extension_context(run_dir: Path) -> None:
+    """Write context for an EXTEND rollback into Stage 8.
+
+    EXTEND keeps the current hypothesis line alive, so the next hypothesis
+    generation pass needs the previous hypothesis plus the experiment evidence
+    that motivated follow-up hypotheses.
+    """
+
+    hypotheses = _read_stage_artifact(run_dir, Stage.HYPOTHESIS_GEN, "hypotheses.md")
+    analysis = _read_stage_artifact(run_dir, Stage.RESULT_ANALYSIS, "analysis.md")
+    summary = _read_stage_artifact(
+        run_dir, Stage.RESULT_ANALYSIS, "experiment_summary.json"
+    )
+    decision = _read_stage_artifact(run_dir, Stage.RESEARCH_DECISION, "decision.md")
+
+    if summary:
+        try:
+            summary = json.dumps(json.loads(summary), indent=2, ensure_ascii=False)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    sections = [
+        "# Hypothesis Extension Context",
+        "",
+        "Generated after an EXTEND research decision. Use this as prior "
+        "evidence for follow-up hypotheses, not as a blank-slate pivot.",
+        "",
+        "## Previous Hypotheses",
+        hypotheses or "_No previous hypotheses artifact found._",
+        "",
+        "## Latest Analysis",
+        analysis or "_No latest analysis artifact found._",
+        "",
+        "## Latest Experiment Summary",
+        "```json",
+        summary or "{}",
+        "```",
+        "",
+        "## Decision Rationale",
+        decision or "_No decision artifact found._",
+        "",
+    ]
+    (run_dir / "hypothesis_extension_context.md").write_text(
+        "\n".join(sections), encoding="utf-8"
+    )
+
+
+def _clear_extension_context(run_dir: Path) -> None:
+    context_path = run_dir / "hypothesis_extension_context.md"
+    try:
+        context_path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        logger.warning("Failed to remove stale extension context: %s", exc)
 
 
 def _consecutive_empty_metrics(run_dir: Path, pivot_count: int) -> bool:

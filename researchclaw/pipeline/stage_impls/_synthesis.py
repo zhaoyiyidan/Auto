@@ -104,6 +104,23 @@ def _execute_hypothesis_gen(
     prompts: PromptManager | None = None,
 ) -> StageResult:
     synthesis = _read_prior_artifact(run_dir, "synthesis.md") or ""
+    extension_context = ""
+    extension_context_path = run_dir / "hypothesis_extension_context.md"
+    if extension_context_path.exists():
+        try:
+            raw_extension_context = extension_context_path.read_text(
+                encoding="utf-8"
+            ).strip()
+        except OSError:
+            raw_extension_context = ""
+        if raw_extension_context:
+            extension_context = (
+                "\n\n## Hypothesis Extension Context\n"
+                "Generate deeper follow-up hypotheses from the prior hypothesis "
+                "and experiment evidence below. Do not treat this as a blank-slate "
+                "pivot.\n\n"
+                f"{raw_extension_context}"
+            )
 
     if llm is not None:
         _pm = prompts or PromptManager()
@@ -136,7 +153,11 @@ def _execute_hypothesis_gen(
         if hypotheses_md is None:
             # --- Multi-perspective debate ---
             perspectives_dir = stage_dir / "perspectives"
-            variables = {"topic": config.research.topic, "synthesis": synthesis}
+            variables = {
+                "topic": config.research.topic,
+                "synthesis": synthesis,
+                "extension_context": extension_context,
+            }
             perspectives = _multi_perspective_generate(
                 llm, _active_roles, variables, perspectives_dir
             )

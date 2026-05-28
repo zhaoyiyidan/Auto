@@ -35,7 +35,7 @@ STAGES: dict[str, dict[str, Any]] = {k: dict(v) for k, v in _ML_STAGES.items()}
 
 # ── hypothesis_gen ─────────────────────────────────────────────────────────
 # ML placeholders preserved: system uses {feasibility_constraint};
-# user uses {domain_context} and {synthesis}.
+# user uses {domain_context}, {extension_context}, and {synthesis}.
 STAGES["hypothesis_gen"] = {
     "system": (
         "You formulate testable hypotheses about metabolic phenotypes (gene "
@@ -84,6 +84,7 @@ STAGES["hypothesis_gen"] = {
         "- ML-style 'predict X with a neural network' — FBA is a linear "
         "program; learning is not the right tool here.\n\n"
         "{domain_context}"
+        "{extension_context}\n"
         "Synthesis:\n{synthesis}"
     ),
 }
@@ -510,7 +511,9 @@ DEBATE_ROLES_HYPOTHESIS: dict[str, dict[str, str]] = {
             "Propose hypotheses that lean on the strengths of the chosen "
             "GEM (clear GPR rules, well-curated subsystems). Identify "
             "reactions / genes / subsystems where the model is most likely "
-            "to make a confident prediction."
+            "to make a confident prediction.\n\n"
+            "{extension_context}\n"
+            "Synthesis:\n{synthesis}"
         ),
     },
     "fba_analyst": {
@@ -524,7 +527,9 @@ DEBATE_ROLES_HYPOTHESIS: dict[str, dict[str, str]] = {
             "Critique each candidate hypothesis on testability with the "
             "FBA / pFBA / FVA / sampling / knockout toolkit. Flag any that "
             "would require kinetic, regulatory, or dynamic modelling — those "
-            "fall outside constraint-based scope."
+            "fall outside constraint-based scope.\n\n"
+            "{extension_context}\n"
+            "Synthesis:\n{synthesis}"
         ),
     },
     "experimentalist": {
@@ -538,7 +543,9 @@ DEBATE_ROLES_HYPOTHESIS: dict[str, dict[str, str]] = {
         "user": (
             "For each hypothesis, ask: which lab measurement (growth rate, "
             "yield, gene-essentiality assay, ¹³C-MFA flux) would falsify it? "
-            "If no realistic measurement exists, demote the hypothesis."
+            "If no realistic measurement exists, demote the hypothesis.\n\n"
+            "{extension_context}\n"
+            "Synthesis:\n{synthesis}"
         ),
     },
 }

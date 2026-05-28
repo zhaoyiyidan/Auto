@@ -5,6 +5,7 @@ from typing import cast
 import pytest
 
 from researchclaw.config import (
+    AcpConfig,
     CliAgentConfig,
     ExperimentConfig,
     RCConfig,
@@ -290,6 +291,57 @@ def test_cli_agent_config_roundtrip_through_experiment_config(tmp_path: Path):
     assert config.experiment.cli_agent.provider == "codex"
     assert config.experiment.cli_agent.base_url == "https://x.com/v1"
     assert config.experiment.cli_agent.api_key_env == "MY_KEY"
+
+
+def test_acp_config_default_base_url_and_api_key_env():
+    cfg = AcpConfig()
+
+    assert cfg.base_url == ""
+    assert cfg.api_key_env == ""
+
+
+def test_acp_config_roundtrip_custom_provider_fields(tmp_path: Path):
+    data = _valid_config_data()
+    data["llm"] = {
+        "provider": "acp",
+        "acp": {
+            "agent": "codex",
+            "base_url": "https://provider.example.com/v1",
+            "api_key_env": "MY_ACP_KEY",
+        },
+    }
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.llm.acp.agent == "codex"
+    assert config.llm.acp.base_url == "https://provider.example.com/v1"
+    assert config.llm.acp.api_key_env == "MY_ACP_KEY"
+
+
+def test_acp_client_from_rc_config_uses_llm_primary_model_and_provider_fields():
+    from researchclaw.llm.acp_client import ACPClient
+
+    rc_config = RCConfig.from_dict(
+        {
+            **_valid_config_data(),
+            "llm": {
+                "provider": "acp",
+                "primary_model": "gpt-5.5",
+                "acp": {
+                    "agent": "codex",
+                    "base_url": "https://provider.example.com/v1",
+                    "api_key_env": "MY_ACP_KEY",
+                },
+            },
+        },
+        check_paths=False,
+    )
+
+    client = ACPClient.from_rc_config(rc_config)
+
+    assert client.config.model == "gpt-5.5"
+    assert client.config.base_url == "https://provider.example.com/v1"
+    assert client.config.api_key_env == "MY_ACP_KEY"
 
 
 def test_rcconfig_from_dict_missing_fields_raises_value_error(tmp_path: Path):

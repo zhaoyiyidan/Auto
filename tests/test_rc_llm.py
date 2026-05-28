@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import urllib.error
 import urllib.request
@@ -431,6 +432,171 @@ def test_acp_windows_cmd_wrapper_uses_lower_inline_limit(monkeypatch: pytest.Mon
     monkeypatch.setattr("researchclaw.llm.acp_client.sys.platform", "win32")
     limit = ACPClient._cli_prompt_limit(r"C:\Users\test\AppData\Roaming\npm\acpx.CMD")
     assert limit == ACPClient._MAX_CMD_WRAPPER_PROMPT_BYTES
+
+
+def test_acp_codex_prompt_env_injects_openai_base_url_and_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from researchclaw.llm.acp_client import ACPClient, ACPConfig
+
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self) -> None:
+            self.stdin = None
+            self.stdout = io.StringIO("answer\n")
+            self.stderr = io.StringIO("")
+
+        def wait(self, timeout: int) -> int:
+            return 0
+
+        def kill(self) -> None:
+            return None
+
+    def fake_popen(cmd: list[str], **kwargs: object) -> FakeProcess:
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env")
+        return FakeProcess()
+
+    monkeypatch.setenv("MY_ACP_CODEX_KEY", "secret-key")
+    monkeypatch.setattr("researchclaw.llm.acp_client.subprocess.Popen", fake_popen)
+
+    client = ACPClient(
+        ACPConfig(
+            agent="codex",
+            base_url="https://provider.example.com/v1",
+            api_key_env="MY_ACP_CODEX_KEY",
+        )
+    )
+    client._acpx = "acpx"
+    client._session_ready = True
+
+    assert client._send_prompt_cli("acpx", "hello") == "answer"
+
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["OPENAI_BASE_URL"] == "https://provider.example.com/v1"
+    assert env["OPENAI_API_KEY"] == "secret-key"
+
+
+def test_acp_claude_prompt_env_injects_anthropic_base_url_and_token(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from researchclaw.llm.acp_client import ACPClient, ACPConfig
+
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self) -> None:
+            self.stdin = None
+            self.stdout = io.StringIO("answer\n")
+            self.stderr = io.StringIO("")
+
+        def wait(self, timeout: int) -> int:
+            return 0
+
+        def kill(self) -> None:
+            return None
+
+    def fake_popen(cmd: list[str], **kwargs: object) -> FakeProcess:
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env")
+        return FakeProcess()
+
+    monkeypatch.setenv("MY_ACP_CLAUDE_KEY", "anthropic-secret")
+    monkeypatch.setattr("researchclaw.llm.acp_client.subprocess.Popen", fake_popen)
+
+    client = ACPClient(
+        ACPConfig(
+            agent="claude",
+            base_url="https://anthropic-provider.example.com",
+            api_key_env="MY_ACP_CLAUDE_KEY",
+        )
+    )
+    client._acpx = "acpx"
+    client._session_ready = True
+
+    assert client._send_prompt_cli("acpx", "hello") == "answer"
+
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["ANTHROPIC_BASE_URL"] == "https://anthropic-provider.example.com"
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "anthropic-secret"
+
+
+def test_acp_prompt_env_skips_api_key_when_env_var_missing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from researchclaw.llm.acp_client import ACPClient, ACPConfig
+
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self) -> None:
+            self.stdin = None
+            self.stdout = io.StringIO("answer\n")
+            self.stderr = io.StringIO("")
+
+        def wait(self, timeout: int) -> int:
+            return 0
+
+        def kill(self) -> None:
+            return None
+
+    def fake_popen(cmd: list[str], **kwargs: object) -> FakeProcess:
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env")
+        return FakeProcess()
+
+    monkeypatch.delenv("MISSING_ACP_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr("researchclaw.llm.acp_client.subprocess.Popen", fake_popen)
+
+    client = ACPClient(ACPConfig(agent="codex", api_key_env="MISSING_ACP_KEY"))
+    client._acpx = "acpx"
+    client._session_ready = True
+
+    assert client._send_prompt_cli("acpx", "hello") == "answer"
+
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert "OPENAI_API_KEY" not in env
+
+
+def test_acp_codex_env_sets_codex_acp_config_for_custom_provider(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from researchclaw.llm.acp_client import ACPClient, ACPConfig
+
+    monkeypatch.setenv("MY_ACP_CODEX_KEY", "secret-key")
+
+    client = ACPClient(
+        ACPConfig(
+            agent="codex",
+            base_url="https://provider.example.com/v1",
+            api_key_env="MY_ACP_CODEX_KEY",
+            model="gpt-5.5",
+        )
+    )
+
+    env = client._build_env()
+
+    assert env["MODEL_PROVIDER"] == "custom-gateway"
+    codex_config = json.loads(env["CODEX_CONFIG"])
+    assert codex_config["model"] == "gpt-5.5"
+    assert codex_config["model_provider"] == "custom-gateway"
+    provider = codex_config["model_providers"]["custom-gateway"]
+    assert provider["base_url"] == "https://provider.example.com/v1"
+    assert provider["env_key"] == "MY_ACP_CODEX_KEY"
+    assert provider["requires_openai_auth"] is False
+    assert provider["wire_api"] == "responses"
+    assert "secret-key" not in env["CODEX_CONFIG"]
 
 
 def test_new_param_models_contains_expected_models():

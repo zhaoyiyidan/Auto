@@ -50,6 +50,13 @@ llm:
   # primary_model: "MiniMax-M2.5"
   # fallback_models:
   #   - "MiniMax-M2.5-highspeed"
+  # --- ACPX + custom Codex provider example ---
+  # provider: "acp"
+  # acp:
+  #   agent: "codex"
+  #   base_url: "https://your-provider.example.com/v1"
+  #   api_key_env: "CUSTOM_API_KEY"
+  #   timeout_sec: 1800
 
 security:
   hitl_required_stages: [5, 9, 20]

@@ -188,6 +188,8 @@ class AcpConfig:
     acpx_command: str = ""
     session_name: str = "researchclaw"
     timeout_sec: int = 1800
+    base_url: str = ""
+    api_key_env: str = ""
 
 
 @dataclass(frozen=True)
@@ -1155,6 +1157,8 @@ def _parse_llm_config(data: dict[str, Any]) -> LlmConfig:
             acpx_command=acp_data.get("acpx_command", ""),
             session_name=acp_data.get("session_name", "researchclaw"),
             timeout_sec=int(acp_data.get("timeout_sec", 1800)),
+            base_url=acp_data.get("base_url", ""),
+            api_key_env=acp_data.get("api_key_env", ""),
         ),
     )
 

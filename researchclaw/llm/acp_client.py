@@ -10,6 +10,7 @@ Key advantage: a single persistent session maintains context across all
 from __future__ import annotations
 
 import atexit
+import json
 import logging
 import os
 import re
@@ -42,6 +43,9 @@ class ACPConfig:
     acpx_command: str = ""  # auto-detect if empty
     session_name: str = "researchclaw"
     timeout_sec: int = 1800  # per-prompt timeout
+    base_url: str = ""
+    api_key_env: str = ""
+    model: str = ""
 
 
 def _find_acpx() -> str | None:
@@ -91,6 +95,9 @@ class ACPClient:
             acpx_command=getattr(acp, "acpx_command", ""),
             session_name=getattr(acp, "session_name", "researchclaw"),
             timeout_sec=getattr(acp, "timeout_sec", 1800),
+            base_url=getattr(acp, "base_url", ""),
+            api_key_env=getattr(acp, "api_key_env", ""),
+            model=getattr(rc_config.llm, "primary_model", ""),
         ))
 
     # ------------------------------------------------------------------
@@ -158,7 +165,7 @@ class ACPClient:
                  self.config.agent, "sessions", "close",
                  self.config.session_name],
                 capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=15,
+                errors="replace", timeout=15, env=self._build_env(),
             )
         except Exception:  # noqa: BLE001
             pass
@@ -197,6 +204,50 @@ class ACPClient:
     def _abs_cwd(self) -> str:
         return os.path.abspath(self.config.cwd)
 
+    def _provider_env_names(self) -> tuple[str, str]:
+        agent_name = os.path.basename(self.config.agent).lower()
+        if "codex" in agent_name:
+            return "OPENAI_BASE_URL", "OPENAI_API_KEY"
+        if "claude" in agent_name:
+            return "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"
+        return "", ""
+
+    def _codex_acp_config(self) -> str:
+        provider_name = "custom-gateway"
+        config: dict[str, Any] = {
+            "model_provider": provider_name,
+            "model_providers": {
+                provider_name: {
+                    "name": "Custom Gateway",
+                    "base_url": self.config.base_url,
+                    "env_key": self.config.api_key_env,
+                    "requires_openai_auth": False,
+                    "wire_api": "responses",
+                }
+            },
+        }
+        if self.config.model:
+            config["model"] = self.config.model
+        return json.dumps(config, separators=(",", ":"))
+
+    def _build_env(self) -> dict[str, str]:
+        env = {**os.environ}
+        base_url_env, api_key_env = self._provider_env_names()
+        if self.config.base_url and base_url_env:
+            env[base_url_env] = self.config.base_url
+        if self.config.api_key_env and api_key_env:
+            api_key = os.environ.get(self.config.api_key_env)
+            if api_key:
+                env[api_key_env] = api_key
+        if (
+            "codex" in os.path.basename(self.config.agent).lower()
+            and self.config.base_url
+            and self.config.api_key_env
+        ):
+            env["MODEL_PROVIDER"] = "custom-gateway"
+            env["CODEX_CONFIG"] = self._codex_acp_config()
+        return env
+
     def _ensure_session(self) -> None:
         """Find or create the named acpx session.
 
@@ -217,7 +268,7 @@ class ACPClient:
              self.config.agent, "sessions", "ensure",
              "--name", self.config.session_name],
             capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=30,
+            errors="replace", timeout=30, env=self._build_env(),
         )
         if result.returncode != 0:
             # Fall back to 'new'
@@ -226,7 +277,7 @@ class ACPClient:
                  self.config.agent, "sessions", "new",
                  "--name", self.config.session_name],
                 capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=30,
+                errors="replace", timeout=30, env=self._build_env(),
             )
             if result.returncode != 0:
                 raise RuntimeError(
@@ -250,7 +301,7 @@ class ACPClient:
                  self.config.agent, "-s", self.config.session_name,
                  _warmup],
                 capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=60,
+                errors="replace", timeout=60, env=self._build_env(),
             )
         except Exception:  # noqa: BLE001
             logger.debug("ACP warm-up prompt failed (non-fatal)")
@@ -407,6 +458,7 @@ class ACPClient:
             stderr=subprocess.PIPE,
             encoding="utf-8",
             errors="replace",
+            env=self._build_env(),
         )
 
         # Write stdin data and close immediately so the process can read it.

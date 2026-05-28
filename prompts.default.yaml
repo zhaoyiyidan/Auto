@@ -119,6 +119,8 @@ stages:
 
       Output markdown and for each hypothesis provide rationale, measurable prediction, failure condition.
 
+      {extension_context}
+
       Synthesis:
 
       {synthesis}'
@@ -345,7 +347,7 @@ stages:
       {revised}'
   research_decision:
     system: You are a research program lead making go/no-go decisions.
-    user: 'Make a PROCEED or PIVOT decision from analysis.
+    user: 'Make a PROCEED, PIVOT, EXTEND, or REFINE decision from analysis.
 
       Output markdown with: Decision, Justification, Evidence, Next Actions.
 

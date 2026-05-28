@@ -155,6 +155,7 @@ from researchclaw.pipeline.stage_impls._execution import (  # noqa: E402
 from researchclaw.pipeline.stage_impls._analysis import (  # noqa: E402
     _execute_result_analysis,
     _parse_decision,
+    _write_decision_structured_json,
     _execute_research_decision,
 )
 
@@ -591,6 +592,68 @@ _STAGE_EXECUTORS: dict[Stage, Callable[..., StageResult]] = {
 }
 
 
+_GATE_PROPOSAL_SENTINEL = ".gate_proposal.json"
+
+
+class _GateProposalStale(RuntimeError):
+    """Raised when a gate proposal sentinel points to a missing artifact."""
+
+
+def _gate_proposal_sentinel_path(stage_dir: Path) -> Path:
+    return stage_dir / _GATE_PROPOSAL_SENTINEL
+
+
+def _write_gate_proposal_sentinel(stage_dir: Path, result: StageResult) -> None:
+    """Record that Stage 15 has an AI proposal awaiting human approval."""
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "status": "awaiting_human_gate",
+        "stage": int(Stage.RESEARCH_DECISION),
+        "stage_name": Stage.RESEARCH_DECISION.name,
+        "decision_at_generation": result.decision,
+        "timestamp": _utcnow_iso(),
+    }
+    _gate_proposal_sentinel_path(stage_dir).write_text(
+        json.dumps(payload, indent=2), encoding="utf-8"
+    )
+
+
+def _gate_proposal_sentinel_exists(stage_dir: Path) -> bool:
+    return _gate_proposal_sentinel_path(stage_dir).is_file()
+
+
+def _clear_gate_proposal_sentinel(stage_dir: Path) -> None:
+    try:
+        _gate_proposal_sentinel_path(stage_dir).unlink()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        logger.warning("Failed to remove gate proposal sentinel: %s", exc)
+
+
+def _finalize_research_decision_from_artifact(
+    stage_dir: Path, run_dir: Path
+) -> StageResult:
+    """Finalize a human-reviewed Stage 15 decision without re-running the LLM."""
+    _ = run_dir
+    decision_path = stage_dir / "decision.md"
+    if not decision_path.is_file():
+        raise _GateProposalStale(f"Missing gate proposal artifact: {decision_path}")
+
+    decision_md = decision_path.read_text(encoding="utf-8")
+    decision = _parse_decision(decision_md)
+    _write_decision_structured_json(stage_dir, decision_md, decision)
+    _clear_gate_proposal_sentinel(stage_dir)
+    logger.info("Finalized human-gated research decision: %s", decision)
+    return StageResult(
+        stage=Stage.RESEARCH_DECISION,
+        status=StageStatus.DONE,
+        artifacts=("decision.md", "decision_structured.json"),
+        evidence_refs=("stage-15/decision.md",),
+        decision=decision,
+    )
+
+
 def execute_stage(
     stage: Stage,
     *,
@@ -611,71 +674,85 @@ def execute_stage(
     stage_dir.mkdir(parents=True, exist_ok=True)
     _t_health_start = _time.monotonic()
     contract: StageContract = CONTRACTS[stage]
-
-    if contract.input_files:
-        for input_file in contract.input_files:
-            found = _read_prior_artifact(run_dir, input_file)
-            if found is None:
-                result = StageResult(
-                    stage=stage,
-                    status=StageStatus.FAILED,
-                    artifacts=(),
-                    error=f"Missing input: {input_file} (required by {stage.name})",
-                    decision="retry",
-                )
-                _write_stage_meta(stage_dir, stage, run_id, result)
-                return result
-
     bridge = config.openclaw_bridge
-    if bridge.use_message and config.notifications.on_stage_start:
-        adapters.message.notify(
-            config.notifications.channel,
-            f"stage-{int(stage):02d}-start",
-            f"Starting {stage.name}",
-        )
-    if bridge.use_memory:
-        adapters.memory.append("stages", f"{run_id}:{int(stage)}:running")
 
-    llm = None
-    try:
-        if config.llm.provider == "acp":
-            llm = create_llm_client(config)
-        else:
-            candidate = LLMClient.from_rc_config(config)
-            if candidate.config.base_url and candidate.config.api_key:
-                llm = candidate
-    except Exception as _llm_exc:  # noqa: BLE001
-        logger.warning("LLM client creation failed: %s", _llm_exc)
-        llm = None
-
-    try:
-        _ = advance(stage, StageStatus.PENDING, TransitionEvent.START)
-        executor = _STAGE_EXECUTORS[stage]
-        prompts = PromptManager(
-            config.prompts.custom_file or None,  # type: ignore[attr-defined]
-            domain=_prompt_bank_domain_from_config(config),
-            extra_prompts={
-                stage_key: path_or_text
-                for stage_key, path_or_text in getattr(config.prompts, "extra_prompts", ())  # type: ignore[attr-defined]
-            } or None,
-        )
+    # Stage 15 can be resumed from a human-edited gate proposal. In that path
+    # the existing decision.md is authoritative and no LLM/executor should run.
+    skip_gate_check = False
+    result: StageResult | None = None
+    if stage is Stage.RESEARCH_DECISION and _gate_proposal_sentinel_exists(stage_dir):
         try:
-            result = executor(
-                stage_dir, run_dir, config, adapters, llm=llm, prompts=prompts
+            result = _finalize_research_decision_from_artifact(stage_dir, run_dir)
+            skip_gate_check = True
+        except _GateProposalStale as exc:
+            logger.warning("%s; re-running Stage 15 normally", exc)
+            _clear_gate_proposal_sentinel(stage_dir)
+            result = None
+
+    if result is None:
+        if contract.input_files:
+            for input_file in contract.input_files:
+                found = _read_prior_artifact(run_dir, input_file)
+                if found is None:
+                    result = StageResult(
+                        stage=stage,
+                        status=StageStatus.FAILED,
+                        artifacts=(),
+                        error=f"Missing input: {input_file} (required by {stage.name})",
+                        decision="retry",
+                    )
+                    _write_stage_meta(stage_dir, stage, run_id, result)
+                    return result
+
+        if bridge.use_message and config.notifications.on_stage_start:
+            adapters.message.notify(
+                config.notifications.channel,
+                f"stage-{int(stage):02d}-start",
+                f"Starting {stage.name}",
             )
-        except TypeError as exc:
-            if "unexpected keyword argument 'prompts'" not in str(exc):
-                raise
-            result = executor(stage_dir, run_dir, config, adapters, llm=llm)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Stage %s failed", stage.name)
-        result = StageResult(
-            stage=stage,
-            status=StageStatus.FAILED,
-            artifacts=(),
-            error=str(exc),
-            decision="retry",
-        )
+        if bridge.use_memory:
+            adapters.memory.append("stages", f"{run_id}:{int(stage)}:running")
+
+        llm = None
+        try:
+            if config.llm.provider == "acp":
+                llm = create_llm_client(config)
+            else:
+                candidate = LLMClient.from_rc_config(config)
+                if candidate.config.base_url and candidate.config.api_key:
+                    llm = candidate
+        except Exception as _llm_exc:  # noqa: BLE001
+            logger.warning("LLM client creation failed: %s", _llm_exc)
+            llm = None
+
+        try:
+            _ = advance(stage, StageStatus.PENDING, TransitionEvent.START)
+            executor = _STAGE_EXECUTORS[stage]
+            prompts = PromptManager(
+                config.prompts.custom_file or None,  # type: ignore[attr-defined]
+                domain=_prompt_bank_domain_from_config(config),
+                extra_prompts={
+                    stage_key: path_or_text
+                    for stage_key, path_or_text in getattr(config.prompts, "extra_prompts", ())  # type: ignore[attr-defined]
+                } or None,
+            )
+            try:
+                result = executor(
+                    stage_dir, run_dir, config, adapters, llm=llm, prompts=prompts
+                )
+            except TypeError as exc:
+                if "unexpected keyword argument 'prompts'" not in str(exc):
+                    raise
+                result = executor(stage_dir, run_dir, config, adapters, llm=llm)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Stage %s failed", stage.name)
+            result = StageResult(
+                stage=stage,
+                status=StageStatus.FAILED,
+                artifacts=(),
+                error=str(exc),
+                decision="retry",
+            )
 
     if result.status == StageStatus.DONE:
         for output_file in _select_output_files(contract, config):
@@ -769,7 +846,7 @@ def execute_stage(
     profile_name = (
         getattr(getattr(config, "project", None), "profile", None) or None
     )
-    if gate_required(
+    if not skip_gate_check and gate_required(
         stage,
         config.security.hitl_required_stages,
         profile=profile_name,
@@ -778,6 +855,8 @@ def execute_stage(
             if bridge.use_memory:
                 adapters.memory.append("gates", f"{run_id}:{int(stage)}:auto-approved")
         else:
+            if stage is Stage.RESEARCH_DECISION and result.status == StageStatus.DONE:
+                _write_gate_proposal_sentinel(stage_dir, result)
             result = StageResult(
                 stage=result.stage,
                 status=StageStatus.BLOCKED_APPROVAL,
@@ -817,5 +896,7 @@ def execute_stage(
 
     # --- HITL post-stage hook ---
     result = _run_hitl_post_stage(stage, result, run_dir, adapters, config=config)
+    if stage is Stage.RESEARCH_DECISION and result.status == StageStatus.REJECTED:
+        _clear_gate_proposal_sentinel(stage_dir)
 
     return result

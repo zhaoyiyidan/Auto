@@ -50,7 +50,12 @@ def test_previous_stage_boundary_values():
 
 def test_gate_stages_matches_expected_set():
     assert GATE_STAGES == frozenset(
-        {Stage.LITERATURE_SCREEN, Stage.EXPERIMENT_DESIGN, Stage.QUALITY_GATE}
+        {
+            Stage.LITERATURE_SCREEN,
+            Stage.EXPERIMENT_DESIGN,
+            Stage.RESEARCH_DECISION,
+            Stage.QUALITY_GATE,
+        }
     )
 
 
@@ -59,6 +64,7 @@ def test_gate_rollback_map_matches_expected_targets():
         Stage.LITERATURE_SCREEN: Stage.LITERATURE_COLLECT,
         Stage.EXPERIMENT_DESIGN: Stage.HYPOTHESIS_GEN,
         Stage.CODE_GENERATION: Stage.EXPERIMENT_DESIGN,
+        Stage.RESEARCH_DECISION: Stage.RESULT_ANALYSIS,
         Stage.QUALITY_GATE: Stage.PAPER_OUTLINE,
     }
 
@@ -327,12 +333,20 @@ def test_decision_rollback_has_pivot_and_refine():
     assert "refine" in DECISION_ROLLBACK
 
 
+def test_decision_rollback_has_extend():
+    assert "extend" in DECISION_ROLLBACK
+
+
 def test_decision_rollback_pivot_targets_hypothesis_gen():
     assert DECISION_ROLLBACK["pivot"] is Stage.HYPOTHESIS_GEN
 
 
 def test_decision_rollback_refine_targets_iterative_refine():
     assert DECISION_ROLLBACK["refine"] is Stage.ITERATIVE_REFINE
+
+
+def test_decision_rollback_extend_targets_hypothesis_gen():
+    assert DECISION_ROLLBACK["extend"] is Stage.HYPOTHESIS_GEN
 
 
 def test_max_decision_pivots_is_positive():

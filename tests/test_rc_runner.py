@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage=false, reportUnknownParameterType=false, reportMissingParameterType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnusedCallResult=false, reportAttributeAccessIssue=false, reportUnknownLambdaType=false
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 from typing import Any, cast
@@ -9,6 +10,7 @@ import pytest
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
+from researchclaw.pipeline import executor as rc_executor
 from researchclaw.pipeline import runner as rc_runner
 from researchclaw.pipeline.executor import StageResult
 from researchclaw.pipeline.stages import STAGE_SEQUENCE, Stage, StageStatus
@@ -69,6 +71,15 @@ def _blocked(stage: Stage) -> StageResult:
         status=StageStatus.BLOCKED_APPROVAL,
         artifacts=("gate.md",),
         decision="block",
+    )
+
+
+def _with_hitl_required_stages(
+    config: RCConfig, stages: tuple[int, ...]
+) -> RCConfig:
+    return replace(
+        config,
+        security=replace(config.security, hitl_required_stages=stages),
     )
 
 
@@ -509,6 +520,12 @@ def _refine_result(stage: Stage) -> StageResult:
     )
 
 
+def _extend_result(stage: Stage) -> StageResult:
+    return StageResult(
+        stage=stage, status=StageStatus.DONE, artifacts=("decision.md",), decision="extend"
+    )
+
+
 def test_pivot_decision_triggers_rollback_to_hypothesis_gen(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,
@@ -573,6 +590,150 @@ def test_refine_decision_triggers_rollback_to_iterative_refine(
     # Should have seen ITERATIVE_REFINE at least twice
     refine_stage_count = sum(1 for s in seen if s == Stage.ITERATIVE_REFINE)
     assert refine_stage_count >= 2
+
+
+def test_extend_decision_triggers_rollback_to_hypothesis_gen(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    seen: list[Stage] = []
+    extend_count = 0
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        seen.append(stage)
+        nonlocal extend_count
+        if stage == Stage.RESEARCH_DECISION and extend_count == 0:
+            extend_count += 1
+            return _extend_result(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-extend",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    hyp_gen_count = sum(1 for s in seen if s == Stage.HYPOTHESIS_GEN)
+    assert hyp_gen_count >= 2
+
+
+def test_extend_writes_extension_context_file(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    extend_count = 0
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        stage_dir = run_dir / f"stage-{int(stage):02d}"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        nonlocal extend_count
+        if stage == Stage.HYPOTHESIS_GEN and extend_count == 0:
+            (stage_dir / "hypotheses.md").write_text(
+                "# Hypotheses\nH1: current hypothesis.",
+                encoding="utf-8",
+            )
+        if stage == Stage.RESULT_ANALYSIS and extend_count == 0:
+            (stage_dir / "analysis.md").write_text(
+                "# Analysis\nA follow-up mechanism emerged.",
+                encoding="utf-8",
+            )
+            (stage_dir / "experiment_summary.json").write_text(
+                json.dumps({"metrics_summary": {"accuracy": 0.8}}),
+                encoding="utf-8",
+            )
+        if stage == Stage.RESEARCH_DECISION and extend_count == 0:
+            extend_count += 1
+            (stage_dir / "decision.md").write_text(
+                "## Decision\nEXTEND\n## Next Actions\nProbe the follow-up mechanism.",
+                encoding="utf-8",
+            )
+            return _extend_result(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-extend-context",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    context_path = run_dir / "hypothesis_extension_context.md"
+    assert context_path.exists()
+    context = context_path.read_text(encoding="utf-8")
+    assert "current hypothesis" in context
+    assert "follow-up mechanism" in context
+    assert "accuracy" in context
+
+
+def test_pivot_cleans_old_extension_context(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    (run_dir / "hypothesis_extension_context.md").write_text(
+        "stale extension context",
+        encoding="utf-8",
+    )
+    pivot_count = 0
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        nonlocal pivot_count
+        if stage == Stage.RESEARCH_DECISION and pivot_count == 0:
+            pivot_count += 1
+            return _pivot_result(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-pivot-clean-context",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    assert not (run_dir / "hypothesis_extension_context.md").exists()
+
+
+def test_refine_cleans_old_extension_context(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    (run_dir / "hypothesis_extension_context.md").write_text(
+        "stale extension context",
+        encoding="utf-8",
+    )
+    refine_count = 0
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        nonlocal refine_count
+        if stage == Stage.RESEARCH_DECISION and refine_count == 0:
+            refine_count += 1
+            return _refine_result(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-refine-clean-context",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    assert not (run_dir / "hypothesis_extension_context.md").exists()
 
 
 def test_max_pivot_count_prevents_infinite_loop(
@@ -640,6 +801,265 @@ def test_record_decision_history_appends(run_dir: Path) -> None:
     assert len(history) == 2
     assert history[0]["decision"] == "pivot"
     assert history[1]["decision"] == "refine"
+
+
+def test_decision_history_records_extend(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    extend_count = 0
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        nonlocal extend_count
+        if stage == Stage.RESEARCH_DECISION and extend_count == 0:
+            extend_count += 1
+            return _extend_result(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-extend-history",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    history = json.loads((run_dir / "decision_history.json").read_text())
+    assert history[0]["decision"] == "extend"
+    assert history[0]["rollback_target"] == Stage.HYPOTHESIS_GEN.name
+
+
+def _write_human_gate_artifacts(
+    run_dir: Path, decision: str, rationale: str
+) -> None:
+    s8 = run_dir / "stage-08"
+    s8.mkdir(parents=True, exist_ok=True)
+    (s8 / "hypotheses.md").write_text(
+        "# Hypotheses\nH1: original useful hypothesis.",
+        encoding="utf-8",
+    )
+    s14 = run_dir / "stage-14"
+    s14.mkdir(parents=True, exist_ok=True)
+    (s14 / "analysis.md").write_text(
+        "# Analysis\nThe evidence supports a human-gated decision.",
+        encoding="utf-8",
+    )
+    (s14 / "experiment_summary.json").write_text(
+        json.dumps({"metrics_summary": {"accuracy": {"mean": 0.84}}}),
+        encoding="utf-8",
+    )
+    s15 = run_dir / "stage-15"
+    s15.mkdir(parents=True, exist_ok=True)
+    (s15 / "decision.md").write_text(
+        f"## Decision\n{decision}\n## Justification\n{rationale}",
+        encoding="utf-8",
+    )
+    (s15 / ".gate_proposal.json").write_text("{}", encoding="utf-8")
+
+
+def _mock_pipeline_after_human_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+) -> list[Stage]:
+    seen: list[Stage] = []
+    stage15_actual_calls = 0
+
+    def mock_execute_stage(stage: Stage, **kwargs: object) -> StageResult:
+        nonlocal stage15_actual_calls
+        seen.append(stage)
+        stage_dir = run_dir / f"stage-{int(stage):02d}"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        if stage == Stage.RESEARCH_DECISION and stage15_actual_calls == 0:
+            stage15_actual_calls += 1
+            return rc_executor.execute_stage(stage, **kwargs)  # type: ignore[arg-type]
+        if stage == Stage.RESEARCH_DECISION:
+            (stage_dir / "decision.md").write_text(
+                "## Decision\nPROCEED\n## Justification\nSecond pass proceeds.",
+                encoding="utf-8",
+            )
+            return StageResult(
+                stage=stage,
+                status=StageStatus.DONE,
+                artifacts=("decision.md",),
+                decision="proceed",
+            )
+        if stage == Stage.HYPOTHESIS_GEN:
+            (stage_dir / "hypotheses.md").write_text(
+                "# Hypotheses\nH2: follow-up hypothesis.",
+                encoding="utf-8",
+            )
+        if stage == Stage.RESULT_ANALYSIS:
+            (stage_dir / "analysis.md").write_text("# Analysis\nUpdated.", encoding="utf-8")
+            (stage_dir / "experiment_summary.json").write_text(
+                json.dumps({"metrics_summary": {"accuracy": {"mean": 0.85}}}),
+                encoding="utf-8",
+            )
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    return seen
+
+
+def test_checkpoint_after_gated_stage15_returns_stage15_on_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    def mock_execute_stage(stage: Stage, **kwargs: object) -> StageResult:
+        _ = kwargs
+        if stage == Stage.RESEARCH_DECISION:
+            return _blocked(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-stage15-gate-checkpoint",
+        config=rc_config,
+        adapters=adapters,
+        stop_on_gate=True,
+    )
+
+    checkpoint = json.loads((run_dir / "checkpoint.json").read_text(encoding="utf-8"))
+    assert checkpoint["last_completed_stage"] == int(Stage.RESULT_ANALYSIS)
+    assert rc_runner.read_checkpoint(run_dir) is Stage.RESEARCH_DECISION
+
+
+def test_extend_after_human_gate_uses_edited_decision(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    rc_config = _with_hitl_required_stages(rc_config, (5, 9, 15, 20))
+    _write_human_gate_artifacts(
+        run_dir,
+        "EXTEND",
+        "Human final extend rationale should drive routing.",
+    )
+    rc_runner._write_checkpoint(run_dir, Stage.RESULT_ANALYSIS, "run-human-extend")
+    seen = _mock_pipeline_after_human_gate(monkeypatch, run_dir)
+
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-human-extend",
+        config=rc_config,
+        adapters=adapters,
+        from_stage=Stage.RESEARCH_DECISION,
+    )
+
+    assert seen[0] is Stage.RESEARCH_DECISION
+    assert seen.count(Stage.HYPOTHESIS_GEN) >= 1
+    history = json.loads((run_dir / "decision_history.json").read_text())
+    assert history[0]["decision"] == "extend"
+
+
+def test_pivot_after_human_gate_uses_edited_decision(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    rc_config = _with_hitl_required_stages(rc_config, (5, 9, 15, 20))
+    _write_human_gate_artifacts(
+        run_dir,
+        "PIVOT",
+        "Human final pivot rationale should drive routing.",
+    )
+    rc_runner._write_checkpoint(run_dir, Stage.RESULT_ANALYSIS, "run-human-pivot")
+    seen = _mock_pipeline_after_human_gate(monkeypatch, run_dir)
+
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-human-pivot",
+        config=rc_config,
+        adapters=adapters,
+        from_stage=Stage.RESEARCH_DECISION,
+    )
+
+    assert seen[0] is Stage.RESEARCH_DECISION
+    assert seen.count(Stage.HYPOTHESIS_GEN) >= 1
+    assert not (run_dir / "hypothesis_extension_context.md").exists()
+    history = json.loads((run_dir / "decision_history.json").read_text())
+    assert history[0]["decision"] == "pivot"
+
+
+def test_full_auto_no_sentinel_created(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    rc_config = _with_hitl_required_stages(rc_config, (5, 9, 15, 20))
+    _write_human_gate_artifacts(run_dir, "PROCEED", "Existing sentinel should be absent.")
+    (run_dir / "stage-15" / ".gate_proposal.json").unlink()
+
+    def stage15_executor(
+        stage_dir: Path,
+        _run_dir: Path,
+        _config: RCConfig,
+        _adapters: AdapterBundle,
+        *,
+        llm: object = None,
+        **_kwargs: object,
+    ) -> StageResult:
+        _ = llm
+        (stage_dir / "decision.md").write_text(
+            "## Decision\nPROCEED\n## Justification\nAuto approved.",
+            encoding="utf-8",
+        )
+        return StageResult(
+            stage=Stage.RESEARCH_DECISION,
+            status=StageStatus.DONE,
+            artifacts=("decision.md",),
+            decision="proceed",
+        )
+
+    monkeypatch.setitem(
+        rc_executor._STAGE_EXECUTORS, Stage.RESEARCH_DECISION, stage15_executor
+    )
+
+    result = rc_executor.execute_stage(
+        Stage.RESEARCH_DECISION,
+        run_dir=run_dir,
+        run_id="run-full-auto",
+        config=rc_config,
+        adapters=adapters,
+        auto_approve_gates=True,
+    )
+
+    assert result.status == StageStatus.DONE
+    assert not (run_dir / "stage-15" / ".gate_proposal.json").exists()
+
+
+def test_extension_context_uses_human_edited_rationale_on_extend(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    rc_config = _with_hitl_required_stages(rc_config, (5, 9, 15, 20))
+    rationale = "Human edited rationale must appear in extension context."
+    _write_human_gate_artifacts(run_dir, "EXTEND", rationale)
+    rc_runner._write_checkpoint(run_dir, Stage.RESULT_ANALYSIS, "run-human-context")
+    _mock_pipeline_after_human_gate(monkeypatch, run_dir)
+
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-human-context",
+        config=rc_config,
+        adapters=adapters,
+        from_stage=Stage.RESEARCH_DECISION,
+    )
+
+    context = (run_dir / "hypothesis_extension_context.md").read_text(
+        encoding="utf-8"
+    )
+    assert rationale in context
 
 
 # ── Deliverables packaging tests ──

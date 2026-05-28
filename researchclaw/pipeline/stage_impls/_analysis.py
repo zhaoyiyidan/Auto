@@ -758,17 +758,18 @@ Generated: {_utcnow_iso()}
 
 
 def _parse_decision(text: str) -> str:
-    """Extract PROCEED/PIVOT/REFINE from decision text.
+    """Extract PROCEED/PIVOT/EXTEND/REFINE from decision text.
 
     Looks for the first standalone keyword on its own line after a
     ``## Decision`` heading.  Falls back to a keyword scan of the first
     few lines after the heading, but only matches the keyword itself
     (not mentions inside explanatory prose like "PIVOT is not warranted").
-    Returns lowercase ``"proceed"`` / ``"pivot"`` / ``"refine"``.
-    Defaults to ``"proceed"`` if nothing matches.
+    Returns lowercase ``"proceed"`` / ``"pivot"`` / ``"extend"`` /
+    ``"refine"``. Defaults to ``"proceed"`` if nothing matches.
     """
     import re as _re
 
+    decision_keywords = ("PROCEED", "PIVOT", "EXTEND", "REFINE")
     text_upper = text.upper()
     # Look in the first occurrence after "## Decision" heading
     decision_section = ""
@@ -782,13 +783,31 @@ def _parse_decision(text: str) -> str:
     # First try: look for a line that is just the keyword (possibly with
     # whitespace / markdown bold / trailing punctuation).
     for line in search_text.splitlines():
-        stripped = line.strip().strip("*").strip("#").strip()
-        if stripped.upper() in ("PROCEED", "PIVOT", "REFINE"):
+        stripped = line.strip().strip("*").strip("#").strip().rstrip(".:;,-")
+        if stripped.upper() in decision_keywords:
             return stripped.lower()
+
+    # Prefer explicit final recommendation lines over option lists that mention
+    # every allowed keyword.
+    for line in search_text.splitlines():
+        line_upper = line.upper()
+        if not any(
+            marker in line_upper
+            for marker in ("FINAL", "RECOMMENDATION", "RECOMMEND", "DECISION")
+        ):
+            continue
+        matches = [
+            kw for kw in decision_keywords
+            if _re.search(r"\b" + kw + r"\b", line_upper)
+        ]
+        if len(matches) == 1:
+            return matches[0].lower()
+        if "EXTEND" in matches:
+            return "extend"
 
     # Fallback: regex for standalone word boundaries so that
     # "PIVOT is not warranted" does NOT match as a decision.
-    for kw in ("PIVOT", "REFINE", "PROCEED"):
+    for kw in ("EXTEND", "PIVOT", "REFINE", "PROCEED"):
         # Only match if the keyword appears as the FIRST keyword-class token
         # on its own (not embedded in a sentence saying "not PIVOT").
         pattern = _re.compile(
@@ -801,13 +820,55 @@ def _parse_decision(text: str) -> str:
     # (the final conclusion after deliberation is more reliable than early mentions)
     # BUG-DA8-08: Old code always returned "refine" when both keywords present
     search_upper = search_text.upper()
-    last_refine = search_upper.rfind("REFINE")
-    last_pivot = search_upper.rfind("PIVOT")
-    if last_refine >= 0 and (last_pivot < 0 or last_refine > last_pivot):
-        return "refine"
-    if last_pivot >= 0 and (last_refine < 0 or last_pivot > last_refine):
-        return "pivot"
+    positions = {
+        kw: search_upper.rfind(kw)
+        for kw in ("PIVOT", "EXTEND", "REFINE")
+    }
+    best_kw, best_pos = max(positions.items(), key=lambda item: item[1])
+    if best_pos >= 0:
+        return best_kw.lower()
     return "proceed"
+
+
+def _decision_quality_warnings(decision_md: str) -> list[str]:
+    """Return lightweight quality warnings for research decision text."""
+    quality_warnings: list[str] = []
+    dec_lower = decision_md.lower()
+    if "baseline" not in dec_lower and "control" not in dec_lower:
+        quality_warnings.append("Decision text does not mention baselines")
+    if (
+        "seed" not in dec_lower
+        and "replicat" not in dec_lower
+        and "run" not in dec_lower
+    ):
+        quality_warnings.append(
+            "Decision text does not mention multi-seed/replicate runs"
+        )
+    if (
+        "metric" not in dec_lower
+        and "accuracy" not in dec_lower
+        and "loss" not in dec_lower
+    ):
+        quality_warnings.append("Decision text does not mention evaluation metrics")
+    return quality_warnings
+
+
+def _write_decision_structured_json(
+    stage_dir: Path,
+    decision_md: str,
+    decision: str,
+) -> dict[str, Any]:
+    """Write the structured Stage 15 decision payload and return it."""
+    decision_payload = {
+        "decision": decision,
+        "raw_text_excerpt": decision_md[:500],
+        "quality_warnings": _decision_quality_warnings(decision_md),
+        "generated": _utcnow_iso(),
+    }
+    (stage_dir / "decision_structured.json").write_text(
+        json.dumps(decision_payload, indent=2), encoding="utf-8"
+    )
+    return decision_payload
 
 
 # ---------------------------------------------------------------------------
@@ -1253,6 +1314,12 @@ def _execute_research_decision(
     else:
         decision_md = f"""# Research Decision
 
+## Available Decisions
+- PROCEED: results are sufficient; continue to paper writing.
+- PIVOT: current hypotheses are fundamentally flawed; regenerate hypotheses.
+- EXTEND: current hypotheses produced useful evidence; generate follow-up hypotheses.
+- REFINE: current hypotheses are sound but experiments need re-tuning.
+
 ## Decision
 PROCEED
 
@@ -1271,26 +1338,13 @@ Generated: {_utcnow_iso()}
     decision = _parse_decision(decision_md)
 
     # T3.1: Validate decision quality — check for minimum experiment rigor
-    _quality_warnings: list[str] = []
-    _dec_lower = decision_md.lower()
-    if "baseline" not in _dec_lower and "control" not in _dec_lower:
-        _quality_warnings.append("Decision text does not mention baselines")
-    if "seed" not in _dec_lower and "replicat" not in _dec_lower and "run" not in _dec_lower:
-        _quality_warnings.append("Decision text does not mention multi-seed/replicate runs")
-    if "metric" not in _dec_lower and "accuracy" not in _dec_lower and "loss" not in _dec_lower:
-        _quality_warnings.append("Decision text does not mention evaluation metrics")
+    decision_payload = _write_decision_structured_json(
+        stage_dir, decision_md, decision
+    )
+    _quality_warnings = decision_payload["quality_warnings"]
     if _quality_warnings:
         logger.warning("T3.1: Decision quality warnings: %s", _quality_warnings)
 
-    decision_payload = {
-        "decision": decision,
-        "raw_text_excerpt": decision_md[:500],
-        "quality_warnings": _quality_warnings,
-        "generated": _utcnow_iso(),
-    }
-    (stage_dir / "decision_structured.json").write_text(
-        json.dumps(decision_payload, indent=2), encoding="utf-8"
-    )
     logger.info("Research decision: %s", decision)
 
     return StageResult(

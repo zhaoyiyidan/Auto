@@ -64,6 +64,7 @@ DEBATE_ROLES_HYPOTHESIS: dict[str, dict[str, str]] = {
             "- Estimated risk level (low/medium/high) based on model-building "
             "assumptions\n\n"
             "Topic: {topic}\n"
+            "{extension_context}\n"
             "Synthesis:\n{synthesis}"
         ),
     },
@@ -87,6 +88,7 @@ DEBATE_ROLES_HYPOTHESIS: dict[str, dict[str, str]] = {
             "- Feasibility: whether the prediction can be computed analytically "
             "or with a lightweight parameter scan (no external MC chain needed)\n\n"
             "Topic: {topic}\n"
+            "{extension_context}\n"
             "Synthesis:\n{synthesis}"
         ),
     },
@@ -112,6 +114,7 @@ DEBATE_ROLES_HYPOTHESIS: dict[str, dict[str, str]] = {
             "- A falsifiable prediction tied to a specific planned experiment "
             "(HL-LHC, LZ, DARWIN, CTA, Belle II, FCC-ee, …)\n\n"
             "Topic: {topic}\n"
+            "{extension_context}\n"
             "Synthesis:\n{synthesis}"
         ),
     },
@@ -483,6 +486,7 @@ STAGES: dict[str, dict[str, Any]] = {
             "- ML-style hypotheses ('a neural network will improve signal "
             "efficiency') unless tied to a specific physics observable.\n\n"
             "{domain_context}"
+            "{extension_context}\n"
             "Synthesis:\n{synthesis}"
         ),
     },
@@ -944,12 +948,14 @@ STAGES: dict[str, dict[str, Any]] = {
             "JHEP submission."
         ),
         "user": (
-            "Based on the analysis, make one of three decisions:\n"
+            "Based on the analysis, make one of four decisions:\n"
             "- **PROCEED** — physics results are sufficient and statistically "
             "defensible; move to paper writing.\n"
             "- **PIVOT** — the hypothesis is fundamentally flawed (model "
             "inconsistency, EFT breakdown, ruled out by an overlooked "
             "bound); generate new hypotheses.\n"
+            "- **EXTEND** — the current hypothesis produced useful physics "
+            "evidence and should lead to deeper follow-up hypotheses.\n"
             "- **REFINE** — the hypothesis is sound but the scan, "
             "systematics, or parameter choices need re-tuning.\n\n"
             "MINIMUM QUALITY CRITERIA for PROCEED (ALL must be met):\n"
@@ -967,7 +973,7 @@ STAGES: dict[str, dict[str, Any]] = {
             "If ANY criterion is not met, you MUST choose REFINE.\n\n"
             "Output markdown with sections:\n"
             "## Decision\n"
-            "State exactly one of: PROCEED, PIVOT, or REFINE.\n\n"
+            "State exactly one of: PROCEED, PIVOT, EXTEND, or REFINE.\n\n"
             "## Justification\n"
             "Why this decision is warranted, citing specific physics "
             "evidence.\n\n"

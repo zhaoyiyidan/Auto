@@ -110,6 +110,7 @@ GATE_STAGES: frozenset[Stage] = frozenset(
     {
         Stage.LITERATURE_SCREEN,
         Stage.EXPERIMENT_DESIGN,
+        Stage.RESEARCH_DECISION,
         Stage.QUALITY_GATE,
     }
 )
@@ -119,6 +120,7 @@ GATE_ROLLBACK: dict[Stage, Stage] = {
     Stage.LITERATURE_SCREEN: Stage.LITERATURE_COLLECT,  # reject → re-collect
     Stage.EXPERIMENT_DESIGN: Stage.HYPOTHESIS_GEN,  # reject → re-hypothesize
     Stage.CODE_GENERATION: Stage.EXPERIMENT_DESIGN,  # hep_ph profile only; see gate_required
+    Stage.RESEARCH_DECISION: Stage.RESULT_ANALYSIS,  # reject → re-analyze
     Stage.QUALITY_GATE: Stage.PAPER_OUTLINE,  # reject → rewrite paper
 }
 
@@ -128,6 +130,7 @@ GATE_ROLLBACK: dict[Stage, Stage] = {
 
 DECISION_ROLLBACK: dict[str, Stage] = {
     "pivot": Stage.HYPOTHESIS_GEN,       # Discard hypotheses, re-generate
+    "extend": Stage.HYPOTHESIS_GEN,      # Keep evidence, generate follow-ups
     "refine": Stage.ITERATIVE_REFINE,    # Keep hypotheses, re-run experiments
 }
 

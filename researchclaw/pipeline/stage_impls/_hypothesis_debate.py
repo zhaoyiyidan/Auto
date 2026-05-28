@@ -31,6 +31,22 @@ def run_acp_debate(
         raise RuntimeError("ACP debate requires ACPClient")
 
     synthesis = _read_prior_artifact(run_dir, "synthesis.md") or ""
+    extension_context_path = run_dir / "hypothesis_extension_context.md"
+    if extension_context_path.exists():
+        try:
+            extension_context = extension_context_path.read_text(
+                encoding="utf-8"
+            ).strip()
+        except OSError:
+            extension_context = ""
+        if extension_context:
+            synthesis = (
+                f"{synthesis}\n\n## Hypothesis Extension Context\n"
+                "Generate deeper follow-up hypotheses from this prior hypothesis "
+                "and experiment evidence. Do not treat this as a blank-slate "
+                "pivot.\n\n"
+                f"{extension_context}"
+            )
     roles = prompts.debate_roles_hypothesis()
     if not roles:
         raise RuntimeError("No hypothesis debate roles configured")
@@ -380,7 +396,7 @@ def _build_claim_prompt(
     judge_criticisms: list[str] | None,
 ) -> tuple[list[dict[str, str]], str]:
     """Construct the claim-generation prompt for a role fork."""
-    variables = {"topic": topic, "synthesis": synthesis}
+    variables = {"topic": topic, "synthesis": synthesis, "extension_context": ""}
     system = _render(role_prompts.get("system", ""), variables)
     user = _render(role_prompts.get("user", ""), variables)
 

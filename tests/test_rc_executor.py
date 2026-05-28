@@ -1,6 +1,7 @@
 # pyright: reportPrivateUsage=false, reportUnknownParameterType=false, reportMissingParameterType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnusedCallResult=false, reportAttributeAccessIssue=false, reportUnknownLambdaType=false
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import re
 import sys
@@ -107,6 +108,46 @@ def _stub_novelty_check(monkeypatch: pytest.MonkeyPatch) -> None:
         "researchclaw.literature.novelty.check_novelty",
         fake_check_novelty,
     )
+
+
+def _with_hitl_required_stages(
+    config: RCConfig, stages: tuple[int, ...]
+) -> RCConfig:
+    return replace(
+        config,
+        security=replace(config.security, hitl_required_stages=stages),
+    )
+
+
+def _write_stage15_analysis(run_dir: Path) -> None:
+    _write_prior_artifact(run_dir, 14, "analysis.md", "# Analysis\nResults are useful.")
+
+
+def _stage15_done_executor(decision_text: str = "PROCEED"):
+    def executor(
+        stage_dir: Path,
+        _run_dir: Path,
+        _config: RCConfig,
+        _adapters: AdapterBundle,
+        *,
+        llm: object = None,
+        **_kwargs: object,
+    ) -> rc_executor.StageResult:
+        _ = llm
+        decision_md = f"## Decision\n{decision_text}\n## Justification\nHuman gate test."
+        (stage_dir / "decision.md").write_text(decision_md, encoding="utf-8")
+        (stage_dir / "decision_structured.json").write_text(
+            json.dumps({"decision": decision_text.lower()}),
+            encoding="utf-8",
+        )
+        return rc_executor.StageResult(
+            stage=Stage.RESEARCH_DECISION,
+            status=StageStatus.DONE,
+            artifacts=("decision.md", "decision_structured.json"),
+            decision=decision_text.lower(),
+        )
+
+    return executor
 
 
 def test_executor_map_has_23_entries() -> None:
@@ -1277,13 +1318,29 @@ class TestParseDecision:
         text = "## Decision\nREFINE\n## Justification\nNeed more tuning."
         assert rc_executor._parse_decision(text) == "refine"
 
+    def test_extend_detected(self) -> None:
+        text = "## Decision\nEXTEND\n## Justification\nFollow-up hypothesis warranted."
+        assert rc_executor._parse_decision(text) == "extend"
+
     def test_pivot_case_insensitive(self) -> None:
         text = "## Decision\npivot\n## Justification\nBad approach."
         assert rc_executor._parse_decision(text) == "pivot"
 
+    def test_extend_case_insensitive(self) -> None:
+        text = "## Decision\nextend\n## Justification\nFollow-up hypothesis warranted."
+        assert rc_executor._parse_decision(text) == "extend"
+
     def test_pivot_takes_priority_over_proceed(self) -> None:
         text = "## Decision\nPIVOT\nWe should not PROCEED."
         assert rc_executor._parse_decision(text) == "pivot"
+
+    def test_extend_takes_priority(self) -> None:
+        text = (
+            "## Decision\n"
+            "The options are PROCEED, PIVOT, REFINE, or EXTEND.\n"
+            "Final recommendation: EXTEND."
+        )
+        assert rc_executor._parse_decision(text) == "extend"
 
     def test_decision_in_body_not_heading(self) -> None:
         text = "The results suggest we should PIVOT to a new approach."
@@ -1334,6 +1391,365 @@ class TestResearchDecisionStructured:
             stage_dir, run_dir, rc_config, adapters, llm=None
         )
         assert result.decision == "proceed"
+
+
+class TestGateProposalSentinel:
+    def test_write_sentinel_creates_file(self, tmp_path: Path) -> None:
+        stage_dir = tmp_path / "stage-15"
+        stage_dir.mkdir()
+        result = rc_executor.StageResult(
+            stage=Stage.RESEARCH_DECISION,
+            status=StageStatus.DONE,
+            artifacts=("decision.md",),
+            decision="extend",
+        )
+
+        rc_executor._write_gate_proposal_sentinel(stage_dir, result)
+
+        sentinel = stage_dir / ".gate_proposal.json"
+        assert sentinel.exists()
+        data = json.loads(sentinel.read_text(encoding="utf-8"))
+        assert data["status"] == "awaiting_human_gate"
+        assert data["stage"] == int(Stage.RESEARCH_DECISION)
+        assert data["decision_at_generation"] == "extend"
+
+    def test_sentinel_exists_returns_true_when_present(self, tmp_path: Path) -> None:
+        stage_dir = tmp_path / "stage-15"
+        stage_dir.mkdir()
+        (stage_dir / ".gate_proposal.json").write_text("{}", encoding="utf-8")
+
+        assert rc_executor._gate_proposal_sentinel_exists(stage_dir) is True
+
+    def test_sentinel_exists_returns_false_when_absent(self, tmp_path: Path) -> None:
+        stage_dir = tmp_path / "stage-15"
+        stage_dir.mkdir()
+
+        assert rc_executor._gate_proposal_sentinel_exists(stage_dir) is False
+
+    def test_clear_sentinel_removes_file(self, tmp_path: Path) -> None:
+        stage_dir = tmp_path / "stage-15"
+        stage_dir.mkdir()
+        sentinel = stage_dir / ".gate_proposal.json"
+        sentinel.write_text("{}", encoding="utf-8")
+
+        rc_executor._clear_gate_proposal_sentinel(stage_dir)
+
+        assert not sentinel.exists()
+
+    def test_clear_sentinel_noop_when_absent(self, tmp_path: Path) -> None:
+        stage_dir = tmp_path / "stage-15"
+        stage_dir.mkdir()
+
+        rc_executor._clear_gate_proposal_sentinel(stage_dir)
+
+        assert not (stage_dir / ".gate_proposal.json").exists()
+
+
+class TestFinalizeDecisionFromArtifact:
+    def _setup_decision(
+        self, tmp_path: Path, decision_md: str
+    ) -> tuple[Path, Path]:
+        run_dir = tmp_path / "run"
+        stage_dir = run_dir / "stage-15"
+        stage_dir.mkdir(parents=True)
+        (stage_dir / "decision.md").write_text(decision_md, encoding="utf-8")
+        return run_dir, stage_dir
+
+    def test_parses_existing_proceed(self, tmp_path: Path) -> None:
+        run_dir, stage_dir = self._setup_decision(
+            tmp_path, "## Decision\nPROCEED\n## Justification\nEnough evidence."
+        )
+
+        result = rc_executor._finalize_research_decision_from_artifact(
+            stage_dir, run_dir
+        )
+
+        assert result.status == StageStatus.DONE
+        assert result.decision == "proceed"
+
+    def test_parses_human_edited_extend(self, tmp_path: Path) -> None:
+        run_dir, stage_dir = self._setup_decision(
+            tmp_path, "## Decision\nEXTEND\n## Justification\nHuman edited follow-up."
+        )
+
+        result = rc_executor._finalize_research_decision_from_artifact(
+            stage_dir, run_dir
+        )
+
+        assert result.decision == "extend"
+
+    def test_parses_human_edited_pivot(self, tmp_path: Path) -> None:
+        run_dir, stage_dir = self._setup_decision(
+            tmp_path, "## Decision\nPIVOT\n## Justification\nHuman rejected line."
+        )
+
+        result = rc_executor._finalize_research_decision_from_artifact(
+            stage_dir, run_dir
+        )
+
+        assert result.decision == "pivot"
+
+    def test_parses_human_edited_refine(self, tmp_path: Path) -> None:
+        run_dir, stage_dir = self._setup_decision(
+            tmp_path, "## Decision\nREFINE\n## Justification\nNeed better experiment."
+        )
+
+        result = rc_executor._finalize_research_decision_from_artifact(
+            stage_dir, run_dir
+        )
+
+        assert result.decision == "refine"
+
+    def test_clears_sentinel_on_success(self, tmp_path: Path) -> None:
+        run_dir, stage_dir = self._setup_decision(
+            tmp_path, "## Decision\nEXTEND\n## Justification\nHuman edit."
+        )
+        (stage_dir / ".gate_proposal.json").write_text("{}", encoding="utf-8")
+
+        rc_executor._finalize_research_decision_from_artifact(stage_dir, run_dir)
+
+        assert not (stage_dir / ".gate_proposal.json").exists()
+
+    def test_updates_structured_json_with_human_edited_content(
+        self, tmp_path: Path
+    ) -> None:
+        run_dir, stage_dir = self._setup_decision(
+            tmp_path,
+            "## Decision\nEXTEND\n## Justification\nHuman edited rationale wins.",
+        )
+        (stage_dir / "decision_structured.json").write_text(
+            json.dumps({"decision": "proceed"}),
+            encoding="utf-8",
+        )
+
+        rc_executor._finalize_research_decision_from_artifact(stage_dir, run_dir)
+
+        data = json.loads(
+            (stage_dir / "decision_structured.json").read_text(encoding="utf-8")
+        )
+        assert data["decision"] == "extend"
+        assert "Human edited rationale wins" in data["raw_text_excerpt"]
+
+    def test_raises_stale_when_decision_missing(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "run"
+        stage_dir = run_dir / "stage-15"
+        stage_dir.mkdir(parents=True)
+
+        with pytest.raises(rc_executor._GateProposalStale):
+            rc_executor._finalize_research_decision_from_artifact(stage_dir, run_dir)
+
+    def test_defaults_to_proceed_on_unparseable(self, tmp_path: Path) -> None:
+        run_dir, stage_dir = self._setup_decision(
+            tmp_path, "The human reviewer left notes but no explicit keyword."
+        )
+
+        result = rc_executor._finalize_research_decision_from_artifact(
+            stage_dir, run_dir
+        )
+
+        assert result.decision == "proceed"
+
+
+class TestExecuteStageGateResume:
+    def test_execute_stage_uses_finalize_when_sentinel_present(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        run_dir: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+    ) -> None:
+        _write_stage15_analysis(run_dir)
+        rc_config = _with_hitl_required_stages(rc_config, (5, 9, 15, 20))
+        stage_dir = run_dir / "stage-15"
+        stage_dir.mkdir()
+        (stage_dir / "decision.md").write_text(
+            "## Decision\nEXTEND\n## Justification\nHuman final edit.",
+            encoding="utf-8",
+        )
+        (stage_dir / ".gate_proposal.json").write_text("{}", encoding="utf-8")
+        calls = 0
+
+        def forbidden_executor(*args: object, **kwargs: object) -> rc_executor.StageResult:
+            nonlocal calls
+            calls += 1
+            raise AssertionError("Stage 15 executor should not run during finalize")
+
+        monkeypatch.setitem(
+            rc_executor._STAGE_EXECUTORS, Stage.RESEARCH_DECISION, forbidden_executor
+        )
+
+        result = rc_executor.execute_stage(
+            Stage.RESEARCH_DECISION,
+            run_dir=run_dir,
+            run_id="run-finalize",
+            config=rc_config,
+            adapters=adapters,
+            auto_approve_gates=False,
+        )
+
+        assert calls == 0
+        assert result.status == StageStatus.DONE
+        assert result.decision == "extend"
+        assert not (stage_dir / ".gate_proposal.json").exists()
+
+    def test_execute_stage_runs_llm_when_no_sentinel(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        run_dir: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+    ) -> None:
+        _write_stage15_analysis(run_dir)
+        calls = 0
+
+        def tracked_executor(*args: object, **kwargs: object) -> rc_executor.StageResult:
+            nonlocal calls
+            calls += 1
+            stage_dir = cast(Path, args[0])
+            (stage_dir / "decision.md").write_text(
+                "## Decision\nPROCEED\n## Justification\nFresh run.",
+                encoding="utf-8",
+            )
+            return rc_executor.StageResult(
+                stage=Stage.RESEARCH_DECISION,
+                status=StageStatus.DONE,
+                artifacts=("decision.md",),
+                decision="proceed",
+            )
+
+        monkeypatch.setitem(
+            rc_executor._STAGE_EXECUTORS, Stage.RESEARCH_DECISION, tracked_executor
+        )
+
+        result = rc_executor.execute_stage(
+            Stage.RESEARCH_DECISION,
+            run_dir=run_dir,
+            run_id="run-no-sentinel",
+            config=rc_config,
+            adapters=adapters,
+            auto_approve_gates=False,
+        )
+
+        assert calls == 1
+        assert result.status == StageStatus.DONE
+
+    def test_sentinel_written_when_stage15_gated(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        run_dir: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+    ) -> None:
+        _write_stage15_analysis(run_dir)
+        rc_config = _with_hitl_required_stages(rc_config, (5, 9, 15, 20))
+        monkeypatch.setitem(
+            rc_executor._STAGE_EXECUTORS,
+            Stage.RESEARCH_DECISION,
+            _stage15_done_executor("PIVOT"),
+        )
+
+        result = rc_executor.execute_stage(
+            Stage.RESEARCH_DECISION,
+            run_dir=run_dir,
+            run_id="run-stage15-gated",
+            config=rc_config,
+            adapters=adapters,
+            auto_approve_gates=False,
+        )
+
+        stage_dir = run_dir / "stage-15"
+        data = json.loads(
+            (stage_dir / ".gate_proposal.json").read_text(encoding="utf-8")
+        )
+        assert result.status == StageStatus.BLOCKED_APPROVAL
+        assert data["decision_at_generation"] == "pivot"
+
+    def test_sentinel_not_written_when_auto_approve(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        run_dir: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+    ) -> None:
+        _write_stage15_analysis(run_dir)
+        rc_config = _with_hitl_required_stages(rc_config, (5, 9, 15, 20))
+        monkeypatch.setitem(
+            rc_executor._STAGE_EXECUTORS,
+            Stage.RESEARCH_DECISION,
+            _stage15_done_executor("EXTEND"),
+        )
+
+        result = rc_executor.execute_stage(
+            Stage.RESEARCH_DECISION,
+            run_dir=run_dir,
+            run_id="run-auto-approved",
+            config=rc_config,
+            adapters=adapters,
+            auto_approve_gates=True,
+        )
+
+        assert result.status == StageStatus.DONE
+        assert not (run_dir / "stage-15" / ".gate_proposal.json").exists()
+
+    def test_sentinel_not_written_when_not_in_hitl_required(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        run_dir: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+    ) -> None:
+        _write_stage15_analysis(run_dir)
+        monkeypatch.setitem(
+            rc_executor._STAGE_EXECUTORS,
+            Stage.RESEARCH_DECISION,
+            _stage15_done_executor("EXTEND"),
+        )
+
+        result = rc_executor.execute_stage(
+            Stage.RESEARCH_DECISION,
+            run_dir=run_dir,
+            run_id="run-not-gated",
+            config=rc_config,
+            adapters=adapters,
+            auto_approve_gates=False,
+        )
+
+        assert result.status == StageStatus.DONE
+        assert not (run_dir / "stage-15" / ".gate_proposal.json").exists()
+
+    def test_finalize_skips_gate_check(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        run_dir: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+    ) -> None:
+        _write_stage15_analysis(run_dir)
+        rc_config = _with_hitl_required_stages(rc_config, (5, 9, 15, 20))
+        stage_dir = run_dir / "stage-15"
+        stage_dir.mkdir()
+        (stage_dir / "decision.md").write_text(
+            "## Decision\nPIVOT\n## Justification\nHuman final edit.",
+            encoding="utf-8",
+        )
+        (stage_dir / ".gate_proposal.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setitem(
+            rc_executor._STAGE_EXECUTORS,
+            Stage.RESEARCH_DECISION,
+            _stage15_done_executor("PROCEED"),
+        )
+
+        result = rc_executor.execute_stage(
+            Stage.RESEARCH_DECISION,
+            run_dir=run_dir,
+            run_id="run-finalize-skip-gate",
+            config=rc_config,
+            adapters=adapters,
+            auto_approve_gates=False,
+        )
+
+        assert result.status == StageStatus.DONE
+        assert result.decision == "pivot"
 
 
 class TestMultiPerspectiveGenerate:
@@ -1449,6 +1865,57 @@ class TestHypothesisGenDebate:
         assert "hypotheses.md" in result.artifacts
         # No perspectives directory when no LLM
         assert not (stage_dir / "perspectives").exists()
+
+    def test_hypothesis_gen_with_extension_context_injects_into_prompt(
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _stub_novelty_check(monkeypatch)
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-08"
+        stage_dir.mkdir(parents=True)
+        _write_prior_artifact(run_dir, 7, "synthesis.md", "# Synthesis\nGap found.")
+        (run_dir / "hypothesis_extension_context.md").write_text(
+            "# Hypothesis Extension Context\nPrior H1 opened a follow-up mechanism.",
+            encoding="utf-8",
+        )
+        fake_llm = FakeLLMClient("## H1\nFollow-up hypothesis")
+
+        result = rc_executor._execute_hypothesis_gen(
+            stage_dir, run_dir, rc_config, adapters, llm=fake_llm
+        )
+
+        prompt_text = "\n\n".join(call[0]["content"] for call in fake_llm.calls)
+        assert result.status == StageStatus.DONE
+        assert "Prior H1 opened a follow-up mechanism" in prompt_text
+
+    def test_hypothesis_gen_without_extension_context_uses_synthesis_only(
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _stub_novelty_check(monkeypatch)
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-08"
+        stage_dir.mkdir(parents=True)
+        _write_prior_artifact(run_dir, 7, "synthesis.md", "# Synthesis\nGap found.")
+        fake_llm = FakeLLMClient("## H1\nRegular hypothesis")
+
+        result = rc_executor._execute_hypothesis_gen(
+            stage_dir, run_dir, rc_config, adapters, llm=fake_llm
+        )
+
+        prompt_text = "\n\n".join(call[0]["content"] for call in fake_llm.calls)
+        assert result.status == StageStatus.DONE
+        assert "Gap found" in prompt_text
+        assert "Hypothesis Extension Context" not in prompt_text
 
     def test_hypothesis_gen_acp_debate_success_preserves_clean_contract(
         self,

@@ -38,6 +38,7 @@ DEBATE_ROLES_HYPOTHESIS: dict[str, dict[str, str]] = {
             "- Measurable prediction and failure condition\n"
             "- Estimated risk level (low/medium/high)\n\n"
             "Topic: {topic}\n"
+            "{extension_context}\n"
             "Synthesis:\n{synthesis}"
         ),
     },
@@ -56,6 +57,7 @@ DEBATE_ROLES_HYPOTHESIS: dict[str, dict[str, str]] = {
             "- Measurable prediction and failure condition\n"
             "- Resource requirements estimate\n\n"
             "Topic: {topic}\n"
+            "{extension_context}\n"
             "Synthesis:\n{synthesis}"
         ),
     },
@@ -75,6 +77,7 @@ DEBATE_ROLES_HYPOTHESIS: dict[str, dict[str, str]] = {
             "- Measurable prediction and failure condition\n"
             "- Potential negative results that would be informative\n\n"
             "Topic: {topic}\n"
+            "{extension_context}\n"
             "Synthesis:\n{synthesis}"
         ),
     },
@@ -321,6 +324,7 @@ _DEFAULT_STAGES: dict[str, dict[str, Any]] = {
             "- Hypotheses that replicate well-known results already in the literature\n"
             "- Hypotheses that cannot be tested within the domain's feasibility constraints\n\n"
             "{domain_context}"
+            "{extension_context}\n"
             "Synthesis:\n{synthesis}"
         ),
     },
@@ -887,9 +891,11 @@ _DEFAULT_STAGES: dict[str, dict[str, Any]] = {
     "research_decision": {
         "system": "You are a research program lead making go/no-go decisions.",
         "user": (
-            "Based on the analysis, make one of three decisions:\n"
+            "Based on the analysis, make one of four decisions:\n"
             "- **PROCEED** — results are sufficient, move to paper writing\n"
             "- **PIVOT** — hypotheses are fundamentally flawed, generate new ones\n"
+            "- **EXTEND** — current hypotheses produced useful evidence and should "
+            "lead to deeper follow-up hypotheses\n"
             "- **REFINE** — hypotheses are sound but experiments need re-tuning\n\n"
             "MINIMUM QUALITY CRITERIA for PROCEED (ALL must be met):\n"
             "1. At least 2 baselines AND the proposed method have results\n"
@@ -900,7 +906,7 @@ _DEFAULT_STAGES: dict[str, dict[str, Any]] = {
             "If ANY criterion is not met, you MUST choose REFINE (not PROCEED).\n\n"
             "Output markdown with sections:\n"
             "## Decision\n"
-            "State exactly one of: PROCEED, PIVOT, or REFINE\n\n"
+            "State exactly one of: PROCEED, PIVOT, EXTEND, or REFINE\n\n"
             "## Justification\n"
             "Why this decision is warranted based on evidence.\n\n"
             "## Evidence\n"

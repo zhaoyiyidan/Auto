@@ -225,6 +225,7 @@ class PromptManager:
         """
         entry = self._stages[stage]
         kw = {k: str(v) for k, v in kwargs.items()}
+        kw.setdefault("extension_context", "")
         user_text = _render(entry["user"], kw)
         if evolution_overlay:
             user_text = f"{user_text}\n\n{evolution_overlay}"
@@ -249,9 +250,11 @@ class PromptManager:
 
     def user(self, stage: str, **kwargs: Any) -> str:
         """Return the rendered user prompt for *stage*."""
+        kw = {k: str(v) for k, v in kwargs.items()}
+        kw.setdefault("extension_context", "")
         return _render(
             self._stages[stage]["user"],
-            {k: str(v) for k, v in kwargs.items()},
+            kw,
         )
 
     def json_mode(self, stage: str) -> bool:

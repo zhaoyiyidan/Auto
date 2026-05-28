@@ -149,9 +149,6 @@ class TestWorkspaceAgentRepairWiring:
                 elapsed_sec=0.1,
             )
 
-        def old_runner_called(**kwargs: Any) -> WorkspaceAgentResult:
-            raise AssertionError("run_workspace_pipeline must not be used")
-
         monkeypatch.setattr(
             "researchclaw.experiment.workspace_agent.create_workspace_agent",
             lambda *args, **kwargs: agent,
@@ -163,10 +160,6 @@ class TestWorkspaceAgentRepairWiring:
         monkeypatch.setattr(
             "researchclaw.pipeline.workspace_orchestrator.run_workspace_agent_task",
             fake_task,
-        )
-        monkeypatch.setattr(
-            "researchclaw.pipeline.workspace_orchestrator.run_workspace_pipeline",
-            old_runner_called,
         )
 
         repaired = _repair_via_workspace_agent(

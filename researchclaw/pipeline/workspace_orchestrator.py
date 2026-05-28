@@ -172,27 +172,6 @@ def run_workspace_agent_task(
     return result
 
 
-def run_workspace_pipeline(
-    workspace_path: Path,
-    run_dir: Path,
-    stage: int,
-    agent: WorkspaceAgentProvider,
-    submitter: TrainingSubmitter,
-    prompt: str,
-    timeout_sec: int,
-) -> WorkspaceAgentResult:
-    """Backward-compatible alias for the workspace task runner."""
-    return run_workspace_agent_task(
-        workspace_path=workspace_path,
-        run_dir=run_dir,
-        stage=stage,
-        agent=agent,
-        submitter=submitter,
-        prompt=prompt,
-        timeout_sec=timeout_sec,
-    )
-
-
 def _manifest_from_result(
     workspace: Path,
     result: WorkspaceAgentResult,

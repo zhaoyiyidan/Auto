@@ -5,11 +5,13 @@ from typing import cast
 import pytest
 
 from researchclaw.config import (
+    CliAgentConfig,
     ExperimentConfig,
     RCConfig,
     SandboxConfig,
     SecurityConfig,
     ValidationResult,
+    _parse_cli_agent_config,
     load_config,
     validate_config,
 )
@@ -233,6 +235,61 @@ def test_rcconfig_from_dict_parses_llm_wire_api(tmp_path: Path):
     config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
 
     assert config.llm.wire_api == "responses"
+
+
+def test_cli_agent_config_default_base_url_and_api_key_env():
+    cfg = CliAgentConfig()
+
+    assert cfg.base_url == ""
+    assert cfg.api_key_env == ""
+
+
+def test_cli_agent_config_custom_provider_fields():
+    cfg = CliAgentConfig(
+        provider="codex",
+        base_url="https://x.com/v1",
+        api_key_env="MY_KEY",
+    )
+
+    assert cfg.base_url == "https://x.com/v1"
+    assert cfg.api_key_env == "MY_KEY"
+
+
+def test_parse_cli_agent_config_parses_provider_fields():
+    cfg = _parse_cli_agent_config(
+        {
+            "provider": "codex",
+            "base_url": "https://x.com/v1",
+            "api_key_env": "MY_KEY",
+        }
+    )
+
+    assert cfg.provider == "codex"
+    assert cfg.base_url == "https://x.com/v1"
+    assert cfg.api_key_env == "MY_KEY"
+
+
+def test_parse_cli_agent_config_empty_returns_empty_defaults():
+    cfg = _parse_cli_agent_config({})
+
+    assert cfg.base_url == ""
+    assert cfg.api_key_env == ""
+
+
+def test_cli_agent_config_roundtrip_through_experiment_config(tmp_path: Path):
+    data = _valid_config_data()
+    experiment_data = cast(dict[str, object], data["experiment"])
+    experiment_data["cli_agent"] = {
+        "provider": "codex",
+        "base_url": "https://x.com/v1",
+        "api_key_env": "MY_KEY",
+    }
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.experiment.cli_agent.provider == "codex"
+    assert config.experiment.cli_agent.base_url == "https://x.com/v1"
+    assert config.experiment.cli_agent.api_key_env == "MY_KEY"
 
 
 def test_rcconfig_from_dict_missing_fields_raises_value_error(tmp_path: Path):

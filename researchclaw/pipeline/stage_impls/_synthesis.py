@@ -26,6 +26,11 @@ from researchclaw.prompts import PromptManager
 logger = logging.getLogger(__name__)
 
 
+def _is_acp_provider(config: RCConfig) -> bool:
+    llm_config = getattr(config, "llm", None)
+    return getattr(llm_config, "provider", "") == "acp"
+
+
 def _execute_synthesis(
     stage_dir: Path,
     run_dir: Path,
@@ -106,23 +111,45 @@ def _execute_hypothesis_gen(
         # (ML bank -> innovator/pragmatist/contrarian,
         #  HEP bank -> theorist/phenomenologist/experimentalist).
         _active_roles = _pm.debate_roles_hypothesis()
+        hypotheses_md: str | None = None
 
-        # --- Multi-perspective debate ---
-        perspectives_dir = stage_dir / "perspectives"
-        variables = {"topic": config.research.topic, "synthesis": synthesis}
-        perspectives = _multi_perspective_generate(
-            llm, _active_roles, variables, perspectives_dir
-        )
-        # BUG-S2: If all debate perspectives failed, fall back to defaults
-        # instead of sending empty context to the LLM (pure hallucination).
-        if not perspectives:
-            logger.warning("All debate perspectives failed; using default hypotheses")
-            hypotheses_md = _default_hypotheses(config.research.topic)
-        else:
-            # --- Synthesize into final hypotheses ---
-            hypotheses_md = _synthesize_perspectives(
-                llm, perspectives, "hypothesis_synthesize", _pm
+        if _is_acp_provider(config) and _active_roles:
+            try:
+                from researchclaw.pipeline.stage_impls._hypothesis_debate import (
+                    run_acp_debate,
+                )
+
+                hypotheses_md = run_acp_debate(
+                    run_dir,
+                    stage_dir,
+                    config,
+                    llm=llm,
+                    prompts=_pm,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "ACP hypothesis debate failed; falling back to "
+                    "multi-perspective generation: %s",
+                    exc,
+                )
+
+        if hypotheses_md is None:
+            # --- Multi-perspective debate ---
+            perspectives_dir = stage_dir / "perspectives"
+            variables = {"topic": config.research.topic, "synthesis": synthesis}
+            perspectives = _multi_perspective_generate(
+                llm, _active_roles, variables, perspectives_dir
             )
+            # BUG-S2: If all debate perspectives failed, fall back to defaults
+            # instead of sending empty context to the LLM (pure hallucination).
+            if not perspectives:
+                logger.warning("All debate perspectives failed; using default hypotheses")
+                hypotheses_md = _default_hypotheses(config.research.topic)
+            else:
+                # --- Synthesize into final hypotheses ---
+                hypotheses_md = _synthesize_perspectives(
+                    llm, perspectives, "hypothesis_synthesize", _pm
+                )
     else:
         hypotheses_md = _default_hypotheses(config.research.topic)
     # --- HITL: Read human guidance if available ---

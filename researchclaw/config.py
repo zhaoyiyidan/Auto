@@ -26,6 +26,16 @@ def _safe_int(val: Any, default: int) -> int:
         return default
 
 
+def _safe_float(val: Any, default: float) -> float:
+    """Convert value to float, handling None/null YAML values."""
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
+
 _VALID_NETWORK_POLICIES = {"none", "setup_only", "pip_only", "full"}
 
 
@@ -190,6 +200,8 @@ class AcpConfig:
     timeout_sec: int = 1800
     base_url: str = ""
     api_key_env: str = ""
+    debate_max_rounds: int = 2
+    debate_confidence_min: float = 0.6
 
 
 @dataclass(frozen=True)
@@ -1159,6 +1171,10 @@ def _parse_llm_config(data: dict[str, Any]) -> LlmConfig:
             timeout_sec=int(acp_data.get("timeout_sec", 1800)),
             base_url=acp_data.get("base_url", ""),
             api_key_env=acp_data.get("api_key_env", ""),
+            debate_max_rounds=_safe_int(acp_data.get("debate_max_rounds"), 2),
+            debate_confidence_min=_safe_float(
+                acp_data.get("debate_confidence_min"), 0.6
+            ),
         ),
     )
 

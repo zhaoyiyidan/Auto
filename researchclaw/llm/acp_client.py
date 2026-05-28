@@ -20,7 +20,8 @@ import sys
 import threading
 import time
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 from researchclaw.llm.client import LLMResponse
@@ -46,6 +47,8 @@ class ACPConfig:
     base_url: str = ""
     api_key_env: str = ""
     model: str = ""
+    debate_max_rounds: int = 2
+    debate_confidence_min: float = 0.6
 
 
 def _find_acpx() -> str | None:
@@ -98,6 +101,8 @@ class ACPClient:
             base_url=getattr(acp, "base_url", ""),
             api_key_env=getattr(acp, "api_key_env", ""),
             model=getattr(rc_config.llm, "primary_model", ""),
+            debate_max_rounds=getattr(acp, "debate_max_rounds", 2),
+            debate_confidence_min=getattr(acp, "debate_confidence_min", 0.6),
         ))
 
     # ------------------------------------------------------------------
@@ -156,20 +161,78 @@ class ACPClient:
         """Close the acpx session."""
         if not self._session_ready:
             return
+        self.close_session(self.config.session_name)
+        self._session_ready = False
+
+    def export_session(self, output_path: Path) -> None:
+        """Export the current named ACP session to *output_path*."""
+        acpx = self._resolve_acpx()
+        if not acpx:
+            raise RuntimeError("acpx not found")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        def _run_export() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [acpx, "--ttl", "0", "--cwd", self._abs_cwd(),
+                 self.config.agent, "sessions", "export",
+                 self.config.session_name, "--output", str(output_path)],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=60, env=self._build_env(),
+            )
+
+        result = _run_export()
+        stderr = (result.stderr or "").strip()
+        if result.returncode != 0 and "currently locked" in stderr.lower():
+            self.close_session(self.config.session_name)
+            self._session_ready = False
+            result = _run_export()
+            stderr = (result.stderr or "").strip()
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Failed to export ACP session '{self.config.session_name}': {stderr}"
+            )
+
+    def close_session(self, name: str) -> None:
+        """Close a named ACP session, ignoring cleanup failures."""
         acpx = self._resolve_acpx()
         if not acpx:
             return
         try:
             subprocess.run(
                 [acpx, "--ttl", "0", "--cwd", self._abs_cwd(),
-                 self.config.agent, "sessions", "close",
-                 self.config.session_name],
+                 self.config.agent, "sessions", "close", name],
                 capture_output=True, text=True, encoding="utf-8",
                 errors="replace", timeout=15, env=self._build_env(),
             )
         except Exception:  # noqa: BLE001
             pass
-        self._session_ready = False
+
+    @classmethod
+    def fork_from_archive(
+        cls,
+        archive_path: Path,
+        fork_name: str,
+        base_config: ACPConfig,
+    ) -> ACPClient:
+        """Import *archive_path* as *fork_name* and return a client for it."""
+        temp_client = cls(base_config)
+        acpx = temp_client._resolve_acpx()
+        if not acpx:
+            raise RuntimeError("acpx not found")
+        result = subprocess.run(
+            [acpx, "--ttl", "0", "--cwd", temp_client._abs_cwd(),
+             base_config.agent, "sessions", "import",
+             str(archive_path), "--name", fork_name],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=60, env=temp_client._build_env(),
+        )
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            raise RuntimeError(
+                f"Failed to import ACP fork '{fork_name}': {stderr}"
+            )
+        fork_config = replace(base_config, session_name=fork_name)
+        return cls(fork_config)
 
     def __del__(self) -> None:
         """Best-effort cleanup on garbage collection."""

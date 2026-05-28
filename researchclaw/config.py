@@ -538,16 +538,11 @@ class ExperimentRepairConfig:
 
 @dataclass(frozen=True)
 class CliAgentConfig:
-    """CLI-based code generation backend for Stages 10 & 13.
+    """Legacy code generation backend selector for Stages 10 & 13.
 
-    provider: "llm"          — use existing LLM chat API (default, backward-compatible)
-              "claude_code"  — Claude Code CLI (``claude -p``)
-              "codex"        — OpenAI Codex CLI (``codex exec``)
-
-    base_url config maps to ANTHROPIC_BASE_URL for claude_code and
-    OPENAI_BASE_URL for codex.
-    api_key_env names the env var containing the key. Its value maps to
-    ANTHROPIC_AUTH_TOKEN for claude_code and OPENAI_API_KEY for codex.
+    Only provider="llm" is supported here. One-shot CLI providers such as
+    "claude_code" and "codex" were removed; use experiment.workspace_agent
+    with transport="acp" for persistent Claude/Codex workspace editing.
     """
 
     provider: str = "llm"

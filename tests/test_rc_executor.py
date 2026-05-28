@@ -90,6 +90,25 @@ def _write_prior_artifact(
     (stage_dir / filename).write_text(content, encoding="utf-8")
 
 
+def _stub_novelty_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_check_novelty(*args: object, **kwargs: object) -> dict[str, object]:
+        _ = args, kwargs
+        return {
+            "novelty_score": 1.0,
+            "assessment": "high",
+            "recommendation": "proceed",
+            "similar_papers_found": 0,
+            "similar_papers": [],
+            "search_coverage": "mocked",
+            "total_papers_retrieved": 0,
+        }
+
+    monkeypatch.setattr(
+        "researchclaw.literature.novelty.check_novelty",
+        fake_check_novelty,
+    )
+
+
 def test_executor_map_has_23_entries() -> None:
     executor_map = getattr(rc_executor, "EXECUTOR_MAP", rc_executor._STAGE_EXECUTORS)
     assert len(executor_map) == 23
@@ -1370,8 +1389,13 @@ class TestSynthesizePerspectives:
 
 class TestHypothesisGenDebate:
     def test_hypothesis_gen_with_llm_creates_perspectives(
-        self, tmp_path: Path, rc_config: RCConfig, adapters: AdapterBundle
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        _stub_novelty_check(monkeypatch)
         run_dir = tmp_path / "run"
         run_dir.mkdir()
         stage_dir = run_dir / "stage-08"
@@ -1390,8 +1414,13 @@ class TestHypothesisGenDebate:
         assert len(perspective_files) == 3
 
     def test_hypothesis_gen_without_llm_no_perspectives(
-        self, tmp_path: Path, rc_config: RCConfig, adapters: AdapterBundle
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        _stub_novelty_check(monkeypatch)
         run_dir = tmp_path / "run"
         run_dir.mkdir()
         stage_dir = run_dir / "stage-08"

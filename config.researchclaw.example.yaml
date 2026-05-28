@@ -108,6 +108,14 @@ experiment:
     timeout_sec: 600             # Max seconds for OpenCode generation
     max_retries: 1               # Retry count on failure
     workspace_cleanup: true      # Remove temp workspace after collection
+  # CLI-based code generation backend (Stages 10 & 13).
+  # provider: "llm" (default) | "claude_code" | "codex"
+  # cli_agent:
+  #   provider: "codex"
+  #   base_url: "https://your-provider.example.com/v1"
+  #   api_key_env: "CUSTOM_API_KEY"
+  #   model: ""
+  #   timeout_sec: 600
 
 # ============================================================================
 # SSH Remote Examples

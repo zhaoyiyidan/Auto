@@ -529,12 +529,16 @@ class CliAgentConfig:
               "claude_code"  — Claude Code CLI (``claude -p``)
               "codex"        — OpenAI Codex CLI (``codex exec``)
 
-    Auth for claude_code: ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL env vars.
-    Auth for codex:       OPENAI_API_KEY env var.
+    base_url config maps to ANTHROPIC_BASE_URL for claude_code and
+    OPENAI_BASE_URL for codex.
+    api_key_env names the env var containing the key. Its value maps to
+    ANTHROPIC_AUTH_TOKEN for claude_code and OPENAI_API_KEY for codex.
     """
 
     provider: str = "llm"
     binary_path: str = ""  # auto-detected via PATH if empty
+    base_url: str = ""
+    api_key_env: str = ""
     model: str = ""  # model override for the CLI agent
     max_budget_usd: float = 5.0
     timeout_sec: int = 600
@@ -1369,6 +1373,8 @@ def _parse_cli_agent_config(data: dict[str, Any]) -> CliAgentConfig:
     return CliAgentConfig(
         provider=data.get("provider", "llm"),
         binary_path=data.get("binary_path", ""),
+        base_url=data.get("base_url", ""),
+        api_key_env=data.get("api_key_env", ""),
         model=data.get("model", ""),
         max_budget_usd=_safe_float(data.get("max_budget_usd"), 5.0),
         timeout_sec=_safe_int(data.get("timeout_sec"), 600),

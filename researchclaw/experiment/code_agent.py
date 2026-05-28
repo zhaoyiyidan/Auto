@@ -387,6 +387,8 @@ class _CliAgentBase:
     """Shared infrastructure for CLI-based coding agents."""
 
     _provider_name: str = ""
+    _BASE_URL_ENV: str = ""
+    _API_KEY_ENV: str = ""
 
     def __init__(
         self,
@@ -395,16 +397,30 @@ class _CliAgentBase:
         max_budget_usd: float = 5.0,
         timeout_sec: int = 600,
         extra_args: list[str] | None = None,
+        base_url: str = "",
+        api_key_env: str = "",
     ) -> None:
         self._binary = binary_path
         self._model = model
         self._max_budget_usd = max_budget_usd
         self._default_timeout = timeout_sec
         self._extra_args = extra_args or []
+        self._base_url = base_url
+        self._api_key_env = api_key_env
 
     @property
     def name(self) -> str:
         return self._provider_name
+
+    def _build_env(self) -> dict[str, str]:
+        env = {**os.environ}
+        if self._base_url and self._BASE_URL_ENV:
+            env[self._BASE_URL_ENV] = self._base_url
+        if self._api_key_env and self._API_KEY_ENV:
+            api_key = os.environ.get(self._api_key_env)
+            if api_key:
+                env[self._API_KEY_ENV] = api_key
+        return env
 
     def _run_subprocess(
         self,
@@ -424,7 +440,7 @@ class _CliAgentBase:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=workdir,
-            env={**os.environ},
+            env=self._build_env(),
             start_new_session=True,
         )
         try:
@@ -562,6 +578,8 @@ class ClaudeCodeAgent(_CliAgentBase):
     """Code agent backed by Claude Code CLI (``claude -p``)."""
 
     _provider_name = "claude_code"
+    _BASE_URL_ENV = "ANTHROPIC_BASE_URL"
+    _API_KEY_ENV = "ANTHROPIC_AUTH_TOKEN"
 
     def _build_cmd(self, prompt: str, workdir: Path) -> list[str]:
         cmd = [
@@ -648,6 +666,8 @@ class CodexAgent(_CliAgentBase):
     """Code agent backed by OpenAI Codex CLI (``codex exec``)."""
 
     _provider_name = "codex"
+    _BASE_URL_ENV = "OPENAI_BASE_URL"
+    _API_KEY_ENV = "OPENAI_API_KEY"
 
     def _build_cmd(self, prompt: str, workdir: Path) -> list[str]:
         cmd = [
@@ -756,6 +776,8 @@ def create_code_agent(
             max_budget_usd=agent_cfg.max_budget_usd,
             timeout_sec=agent_cfg.timeout_sec,
             extra_args=list(agent_cfg.extra_args),
+            base_url=agent_cfg.base_url,
+            api_key_env=agent_cfg.api_key_env,
         )
 
     if provider == "codex":
@@ -771,6 +793,8 @@ def create_code_agent(
             max_budget_usd=agent_cfg.max_budget_usd,
             timeout_sec=agent_cfg.timeout_sec,
             extra_args=list(agent_cfg.extra_args),
+            base_url=agent_cfg.base_url,
+            api_key_env=agent_cfg.api_key_env,
         )
 
     raise ValueError(f"Unknown code agent provider: {provider}")

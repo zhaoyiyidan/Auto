@@ -183,6 +183,191 @@ def test_safe_filename_truncates_to_100_chars() -> None:
     assert cleaned == "x" * 100
 
 
+class TestWorkspaceAgentStageWiring:
+    def test_workspace_codegen_prompt_has_agent_contract(self) -> None:
+        from researchclaw.pipeline.stage_impls._code_generation import (
+            _workspace_codegen_prompt,
+        )
+
+        prompt = _workspace_codegen_prompt(
+            topic="topic",
+            exp_plan="plan",
+            metric="accuracy",
+            pkg_hint="numpy",
+            compute_budget="1 hour",
+            extra_guidance="guidance",
+            manifest_filename="run_manifest.json",
+        )
+
+        assert prompt.count("MUST") >= 6
+        assert prompt.count("MUST NOT") >= 4
+        assert "git commit" in prompt.lower()
+        assert "Do not submit" in prompt
+        assert "run_manifest.json" in prompt
+        assert "main.py" not in prompt
+
+    def test_workspace_refine_prompt_has_agent_contract(self) -> None:
+        from researchclaw.pipeline.stage_impls._execution import (
+            _workspace_refine_prompt,
+        )
+
+        prompt = _workspace_refine_prompt(
+            topic="topic",
+            metric_key="accuracy",
+            metric_direction="maximize",
+            exp_plan="plan",
+            project_files=["train.py"],
+            run_summaries=["previous run"],
+            manifest_filename="run_manifest.json",
+        )
+
+        assert prompt.count("MUST") >= 6
+        assert prompt.count("MUST NOT") >= 4
+        assert "git commit" in prompt.lower()
+        assert "Do not submit" in prompt
+        assert "run_manifest.json" in prompt
+
+    def test_stage10_calls_workspace_agent_task(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg = _workspace_agent_rc_config(tmp_path)
+        calls: list[dict[str, Any]] = []
+        agent = object()
+        submitter = object()
+
+        _patch_workspace_runner(monkeypatch, calls, agent, submitter)
+        stage_dir = run_dir / "stage-10"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_code_generation(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=FakeLLMClient(),
+        )
+
+        assert result.status is StageStatus.DONE
+        assert calls[0]["stage"] == 10
+        assert calls[0]["agent"] is agent
+        assert calls[0]["submitter"] is submitter
+        assert calls[0]["close_policy"] == "close"
+
+    def test_stage13_calls_workspace_agent_task(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg = _workspace_agent_rc_config(tmp_path)
+        calls: list[dict[str, Any]] = []
+        agent = object()
+        submitter = object()
+
+        _patch_workspace_runner(monkeypatch, calls, agent, submitter)
+        stage_dir = run_dir / "stage-13"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_iterative_refine(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=FakeLLMClient(),
+        )
+
+        assert result.status is StageStatus.DONE
+        assert calls[0]["stage"] == 13
+        assert calls[0]["agent"] is agent
+        assert calls[0]["submitter"] is submitter
+        assert calls[0]["close_policy"] == "close"
+
+
+def _workspace_agent_rc_config(tmp_path: Path) -> RCConfig:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(exist_ok=True)
+    data = {
+        "project": {"name": "rc-test", "mode": "docs-first"},
+        "research": {"topic": "workspace topic", "domains": ["ml"]},
+        "runtime": {"timezone": "UTC"},
+        "notifications": {"channel": "local"},
+        "knowledge_base": {"backend": "markdown", "root": str(tmp_path / "kb")},
+        "openclaw_bridge": {"use_memory": True, "use_message": True},
+        "llm": {
+            "provider": "openai-compatible",
+            "base_url": "http://localhost:1234/v1",
+            "api_key_env": "RC_TEST_KEY",
+            "api_key": "inline-test-key",
+            "primary_model": "fake-model",
+            "fallback_models": [],
+        },
+        "security": {"hitl_required_stages": [5, 9, 20]},
+        "experiment": {
+            "mode": "sandbox",
+            "metric_key": "accuracy",
+            "metric_direction": "maximize",
+            "workspace_agent": {
+                "enabled": True,
+                "transport": "acp",
+                "workspace_path": str(workspace),
+                "session_name": "researchclaw-code-test",
+                "agent": "claude",
+                "timeout_sec": 300,
+                "max_turns": 20,
+                "close_policy": "close",
+            },
+            "submitter": {"type": "manual"},
+        },
+    }
+    return RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+
+def _patch_workspace_runner(
+    monkeypatch: pytest.MonkeyPatch,
+    calls: list[dict[str, Any]],
+    agent: object,
+    submitter: object,
+) -> None:
+    from researchclaw.experiment.workspace import WorkspaceAgentResult
+
+    def fake_task(**kwargs: Any) -> WorkspaceAgentResult:
+        calls.append(kwargs)
+        return WorkspaceAgentResult(
+            base_sha="base",
+            agent_commit_sha="head",
+            manifest_path="run_manifest.json",
+            diff_stat=" train.py | 1 +",
+            raw_log="done",
+            provider_name="acp",
+            elapsed_sec=0.1,
+        )
+
+    def old_runner_called(**kwargs: Any) -> WorkspaceAgentResult:
+        raise AssertionError("run_workspace_pipeline must not be used")
+
+    monkeypatch.setattr(
+        "researchclaw.experiment.workspace_agent.create_workspace_agent",
+        lambda *args, **kwargs: agent,
+    )
+    monkeypatch.setattr(
+        "researchclaw.experiment.submitter.create_submitter",
+        lambda *args, **kwargs: submitter,
+    )
+    monkeypatch.setattr(
+        "researchclaw.pipeline.workspace_orchestrator.run_workspace_agent_task",
+        fake_task,
+    )
+    monkeypatch.setattr(
+        "researchclaw.pipeline.workspace_orchestrator.run_workspace_pipeline",
+        old_runner_called,
+    )
+
+
 def test_build_context_preamble_basic_fields(
     rc_config: RCConfig, run_dir: Path
 ) -> None:

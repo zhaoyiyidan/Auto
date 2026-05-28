@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,6 +22,7 @@ from researchclaw.pipeline.experiment_repair import (
     build_repair_prompt,
     run_repair_loop,
     select_best_results,
+    _repair_via_workspace_agent,
     _extract_code_blocks,
     _build_experiment_summary_from_run,
     _load_experiment_code,
@@ -106,6 +109,82 @@ class TestBuildRepairPrompt:
         prompt = build_repair_prompt(diag, original_code={"main.py": "pass"})
         assert "OUTPUT FORMAT" in prompt
         assert "filename.py" in prompt
+
+
+class TestWorkspaceAgentRepairWiring:
+    def test_repair_uses_workspace_agent_task(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from researchclaw.experiment.workspace import WorkspaceAgentResult
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "train.py").write_text("print('fixed')\n", encoding="utf-8")
+        config = SimpleNamespace(
+            experiment=SimpleNamespace(
+                workspace_agent=SimpleNamespace(
+                    enabled=True,
+                    workspace_path=str(workspace),
+                    manifest_filename="run_manifest.json",
+                    timeout_sec=300,
+                    close_policy="close",
+                )
+            )
+        )
+        calls: list[dict[str, Any]] = []
+        agent = object()
+        submitter = object()
+
+        def fake_task(**kwargs: Any) -> WorkspaceAgentResult:
+            calls.append(kwargs)
+            return WorkspaceAgentResult(
+                base_sha="base",
+                agent_commit_sha="head",
+                manifest_path="run_manifest.json",
+                diff_stat=" train.py | 1 +",
+                raw_log="done",
+                provider_name="acp",
+                elapsed_sec=0.1,
+            )
+
+        def old_runner_called(**kwargs: Any) -> WorkspaceAgentResult:
+            raise AssertionError("run_workspace_pipeline must not be used")
+
+        monkeypatch.setattr(
+            "researchclaw.experiment.workspace_agent.create_workspace_agent",
+            lambda *args, **kwargs: agent,
+        )
+        monkeypatch.setattr(
+            "researchclaw.experiment.submitter.create_submitter",
+            lambda *args, **kwargs: submitter,
+        )
+        monkeypatch.setattr(
+            "researchclaw.pipeline.workspace_orchestrator.run_workspace_agent_task",
+            fake_task,
+        )
+        monkeypatch.setattr(
+            "researchclaw.pipeline.workspace_orchestrator.run_workspace_pipeline",
+            old_runner_called,
+        )
+
+        repaired = _repair_via_workspace_agent(
+            "fix the experiment",
+            {"main.py": "print('old')\n"},
+            llm=None,
+            config=config,
+            run_dir=tmp_path / "run",
+            cycle=1,
+        )
+
+        assert repaired is not None
+        assert repaired["train.py"] == "print('fixed')\n"
+        assert calls[0]["stage"] == 14
+        assert calls[0]["iteration"] == 1
+        assert calls[0]["agent"] is agent
+        assert calls[0]["submitter"] is submitter
+        assert calls[0]["close_policy"] == "close"
 
 
 # ---------------------------------------------------------------------------

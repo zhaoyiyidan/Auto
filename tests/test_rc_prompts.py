@@ -180,6 +180,27 @@ class TestPromptManagerDefaults:
         assert "import error" in irp.user
 
 
+class TestResearchDecisionPrompts:
+    def test_ml_research_decision_contains_extend_option(self) -> None:
+        prompt = PromptManager(domain="ml").user(
+            "research_decision",
+            analysis="# Analysis\nUseful findings suggest follow-up work.",
+        )
+        assert "EXTEND" in prompt
+
+    def test_hep_research_decision_contains_extend_option(self) -> None:
+        prompt = PromptManager(domain="hep_ph").user(
+            "research_decision",
+            analysis="# Analysis\nUseful physics findings suggest follow-up work.",
+        )
+        assert "EXTEND" in prompt
+
+    def test_default_yaml_research_decision_contains_extend_option(self) -> None:
+        data = yaml.safe_load(Path("prompts.default.yaml").read_text(encoding="utf-8"))
+        prompt = data["stages"]["research_decision"]["user"]
+        assert "EXTEND" in prompt
+
+
 # ---------------------------------------------------------------------------
 # PromptManager — YAML override
 # ---------------------------------------------------------------------------

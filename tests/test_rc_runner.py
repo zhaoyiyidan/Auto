@@ -509,6 +509,12 @@ def _refine_result(stage: Stage) -> StageResult:
     )
 
 
+def _extend_result(stage: Stage) -> StageResult:
+    return StageResult(
+        stage=stage, status=StageStatus.DONE, artifacts=("decision.md",), decision="extend"
+    )
+
+
 def test_pivot_decision_triggers_rollback_to_hypothesis_gen(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,
@@ -573,6 +579,150 @@ def test_refine_decision_triggers_rollback_to_iterative_refine(
     # Should have seen ITERATIVE_REFINE at least twice
     refine_stage_count = sum(1 for s in seen if s == Stage.ITERATIVE_REFINE)
     assert refine_stage_count >= 2
+
+
+def test_extend_decision_triggers_rollback_to_hypothesis_gen(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    seen: list[Stage] = []
+    extend_count = 0
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        seen.append(stage)
+        nonlocal extend_count
+        if stage == Stage.RESEARCH_DECISION and extend_count == 0:
+            extend_count += 1
+            return _extend_result(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-extend",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    hyp_gen_count = sum(1 for s in seen if s == Stage.HYPOTHESIS_GEN)
+    assert hyp_gen_count >= 2
+
+
+def test_extend_writes_extension_context_file(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    extend_count = 0
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        stage_dir = run_dir / f"stage-{int(stage):02d}"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        nonlocal extend_count
+        if stage == Stage.HYPOTHESIS_GEN and extend_count == 0:
+            (stage_dir / "hypotheses.md").write_text(
+                "# Hypotheses\nH1: current hypothesis.",
+                encoding="utf-8",
+            )
+        if stage == Stage.RESULT_ANALYSIS and extend_count == 0:
+            (stage_dir / "analysis.md").write_text(
+                "# Analysis\nA follow-up mechanism emerged.",
+                encoding="utf-8",
+            )
+            (stage_dir / "experiment_summary.json").write_text(
+                json.dumps({"metrics_summary": {"accuracy": 0.8}}),
+                encoding="utf-8",
+            )
+        if stage == Stage.RESEARCH_DECISION and extend_count == 0:
+            extend_count += 1
+            (stage_dir / "decision.md").write_text(
+                "## Decision\nEXTEND\n## Next Actions\nProbe the follow-up mechanism.",
+                encoding="utf-8",
+            )
+            return _extend_result(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-extend-context",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    context_path = run_dir / "hypothesis_extension_context.md"
+    assert context_path.exists()
+    context = context_path.read_text(encoding="utf-8")
+    assert "current hypothesis" in context
+    assert "follow-up mechanism" in context
+    assert "accuracy" in context
+
+
+def test_pivot_cleans_old_extension_context(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    (run_dir / "hypothesis_extension_context.md").write_text(
+        "stale extension context",
+        encoding="utf-8",
+    )
+    pivot_count = 0
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        nonlocal pivot_count
+        if stage == Stage.RESEARCH_DECISION and pivot_count == 0:
+            pivot_count += 1
+            return _pivot_result(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-pivot-clean-context",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    assert not (run_dir / "hypothesis_extension_context.md").exists()
+
+
+def test_refine_cleans_old_extension_context(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    (run_dir / "hypothesis_extension_context.md").write_text(
+        "stale extension context",
+        encoding="utf-8",
+    )
+    refine_count = 0
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        nonlocal refine_count
+        if stage == Stage.RESEARCH_DECISION and refine_count == 0:
+            refine_count += 1
+            return _refine_result(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-refine-clean-context",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    assert not (run_dir / "hypothesis_extension_context.md").exists()
 
 
 def test_max_pivot_count_prevents_infinite_loop(
@@ -640,6 +790,35 @@ def test_record_decision_history_appends(run_dir: Path) -> None:
     assert len(history) == 2
     assert history[0]["decision"] == "pivot"
     assert history[1]["decision"] == "refine"
+
+
+def test_decision_history_records_extend(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    extend_count = 0
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        nonlocal extend_count
+        if stage == Stage.RESEARCH_DECISION and extend_count == 0:
+            extend_count += 1
+            return _extend_result(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-extend-history",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    history = json.loads((run_dir / "decision_history.json").read_text())
+    assert history[0]["decision"] == "extend"
+    assert history[0]["rollback_target"] == Stage.HYPOTHESIS_GEN.name
 
 
 # ── Deliverables packaging tests ──

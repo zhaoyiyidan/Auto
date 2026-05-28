@@ -1277,13 +1277,29 @@ class TestParseDecision:
         text = "## Decision\nREFINE\n## Justification\nNeed more tuning."
         assert rc_executor._parse_decision(text) == "refine"
 
+    def test_extend_detected(self) -> None:
+        text = "## Decision\nEXTEND\n## Justification\nFollow-up hypothesis warranted."
+        assert rc_executor._parse_decision(text) == "extend"
+
     def test_pivot_case_insensitive(self) -> None:
         text = "## Decision\npivot\n## Justification\nBad approach."
         assert rc_executor._parse_decision(text) == "pivot"
 
+    def test_extend_case_insensitive(self) -> None:
+        text = "## Decision\nextend\n## Justification\nFollow-up hypothesis warranted."
+        assert rc_executor._parse_decision(text) == "extend"
+
     def test_pivot_takes_priority_over_proceed(self) -> None:
         text = "## Decision\nPIVOT\nWe should not PROCEED."
         assert rc_executor._parse_decision(text) == "pivot"
+
+    def test_extend_takes_priority(self) -> None:
+        text = (
+            "## Decision\n"
+            "The options are PROCEED, PIVOT, REFINE, or EXTEND.\n"
+            "Final recommendation: EXTEND."
+        )
+        assert rc_executor._parse_decision(text) == "extend"
 
     def test_decision_in_body_not_heading(self) -> None:
         text = "The results suggest we should PIVOT to a new approach."
@@ -1449,6 +1465,57 @@ class TestHypothesisGenDebate:
         assert "hypotheses.md" in result.artifacts
         # No perspectives directory when no LLM
         assert not (stage_dir / "perspectives").exists()
+
+    def test_hypothesis_gen_with_extension_context_injects_into_prompt(
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _stub_novelty_check(monkeypatch)
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-08"
+        stage_dir.mkdir(parents=True)
+        _write_prior_artifact(run_dir, 7, "synthesis.md", "# Synthesis\nGap found.")
+        (run_dir / "hypothesis_extension_context.md").write_text(
+            "# Hypothesis Extension Context\nPrior H1 opened a follow-up mechanism.",
+            encoding="utf-8",
+        )
+        fake_llm = FakeLLMClient("## H1\nFollow-up hypothesis")
+
+        result = rc_executor._execute_hypothesis_gen(
+            stage_dir, run_dir, rc_config, adapters, llm=fake_llm
+        )
+
+        prompt_text = "\n\n".join(call[0]["content"] for call in fake_llm.calls)
+        assert result.status == StageStatus.DONE
+        assert "Prior H1 opened a follow-up mechanism" in prompt_text
+
+    def test_hypothesis_gen_without_extension_context_uses_synthesis_only(
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _stub_novelty_check(monkeypatch)
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-08"
+        stage_dir.mkdir(parents=True)
+        _write_prior_artifact(run_dir, 7, "synthesis.md", "# Synthesis\nGap found.")
+        fake_llm = FakeLLMClient("## H1\nRegular hypothesis")
+
+        result = rc_executor._execute_hypothesis_gen(
+            stage_dir, run_dir, rc_config, adapters, llm=fake_llm
+        )
+
+        prompt_text = "\n\n".join(call[0]["content"] for call in fake_llm.calls)
+        assert result.status == StageStatus.DONE
+        assert "Gap found" in prompt_text
+        assert "Hypothesis Extension Context" not in prompt_text
 
     def test_hypothesis_gen_acp_debate_success_preserves_clean_contract(
         self,

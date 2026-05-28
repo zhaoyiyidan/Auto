@@ -327,12 +327,20 @@ def test_decision_rollback_has_pivot_and_refine():
     assert "refine" in DECISION_ROLLBACK
 
 
+def test_decision_rollback_has_extend():
+    assert "extend" in DECISION_ROLLBACK
+
+
 def test_decision_rollback_pivot_targets_hypothesis_gen():
     assert DECISION_ROLLBACK["pivot"] is Stage.HYPOTHESIS_GEN
 
 
 def test_decision_rollback_refine_targets_iterative_refine():
     assert DECISION_ROLLBACK["refine"] is Stage.ITERATIVE_REFINE
+
+
+def test_decision_rollback_extend_targets_hypothesis_gen():
+    assert DECISION_ROLLBACK["extend"] is Stage.HYPOTHESIS_GEN
 
 
 def test_max_decision_pivots_is_positive():

@@ -52,6 +52,7 @@ def _execute_topic_init(
         resp = llm.chat(
             [{"role": "user", "content": sp.user}],
             system=sp.system,
+            strip_thinking=True,
         )
         goal_md = resp.content
     else:
@@ -136,6 +137,7 @@ def _execute_problem_decompose(
         resp = llm.chat(
             [{"role": "user", "content": sp.user}],
             system=sp.system,
+            strip_thinking=True,
         )
         body = resp.content
     else:
@@ -188,6 +190,7 @@ Derived from `goal.md` for topic: {config.research.topic}
                     f"You are a senior {_detect_domain(config.research.topic, config.research.domains)[1]} "
                     f"researcher evaluating research topic quality."
                 ),
+                strip_thinking=True,
             )
             _eval_data = _safe_json_loads(_eval_resp.content, {})
             if isinstance(_eval_data, dict):

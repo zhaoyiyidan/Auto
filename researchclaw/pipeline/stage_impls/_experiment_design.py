@@ -518,6 +518,7 @@ def _execute_experiment_design(
                         f"Return ONLY the updated YAML."
                     )}],
                     max_tokens=4096,
+                    strip_thinking=True,
                 )
                 updated = _extract_yaml_block(resp.content)
                 try:

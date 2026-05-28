@@ -1118,6 +1118,7 @@ def _execute_code_generation(
                 [{"role": "user", "content": review_prompt}],
                 system="You are a meticulous ML code reviewer. Be strict.",
                 max_tokens=2048,
+                strip_thinking=True,
             )
             # Extract JSON from LLM response (may be wrapped in markdown fences)
             _review_text = review_resp.content if hasattr(review_resp, "content") else str(review_resp)
@@ -1293,6 +1294,7 @@ def _execute_code_generation(
                 [{"role": "user", "content": align_prompt}],
                 system="You are a scientific code reviewer checking topic-experiment alignment.",
                 max_tokens=1024,
+                strip_thinking=True,
             )
             align_data = _safe_json_loads(align_resp.content, {})
             if isinstance(align_data, dict) and not align_data.get("aligned", True):
@@ -1381,6 +1383,7 @@ def _execute_code_generation(
                         )}],
                         system="You are a scientific code reviewer checking topic-experiment alignment.",
                         max_tokens=1024,
+                        strip_thinking=True,
                     )
                     recheck_data = _safe_json_loads(recheck_resp.content, {})
                     if isinstance(recheck_data, dict) and recheck_data.get("aligned", False):
@@ -1416,6 +1419,7 @@ def _execute_code_generation(
                 [{"role": "user", "content": ablation_prompt}],
                 system="You are a code reviewer checking experimental conditions.",
                 max_tokens=512,
+                strip_thinking=True,
             )
             abl_data = _safe_json_loads(abl_resp.content, {})
             if isinstance(abl_data, dict) and abl_data.get("has_duplicates"):
@@ -1528,4 +1532,3 @@ Multi-file experiment project with {len(files)} file(s): {file_list}
         artifacts=tuple(artifacts),
         evidence_refs=tuple(f"stage-10/{a}" for a in artifacts),
     )
-

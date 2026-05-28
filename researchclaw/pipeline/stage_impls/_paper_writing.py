@@ -1130,6 +1130,7 @@ def _review_compiled_pdf(
                 "Score honestly — most papers deserve 4-6, not 7-9. "
                 "Flag any sign of AI-generated boilerplate."
             ),
+            strip_thinking=True,
         )
         review_data = _safe_json_loads(resp.content, {})
         if isinstance(review_data, dict) and "overall_score" in review_data:
@@ -2211,6 +2212,7 @@ Generated: {_utcnow_iso()}
                             f"## Current Draft\n{current_draft[:8000]}"
                         )}],
                         max_tokens=8192,
+                        strip_thinking=True,
                     )
                     draft_path.write_text(resp.content, encoding="utf-8")
         except Exception:

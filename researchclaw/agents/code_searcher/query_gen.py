@@ -11,6 +11,8 @@ import logging
 import re
 from typing import Any
 
+from researchclaw.utils.thinking_tags import strip_thinking_tags
+
 logger = logging.getLogger(__name__)
 
 _QUERY_GEN_PROMPT = """\
@@ -136,18 +138,17 @@ def _llm_generate(
                 [{"role": "user", "content": prompt}],
                 system="You generate concise GitHub search queries.",
                 max_tokens=200,
+                strip_thinking=True,
             )
         else:
             return _heuristic_generate(topic, domain_name, libraries, needs)
 
         content = resp.content if hasattr(resp, "content") else str(resp)
+        content = strip_thinking_tags(content)
 
-        # Parse JSON array from response
-        json_match = re.search(r"\[.*\]", content, re.DOTALL)
-        if json_match:
-            queries = json.loads(json_match.group())
-            if isinstance(queries, list) and all(isinstance(q, str) for q in queries):
-                return queries[:5]
+        queries = _parse_query_array(content)
+        if queries:
+            return queries[:5]
 
         logger.warning("Failed to parse LLM query response, using heuristic")
         return _heuristic_generate(topic, domain_name, libraries, needs)
@@ -155,6 +156,19 @@ def _llm_generate(
     except Exception:
         logger.warning("LLM query generation failed", exc_info=True)
         return _heuristic_generate(topic, domain_name, libraries, needs)
+
+
+def _parse_query_array(content: str) -> list[str]:
+    """Extract the first JSON string array from noisy LLM output."""
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\[", content):
+        try:
+            parsed, _end = decoder.raw_decode(content[match.start():])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, list) and all(isinstance(q, str) for q in parsed):
+            return [q.strip() for q in parsed if q.strip()]
+    return []
 
 
 def _extract_key_phrases(text: str, max_words: int = 5) -> str:

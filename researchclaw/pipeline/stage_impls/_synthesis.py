@@ -62,6 +62,7 @@ def _execute_synthesis(
             [{"role": "user", "content": sp.user}],
             system=sp.system,
             max_tokens=sp.max_tokens or 8192,
+            strip_thinking=True,
         )
         synthesis_md = resp.content
     else:
@@ -167,6 +168,7 @@ def _execute_hypothesis_gen(
                         f"Produce improved hypotheses that incorporate the guidance."
                     )}],
                     max_tokens=4096,
+                    strip_thinking=True,
                 )
                 hypotheses_md = resp.content
         except Exception:

@@ -1706,6 +1706,7 @@ def _multi_perspective_generate(
             resp = llm.chat(
                 [{"role": "user", "content": user}],
                 system=system,
+                strip_thinking=True,
             )
             results[role_name] = resp.content
             (perspectives_dir / f"{role_name}.md").write_text(
@@ -1734,6 +1735,7 @@ def _synthesize_perspectives(
     resp = llm.chat(
         [{"role": "user", "content": sp.user}],
         system=sp.system,
+        strip_thinking=True,
     )
     return resp.content
 

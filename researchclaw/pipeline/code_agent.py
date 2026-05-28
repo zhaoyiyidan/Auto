@@ -1386,6 +1386,7 @@ class CodeAgent:
             messages=messages,
             system=system,
             max_tokens=max_tokens,
+            strip_thinking=True,
         )
 
     def _get_or_create_sandbox(self) -> _SandboxLike:

@@ -2585,6 +2585,7 @@ def _check_citation_relevance(
                 [{"role": "user", "content": prompt}],
                 system="You assess citation relevance. Return only valid JSON.",
                 json_mode=True,
+                strip_thinking=True,
             )
             parsed = _safe_json_loads(resp.content, {})
             if isinstance(parsed, dict):

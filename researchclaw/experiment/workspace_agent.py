@@ -1,13 +1,10 @@
-"""Workspace-native wrappers for CLI code agents."""
+"""Workspace-native factory and wrappers for ACP code agents."""
 
 from __future__ import annotations
 
-import subprocess
-import time
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from researchclaw.experiment.code_agent import CodeAgentProvider, CodeAgentResult
 from researchclaw.experiment.workspace import WorkspaceAgentResult
 
 
@@ -29,15 +26,17 @@ class WorkspaceAgentProvider(Protocol):
 
 
 class GitWorkspaceAgent:
-    """Wrap a CodeAgentProvider with git provenance checks."""
+    """Thin wrapper around a workspace-native agent provider."""
 
     def __init__(
         self,
-        inner: CodeAgentProvider,
+        inner: WorkspaceAgentProvider,
         workspace_path: Path,
         *,
         manifest_filename: str = "run_manifest.json",
     ) -> None:
+        if not hasattr(inner, "generate_in_workspace"):
+            raise TypeError("Workspace agent inner must define generate_in_workspace")
         self.inner = inner
         self.workspace_path = workspace_path
         self.manifest_filename = manifest_filename
@@ -45,6 +44,10 @@ class GitWorkspaceAgent:
     @property
     def name(self) -> str:
         return self.inner.name
+
+    @property
+    def session_name(self) -> str:
+        return getattr(self.inner, "session_name", "")
 
     def generate_in_workspace(
         self,
@@ -54,82 +57,12 @@ class GitWorkspaceAgent:
         timeout_sec: int = 600,
     ) -> WorkspaceAgentResult:
         workspace = workspace_path.resolve()
-        base_sha = _git(workspace, "rev-parse", "HEAD")
-        start = time.monotonic()
-        raw_log = ""
-        error: str | None = None
-        try:
-            if hasattr(self.inner, "generate_in_workspace"):
-                result = self.inner.generate_in_workspace(
-                    workspace,
-                    prompt,
-                    workdir or workspace,
-                    timeout_sec,
-                )
-                return result
-            result = self.inner.generate(
-                exp_plan=prompt,
-                topic="workspace-native experiment",
-                metric_key="primary_metric",
-                pkg_hint="",
-                compute_budget="",
-                extra_guidance=prompt,
-                workdir=workdir or workspace,
-                timeout_sec=timeout_sec,
-            )
-            raw_log = result.raw_output
-            if result.error:
-                error = result.error
-        except Exception as exc:  # noqa: BLE001
-            raw_log = str(exc)
-            error = str(exc)
-
-        elapsed = time.monotonic() - start
-        head_sha = _git(workspace, "rev-parse", "HEAD")
-        agent_commit_sha = head_sha if head_sha != base_sha else None
-        diff_stat = (
-            _git(workspace, "diff", "--stat", base_sha, "HEAD")
-            if agent_commit_sha
-            else _git(workspace, "diff", "--stat")
+        return self.inner.generate_in_workspace(
+            workspace,
+            prompt,
+            workdir or workspace,
+            timeout_sec,
         )
-        manifest_path = self._find_manifest(workspace)
-        if agent_commit_sha is None and error is None:
-            error = "Agent did not create a new git commit"
-        if manifest_path is None and error is None:
-            error = f"Agent manifest not found: {self.manifest_filename}"
-        return WorkspaceAgentResult(
-            base_sha=base_sha,
-            agent_commit_sha=agent_commit_sha,
-            manifest_path=manifest_path,
-            diff_stat=diff_stat,
-            raw_log=raw_log,
-            provider_name=self.name,
-            elapsed_sec=elapsed,
-            error=error,
-        )
-
-    def generate(self, **kwargs: Any) -> CodeAgentResult:
-        return self.inner.generate(**kwargs)
-
-    def refine(self, **kwargs: Any) -> CodeAgentResult:
-        return self.inner.refine(**kwargs)
-
-    def repair(self, **kwargs: Any) -> CodeAgentResult:
-        return self.inner.repair(**kwargs)
-
-    def _find_manifest(self, workspace: Path) -> str | None:
-        candidates = [
-            workspace / self.manifest_filename,
-            workspace / ".researchclaw" / self.manifest_filename,
-        ]
-        for candidate in candidates:
-            if candidate.is_file():
-                return candidate.relative_to(workspace).as_posix()
-        found = sorted(workspace.glob(f"**/{self.manifest_filename}"))
-        for candidate in found:
-            if ".git" not in candidate.parts:
-                return candidate.relative_to(workspace).as_posix()
-        return None
 
 
 def create_workspace_agent(
@@ -138,25 +71,34 @@ def create_workspace_agent(
     prompts: Any | None = None,
 ) -> WorkspaceAgentProvider:
     """Create a configured workspace-native agent."""
-    from researchclaw.experiment.code_agent import create_code_agent
+    from researchclaw.experiment.acp_workspace_agent import AcpWorkspaceAgent
+    from researchclaw.experiment.acp_workspace_session import AcpWorkspaceSession
 
-    agent = create_code_agent(config, llm=llm, prompts=prompts)
-    if isinstance(agent, GitWorkspaceAgent):
-        return agent
     workspace_cfg = config.experiment.workspace_agent
+    transport = getattr(workspace_cfg, "transport", "acp")
+    if transport != "acp":
+        raise ValueError(f"Unsupported workspace agent transport: {transport}")
+    session_name = workspace_cfg.session_name or "researchclaw-code"
+    acp_cfg = getattr(getattr(config, "llm", None), "acp", None)
+    base_url = getattr(acp_cfg, "base_url", "") or getattr(config.llm, "base_url", "")
+    api_key_env = getattr(acp_cfg, "api_key_env", "") or getattr(config.llm, "api_key_env", "")
+    session = AcpWorkspaceSession(
+        agent=workspace_cfg.agent,
+        cwd=Path(workspace_cfg.workspace_path),
+        acpx_command=workspace_cfg.acpx_command,
+        session_name=session_name,
+        timeout_sec=workspace_cfg.timeout_sec,
+        max_turns=workspace_cfg.max_turns,
+        base_url=base_url,
+        api_key_env=api_key_env,
+        model=getattr(config.llm, "primary_model", ""),
+    )
+    agent = AcpWorkspaceAgent(
+        session,
+        manifest_filename=workspace_cfg.manifest_filename,
+    )
     return GitWorkspaceAgent(
         agent,
         Path(workspace_cfg.workspace_path),
         manifest_filename=workspace_cfg.manifest_filename,
     )
-
-
-def _git(workspace: Path, *args: str) -> str:
-    proc = subprocess.run(
-        ["git", *args],
-        cwd=workspace,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return proc.stdout.strip()

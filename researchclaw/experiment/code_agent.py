@@ -1,9 +1,8 @@
-"""Pluggable code-generation backends for experiment Stages 10 & 13.
+"""Pluggable code-generation backend for experiment Stages 10 & 13.
 
-Supports three providers:
-  - ``llm``         — existing LLM chat API (backward-compatible default)
-  - ``claude_code`` — Claude Code CLI (``claude -p``)
-  - ``codex``       — OpenAI Codex CLI (``codex exec``)
+The legacy non-workspace path still uses the LLM chat API and parses code
+blocks. Workspace-native code editing is handled separately by the ACP
+workspace agent path.
 
 Usage::
 
@@ -18,17 +17,12 @@ Usage::
 from __future__ import annotations
 
 import logging
-import os
-import shutil
-import signal
-import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 from researchclaw.config import RCConfig
-from researchclaw.experiment.workspace import WorkspaceAgentResult
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +36,7 @@ class CodeAgentResult:
     """Output from a code agent invocation."""
 
     files: dict[str, str]  # filename -> code content
-    provider_name: str  # "llm", "claude_code", "codex"
+    provider_name: str
     elapsed_sec: float
     raw_output: str = ""
     error: str | None = None
@@ -381,370 +375,6 @@ class LlmCodeAgent:
 
 
 # ---------------------------------------------------------------------------
-# CLI agent base — shared subprocess logic for Claude Code / Codex
-# ---------------------------------------------------------------------------
-
-class _CliAgentBase:
-    """Shared infrastructure for CLI-based coding agents."""
-
-    _provider_name: str = ""
-    _BASE_URL_ENV: str = ""
-    _API_KEY_ENV: str = ""
-
-    def __init__(
-        self,
-        binary_path: str,
-        model: str = "",
-        max_budget_usd: float = 5.0,
-        timeout_sec: int = 600,
-        extra_args: list[str] | None = None,
-        base_url: str = "",
-        api_key_env: str = "",
-    ) -> None:
-        self._binary = binary_path
-        self._model = model
-        self._max_budget_usd = max_budget_usd
-        self._default_timeout = timeout_sec
-        self._extra_args = extra_args or []
-        self._base_url = base_url
-        self._api_key_env = api_key_env
-
-    @property
-    def name(self) -> str:
-        return self._provider_name
-
-    def _build_env(self) -> dict[str, str]:
-        env = {**os.environ}
-        if self._base_url and self._BASE_URL_ENV:
-            env[self._BASE_URL_ENV] = self._base_url
-        if self._api_key_env and self._API_KEY_ENV:
-            api_key = os.environ.get(self._api_key_env)
-            if api_key:
-                env[self._API_KEY_ENV] = api_key
-        return env
-
-    def _run_subprocess(
-        self,
-        cmd: list[str],
-        workdir: Path,
-        timeout_sec: int,
-    ) -> tuple[int, str, str, float, bool]:
-        """Run command as subprocess with process-group cleanup on timeout.
-
-        Returns (returncode, stdout, stderr, elapsed_sec, timed_out).
-        """
-        workdir.mkdir(parents=True, exist_ok=True)
-        start = time.monotonic()
-        timed_out = False
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=workdir,
-            env=self._build_env(),
-            start_new_session=True,
-        )
-        try:
-            stdout_bytes, stderr_bytes = proc.communicate(timeout=timeout_sec)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            # Kill entire process group
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-            except OSError:
-                pass
-            try:
-                stdout_bytes, stderr_bytes = proc.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except OSError:
-                    pass
-                stdout_bytes, stderr_bytes = proc.communicate(timeout=5)
-
-        elapsed = time.monotonic() - start
-        return (
-            proc.returncode or -1,
-            _to_text(stdout_bytes),
-            _to_text(stderr_bytes),
-            elapsed,
-            timed_out,
-        )
-
-    def _build_result(
-        self,
-        workdir: Path,
-        returncode: int,
-        stdout: str,
-        stderr: str,
-        elapsed: float,
-        timed_out: bool,
-    ) -> CodeAgentResult:
-        """Collect .py files from workdir and build result."""
-        files = _collect_py_files(workdir)
-        error = None
-        if timed_out:
-            error = f"Timed out after {elapsed:.0f}s"
-        elif returncode != 0 and not files:
-            error = f"Exited {returncode}: {stderr[:500]}"
-        return CodeAgentResult(
-            files=files,
-            provider_name=self._provider_name,
-            elapsed_sec=elapsed,
-            raw_output=stdout[:3000],
-            error=error,
-        )
-
-    @staticmethod
-    def _generate_prompt(
-        topic: str,
-        exp_plan: str,
-        metric_key: str,
-        pkg_hint: str,
-        compute_budget: str,
-        extra_guidance: str,
-    ) -> str:
-        return (
-            "You are generating experiment code for a research paper.\n\n"
-            f"TOPIC: {topic}\n\n"
-            f"EXPERIMENT PLAN:\n{exp_plan}\n\n"
-            f"PRIMARY METRIC: {metric_key}\n"
-            f"{pkg_hint}\n{compute_budget}\n{extra_guidance}\n\n"
-            "INSTRUCTIONS:\n"
-            "1. Create a multi-file Python project in the current directory.\n"
-            "2. The entry point MUST be main.py.\n"
-            "3. main.py must print metrics as 'name: value' lines to stdout.\n"
-            f"4. Use condition labels: 'condition=<name> {metric_key}: <value>'\n"
-            "5. FORBIDDEN: subprocess, os.system, eval, exec, shutil, socket, "
-            "network calls, external data files.\n"
-            "6. Use deterministic seeds (numpy.random.seed or random.seed).\n"
-            "7. Write ALL files to the current working directory.\n"
-            "8. Do NOT create subdirectories.\n"
-        )
-
-    @staticmethod
-    def _refine_prompt(
-        current_files: dict[str, str],
-        run_summaries: list[str],
-        metric_key: str,
-        metric_direction: str,
-        topic: str,
-        extra_hints: str,
-    ) -> str:
-        files_listing = "\n".join(
-            f"  - {fname} ({len(code)} chars)" for fname, code in current_files.items()
-        )
-        summaries_text = "\n".join(run_summaries[:10]) if run_summaries else "(no prior runs)"
-        return (
-            "You are improving experiment code for a research paper.\n\n"
-            f"TOPIC: {topic}\n"
-            f"TARGET: {metric_direction} '{metric_key}'\n\n"
-            f"EXISTING FILES in current directory:\n{files_listing}\n\n"
-            "Read the existing files, then improve them based on these run results:\n\n"
-            f"PRIOR RUN SUMMARIES:\n{summaries_text}\n\n"
-            f"{extra_hints}\n\n"
-            "INSTRUCTIONS:\n"
-            "1. Read existing code, understand the experiment structure.\n"
-            "2. Modify files to improve the metric.\n"
-            "3. Keep the entry point as main.py.\n"
-            "4. Write modified files to the current directory.\n"
-            "5. FORBIDDEN: subprocess, os.system, eval, exec, shutil, socket.\n"
-        )
-
-    @staticmethod
-    def _repair_prompt(
-        files: dict[str, str],
-        issues: str,
-    ) -> str:
-        files_listing = "\n".join(
-            f"  - {fname} ({len(code)} chars)" for fname, code in files.items()
-        )
-        return (
-            "The experiment code has validation or runtime issues.\n\n"
-            f"ISSUES:\n{issues}\n\n"
-            f"FILES in current directory:\n{files_listing}\n\n"
-            "INSTRUCTIONS:\n"
-            "1. Read the existing files in the current directory.\n"
-            "2. Fix ALL reported issues.\n"
-            "3. Write the corrected files back.\n"
-            "4. FORBIDDEN: subprocess, os.system, eval, exec, shutil, socket.\n"
-        )
-
-
-# ---------------------------------------------------------------------------
-# ClaudeCodeAgent
-# ---------------------------------------------------------------------------
-
-class ClaudeCodeAgent(_CliAgentBase):
-    """Code agent backed by Claude Code CLI (``claude -p``)."""
-
-    _provider_name = "claude_code"
-    _BASE_URL_ENV = "ANTHROPIC_BASE_URL"
-    _API_KEY_ENV = "ANTHROPIC_AUTH_TOKEN"
-
-    def _build_cmd(self, prompt: str, workdir: Path) -> list[str]:
-        cmd = [
-            self._binary,
-            "-p", prompt,
-            "--dangerously-skip-permissions",
-            "--output-format", "text",
-            "--allowed-tools", "Bash Edit Write Read",
-            "--add-dir", str(workdir),
-        ]
-        if self._model:
-            cmd += ["--model", self._model]
-        if self._max_budget_usd:
-            cmd += ["--max-budget-usd", str(self._max_budget_usd)]
-        cmd.extend(self._extra_args)
-        return cmd
-
-    def generate(
-        self,
-        *,
-        exp_plan: str,
-        topic: str,
-        metric_key: str,
-        pkg_hint: str,
-        compute_budget: str,
-        extra_guidance: str,
-        workdir: Path,
-        timeout_sec: int = 600,
-    ) -> CodeAgentResult:
-        prompt = self._generate_prompt(
-            topic, exp_plan, metric_key, pkg_hint, compute_budget, extra_guidance,
-        )
-        cmd = self._build_cmd(prompt, workdir)
-        rc, stdout, stderr, elapsed, to = self._run_subprocess(
-            cmd, workdir, timeout_sec or self._default_timeout,
-        )
-        return self._build_result(workdir, rc, stdout, stderr, elapsed, to)
-
-    def refine(
-        self,
-        *,
-        current_files: dict[str, str],
-        run_summaries: list[str],
-        metric_key: str,
-        metric_direction: str,
-        topic: str,
-        extra_hints: str,
-        workdir: Path,
-        timeout_sec: int = 600,
-    ) -> CodeAgentResult:
-        _seed_workdir(workdir, current_files)
-        prompt = self._refine_prompt(
-            current_files, run_summaries, metric_key, metric_direction,
-            topic, extra_hints,
-        )
-        cmd = self._build_cmd(prompt, workdir)
-        rc, stdout, stderr, elapsed, to = self._run_subprocess(
-            cmd, workdir, timeout_sec or self._default_timeout,
-        )
-        return self._build_result(workdir, rc, stdout, stderr, elapsed, to)
-
-    def repair(
-        self,
-        *,
-        files: dict[str, str],
-        issues: str,
-        workdir: Path,
-        timeout_sec: int = 300,
-    ) -> CodeAgentResult:
-        _seed_workdir(workdir, files)
-        prompt = self._repair_prompt(files, issues)
-        cmd = self._build_cmd(prompt, workdir)
-        rc, stdout, stderr, elapsed, to = self._run_subprocess(
-            cmd, workdir, timeout_sec or self._default_timeout,
-        )
-        return self._build_result(workdir, rc, stdout, stderr, elapsed, to)
-
-
-# ---------------------------------------------------------------------------
-# CodexAgent
-# ---------------------------------------------------------------------------
-
-class CodexAgent(_CliAgentBase):
-    """Code agent backed by OpenAI Codex CLI (``codex exec``)."""
-
-    _provider_name = "codex"
-    _BASE_URL_ENV = "OPENAI_BASE_URL"
-    _API_KEY_ENV = "OPENAI_API_KEY"
-
-    def _build_cmd(self, prompt: str, workdir: Path) -> list[str]:
-        cmd = [
-            self._binary,
-            "exec", prompt,
-            "--sandbox", "workspace-write",
-            "--json",
-            "-C", str(workdir),
-        ]
-        if self._model:
-            cmd += ["-m", self._model]
-        cmd.extend(self._extra_args)
-        return cmd
-
-    def generate(
-        self,
-        *,
-        exp_plan: str,
-        topic: str,
-        metric_key: str,
-        pkg_hint: str,
-        compute_budget: str,
-        extra_guidance: str,
-        workdir: Path,
-        timeout_sec: int = 600,
-    ) -> CodeAgentResult:
-        prompt = self._generate_prompt(
-            topic, exp_plan, metric_key, pkg_hint, compute_budget, extra_guidance,
-        )
-        cmd = self._build_cmd(prompt, workdir)
-        rc, stdout, stderr, elapsed, to = self._run_subprocess(
-            cmd, workdir, timeout_sec or self._default_timeout,
-        )
-        return self._build_result(workdir, rc, stdout, stderr, elapsed, to)
-
-    def refine(
-        self,
-        *,
-        current_files: dict[str, str],
-        run_summaries: list[str],
-        metric_key: str,
-        metric_direction: str,
-        topic: str,
-        extra_hints: str,
-        workdir: Path,
-        timeout_sec: int = 600,
-    ) -> CodeAgentResult:
-        _seed_workdir(workdir, current_files)
-        prompt = self._refine_prompt(
-            current_files, run_summaries, metric_key, metric_direction,
-            topic, extra_hints,
-        )
-        cmd = self._build_cmd(prompt, workdir)
-        rc, stdout, stderr, elapsed, to = self._run_subprocess(
-            cmd, workdir, timeout_sec or self._default_timeout,
-        )
-        return self._build_result(workdir, rc, stdout, stderr, elapsed, to)
-
-    def repair(
-        self,
-        *,
-        files: dict[str, str],
-        issues: str,
-        workdir: Path,
-        timeout_sec: int = 300,
-    ) -> CodeAgentResult:
-        _seed_workdir(workdir, files)
-        prompt = self._repair_prompt(files, issues)
-        cmd = self._build_cmd(prompt, workdir)
-        rc, stdout, stderr, elapsed, to = self._run_subprocess(
-            cmd, workdir, timeout_sec or self._default_timeout,
-        )
-        return self._build_result(workdir, rc, stdout, stderr, elapsed, to)
-
-
-# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -753,7 +383,7 @@ def create_code_agent(
     llm: Any | None = None,
     prompts: Any | None = None,
 ) -> CodeAgentProvider:
-    """Create the appropriate code agent based on config.experiment.cli_agent."""
+    """Create the legacy non-workspace LLM code agent."""
     agent_cfg = config.experiment.cli_agent
     provider = agent_cfg.provider
 
@@ -762,75 +392,14 @@ def create_code_agent(
             raise RuntimeError("LLM code agent requires an LLM client")
         from researchclaw.prompts import PromptManager
 
-        return _maybe_wrap_workspace_agent(
-            LlmCodeAgent(llm, prompts or PromptManager(), config),  # type: ignore[arg-type]
-            config,
-        )
+        return LlmCodeAgent(llm, prompts or PromptManager(), config)  # type: ignore[arg-type]
 
-    if provider == "claude_code":
-        binary = agent_cfg.binary_path or shutil.which("claude")
-        if not binary:
-            raise RuntimeError(
-                "Claude Code binary not found. "
-                "Install it or set experiment.code_agent.binary_path."
-            )
-        return _maybe_wrap_workspace_agent(
-            ClaudeCodeAgent(  # type: ignore[arg-type]
-                binary_path=binary,
-                model=agent_cfg.model or "sonnet",
-                max_budget_usd=agent_cfg.max_budget_usd,
-                timeout_sec=agent_cfg.timeout_sec,
-                extra_args=list(agent_cfg.extra_args),
-                base_url=agent_cfg.base_url,
-                api_key_env=agent_cfg.api_key_env,
-            ),
-            config,
-        )
-
-    if provider == "codex":
-        binary = agent_cfg.binary_path or shutil.which("codex")
-        if not binary:
-            raise RuntimeError(
-                "Codex binary not found. "
-                "Install it or set experiment.code_agent.binary_path."
-            )
-        return _maybe_wrap_workspace_agent(
-            CodexAgent(  # type: ignore[arg-type]
-                binary_path=binary,
-                model=agent_cfg.model or "",
-                max_budget_usd=agent_cfg.max_budget_usd,
-                timeout_sec=agent_cfg.timeout_sec,
-                extra_args=list(agent_cfg.extra_args),
-                base_url=agent_cfg.base_url,
-                api_key_env=agent_cfg.api_key_env,
-            ),
-            config,
+    if provider in {"claude_code", "codex"}:
+        raise ValueError(
+            "One-shot CLI code agents were removed. Use "
+            "experiment.workspace_agent.enabled=true with "
+            "workspace_agent.transport=acp and workspace_agent.agent="
+            f"{provider!r} instead."
         )
 
     raise ValueError(f"Unknown code agent provider: {provider}")
-
-
-def _maybe_wrap_workspace_agent(
-    agent: CodeAgentProvider,
-    config: RCConfig,
-) -> CodeAgentProvider:
-    workspace_cfg = getattr(config.experiment, "workspace_agent", None)
-    if not workspace_cfg or not getattr(workspace_cfg, "enabled", False):
-        return agent
-    from researchclaw.experiment.workspace_agent import GitWorkspaceAgent
-
-    if isinstance(agent, GitWorkspaceAgent):
-        return agent
-    return GitWorkspaceAgent(
-        agent,
-        Path(workspace_cfg.workspace_path),
-        manifest_filename=workspace_cfg.manifest_filename,
-    )
-
-
-def __getattr__(name: str) -> Any:
-    if name == "WorkspaceAgentProvider":
-        from researchclaw.experiment.workspace_agent import WorkspaceAgentProvider
-
-        return WorkspaceAgentProvider
-    raise AttributeError(name)

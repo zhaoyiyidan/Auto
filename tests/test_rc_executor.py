@@ -1388,6 +1388,22 @@ class TestSynthesizePerspectives:
 
 
 class TestHypothesisGenDebate:
+    def _acp_config(self, rc_config: RCConfig, tmp_path: Path) -> RCConfig:
+        data = rc_config.to_dict()
+        data["llm"]["provider"] = "acp"
+        data["llm"]["acp"] = {
+            "agent": "codex",
+            "cwd": str(tmp_path),
+            "acpx_command": "acpx",
+            "session_name": "main",
+            "debate_max_rounds": 2,
+            "debate_confidence_min": 0.6,
+        }
+        data["security"]["hitl_required_stages"] = list(
+            data["security"]["hitl_required_stages"]
+        )
+        return RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
     def test_hypothesis_gen_with_llm_creates_perspectives(
         self,
         tmp_path: Path,
@@ -1433,6 +1449,111 @@ class TestHypothesisGenDebate:
         assert "hypotheses.md" in result.artifacts
         # No perspectives directory when no LLM
         assert not (stage_dir / "perspectives").exists()
+
+    def test_hypothesis_gen_acp_debate_success_preserves_clean_contract(
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _stub_novelty_check(monkeypatch)
+        from researchclaw.pipeline.stage_impls import _hypothesis_debate
+
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-08"
+        stage_dir.mkdir(parents=True)
+        _write_prior_artifact(run_dir, 7, "synthesis.md", "# Synthesis\nGap found.")
+        config = self._acp_config(rc_config, tmp_path)
+
+        def fake_debate(*args: object, **kwargs: object) -> str:
+            _ = args, kwargs
+            return (
+                "## H1: Routing improves robustness\n"
+                "Hypothesis Statement: Routing improves robustness."
+            )
+
+        monkeypatch.setattr(_hypothesis_debate, "run_acp_debate", fake_debate)
+
+        result = rc_executor._execute_hypothesis_gen(
+            stage_dir, run_dir, config, adapters, llm=FakeLLMClient("fallback")
+        )
+
+        output = (stage_dir / "hypotheses.md").read_text(encoding="utf-8")
+        assert "hypotheses.md" in result.artifacts
+        assert "Routing improves robustness" in output
+        assert not (stage_dir / "perspectives").exists()
+        assert "judge" not in output.lower()
+        assert "debate" not in output.lower()
+
+    def test_hypothesis_gen_acp_debate_failure_falls_back_to_perspectives(
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _stub_novelty_check(monkeypatch)
+        from researchclaw.pipeline.stage_impls import _hypothesis_debate
+
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-08"
+        stage_dir.mkdir(parents=True)
+        _write_prior_artifact(run_dir, 7, "synthesis.md", "# Synthesis\nGap found.")
+        config = self._acp_config(rc_config, tmp_path)
+
+        def fake_debate(*args: object, **kwargs: object) -> str:
+            _ = args, kwargs
+            raise RuntimeError("export failed")
+
+        monkeypatch.setattr(_hypothesis_debate, "run_acp_debate", fake_debate)
+        fake_llm = FakeLLMClient("## H1\nFallback hypothesis")
+
+        result = rc_executor._execute_hypothesis_gen(
+            stage_dir, run_dir, config, adapters, llm=fake_llm
+        )
+
+        assert result.status == StageStatus.DONE
+        assert (stage_dir / "perspectives").exists()
+        assert len(list((stage_dir / "perspectives").glob("*.md"))) == 3
+
+    def test_hypothesis_gen_acp_and_perspective_failures_use_defaults(
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _stub_novelty_check(monkeypatch)
+        from researchclaw.pipeline.stage_impls import _hypothesis_debate, _synthesis
+
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-08"
+        stage_dir.mkdir(parents=True)
+        _write_prior_artifact(run_dir, 7, "synthesis.md", "# Synthesis\nGap found.")
+        config = self._acp_config(rc_config, tmp_path)
+
+        def fake_debate(*args: object, **kwargs: object) -> str:
+            _ = args, kwargs
+            raise RuntimeError("export failed")
+
+        monkeypatch.setattr(_hypothesis_debate, "run_acp_debate", fake_debate)
+        monkeypatch.setattr(
+            _synthesis,
+            "_multi_perspective_generate",
+            lambda *args, **kwargs: {},
+        )
+
+        result = rc_executor._execute_hypothesis_gen(
+            stage_dir, run_dir, config, adapters, llm=FakeLLMClient("unused")
+        )
+
+        output = (stage_dir / "hypotheses.md").read_text(encoding="utf-8")
+        assert result.status == StageStatus.DONE
+        assert "test-driven science" in output
 
 
 class TestResultAnalysisDebate:

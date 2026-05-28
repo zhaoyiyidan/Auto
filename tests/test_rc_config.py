@@ -298,6 +298,8 @@ def test_acp_config_default_base_url_and_api_key_env():
 
     assert cfg.base_url == ""
     assert cfg.api_key_env == ""
+    assert cfg.debate_max_rounds == 2
+    assert cfg.debate_confidence_min == 0.6
 
 
 def test_acp_config_roundtrip_custom_provider_fields(tmp_path: Path):
@@ -308,6 +310,8 @@ def test_acp_config_roundtrip_custom_provider_fields(tmp_path: Path):
             "agent": "codex",
             "base_url": "https://provider.example.com/v1",
             "api_key_env": "MY_ACP_KEY",
+            "debate_max_rounds": 3,
+            "debate_confidence_min": 0.75,
         },
     }
 
@@ -316,6 +320,8 @@ def test_acp_config_roundtrip_custom_provider_fields(tmp_path: Path):
     assert config.llm.acp.agent == "codex"
     assert config.llm.acp.base_url == "https://provider.example.com/v1"
     assert config.llm.acp.api_key_env == "MY_ACP_KEY"
+    assert config.llm.acp.debate_max_rounds == 3
+    assert config.llm.acp.debate_confidence_min == 0.75
 
 
 def test_acp_client_from_rc_config_uses_llm_primary_model_and_provider_fields():
@@ -331,6 +337,8 @@ def test_acp_client_from_rc_config_uses_llm_primary_model_and_provider_fields():
                     "agent": "codex",
                     "base_url": "https://provider.example.com/v1",
                     "api_key_env": "MY_ACP_KEY",
+                    "debate_max_rounds": 4,
+                    "debate_confidence_min": 0.8,
                 },
             },
         },
@@ -342,6 +350,8 @@ def test_acp_client_from_rc_config_uses_llm_primary_model_and_provider_fields():
     assert client.config.model == "gpt-5.5"
     assert client.config.base_url == "https://provider.example.com/v1"
     assert client.config.api_key_env == "MY_ACP_KEY"
+    assert client.config.debate_max_rounds == 4
+    assert client.config.debate_confidence_min == 0.8
 
 
 def test_rcconfig_from_dict_missing_fields_raises_value_error(tmp_path: Path):

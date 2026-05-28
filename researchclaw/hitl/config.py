@@ -177,7 +177,7 @@ class HITLConfig:
 # Gate stages and phase boundaries (imported from stages.py values)
 # ---------------------------------------------------------------------------
 
-_GATE_STAGES = frozenset({5, 9, 20})
+_GATE_STAGES = frozenset({5, 9, 15, 20})
 
 _PHASE_BOUNDARIES = frozenset({
     2,   # End of Phase A (Research Scoping)

@@ -830,6 +830,47 @@ def _parse_decision(text: str) -> str:
     return "proceed"
 
 
+def _decision_quality_warnings(decision_md: str) -> list[str]:
+    """Return lightweight quality warnings for research decision text."""
+    quality_warnings: list[str] = []
+    dec_lower = decision_md.lower()
+    if "baseline" not in dec_lower and "control" not in dec_lower:
+        quality_warnings.append("Decision text does not mention baselines")
+    if (
+        "seed" not in dec_lower
+        and "replicat" not in dec_lower
+        and "run" not in dec_lower
+    ):
+        quality_warnings.append(
+            "Decision text does not mention multi-seed/replicate runs"
+        )
+    if (
+        "metric" not in dec_lower
+        and "accuracy" not in dec_lower
+        and "loss" not in dec_lower
+    ):
+        quality_warnings.append("Decision text does not mention evaluation metrics")
+    return quality_warnings
+
+
+def _write_decision_structured_json(
+    stage_dir: Path,
+    decision_md: str,
+    decision: str,
+) -> dict[str, Any]:
+    """Write the structured Stage 15 decision payload and return it."""
+    decision_payload = {
+        "decision": decision,
+        "raw_text_excerpt": decision_md[:500],
+        "quality_warnings": _decision_quality_warnings(decision_md),
+        "generated": _utcnow_iso(),
+    }
+    (stage_dir / "decision_structured.json").write_text(
+        json.dumps(decision_payload, indent=2), encoding="utf-8"
+    )
+    return decision_payload
+
+
 # ---------------------------------------------------------------------------
 # Agent-mode requirements gate (used by stage 15 for collider_agent /
 # biology_agent).  Reads the manifest's optional `requirements:` list, calls
@@ -1297,26 +1338,13 @@ Generated: {_utcnow_iso()}
     decision = _parse_decision(decision_md)
 
     # T3.1: Validate decision quality — check for minimum experiment rigor
-    _quality_warnings: list[str] = []
-    _dec_lower = decision_md.lower()
-    if "baseline" not in _dec_lower and "control" not in _dec_lower:
-        _quality_warnings.append("Decision text does not mention baselines")
-    if "seed" not in _dec_lower and "replicat" not in _dec_lower and "run" not in _dec_lower:
-        _quality_warnings.append("Decision text does not mention multi-seed/replicate runs")
-    if "metric" not in _dec_lower and "accuracy" not in _dec_lower and "loss" not in _dec_lower:
-        _quality_warnings.append("Decision text does not mention evaluation metrics")
+    decision_payload = _write_decision_structured_json(
+        stage_dir, decision_md, decision
+    )
+    _quality_warnings = decision_payload["quality_warnings"]
     if _quality_warnings:
         logger.warning("T3.1: Decision quality warnings: %s", _quality_warnings)
 
-    decision_payload = {
-        "decision": decision,
-        "raw_text_excerpt": decision_md[:500],
-        "quality_warnings": _quality_warnings,
-        "generated": _utcnow_iso(),
-    }
-    (stage_dir / "decision_structured.json").write_text(
-        json.dumps(decision_payload, indent=2), encoding="utf-8"
-    )
     logger.info("Research decision: %s", decision)
 
     return StageResult(

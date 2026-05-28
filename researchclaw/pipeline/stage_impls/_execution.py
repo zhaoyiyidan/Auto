@@ -41,6 +41,38 @@ from researchclaw.prompts import PromptManager
 logger = logging.getLogger(__name__)
 
 
+def _workspace_refine_prompt(
+    *,
+    topic: str,
+    metric_key: str,
+    metric_direction: str,
+    exp_plan: str,
+    project_files: list[str],
+    run_summaries: list[str],
+    manifest_filename: str,
+) -> str:
+    summaries = "\n".join(run_summaries[:20]) if run_summaries else "(no prior runs)"
+    return (
+        "You are a workspace-native code agent working inside an existing git "
+        "repository. Improve the experiment in place. Do not emit code blocks "
+        "for ResearchClaw to parse.\n\n"
+        f"TOPIC:\n{topic}\n\n"
+        f"TARGET: {metric_direction} {metric_key}\n\n"
+        f"ORIGINAL EXPERIMENT PLAN:\n{exp_plan}\n\n"
+        f"KNOWN PROJECT FILES FROM PRIOR STAGES:\n{project_files}\n\n"
+        f"PRIOR RUN SUMMARIES:\n{summaries}\n\n"
+        "Required completion protocol:\n"
+        "1. Inspect the existing workspace and modify the appropriate files.\n"
+        "2. Prepare the command that should launch the improved experiment.\n"
+        "3. Commit your code changes with git.\n"
+        f"4. Write {manifest_filename} in the workspace root or .researchclaw/.\n"
+        "5. The manifest must contain code_commit, launch.command, launch.cwd, "
+        "launch.env, launch.resources, and result_paths.\n"
+        "6. Do not submit the job yourself; ResearchClaw's submitter will run "
+        "the launch command from the manifest.\n"
+    )
+
+
 def _execute_resource_planning(
     stage_dir: Path,
     run_dir: Path,
@@ -502,6 +534,10 @@ def _execute_iterative_refine(
     from researchclaw.experiment.factory import create_sandbox
     from researchclaw.experiment.validator import format_issues_for_llm, validate_code
 
+    workspace_native_enabled = bool(
+        getattr(getattr(config.experiment, "workspace_agent", None), "enabled", False)
+    )
+
     def _to_float(value: Any) -> float | None:
         try:
             if value is None:
@@ -522,7 +558,10 @@ def _execute_iterative_refine(
     # repair loop in pipeline/runner.py handles separately).  Create
     # placeholder artifacts and exit so downstream stages see a non-empty
     # experiment_final/.
-    if config.experiment.mode in ("collider_agent", "biology_agent", "stat_agent"):
+    if (
+        config.experiment.mode in ("collider_agent", "biology_agent", "stat_agent")
+        and not workspace_native_enabled
+    ):
         agent_label = config.experiment.mode
         agent_pretty = {
             "collider_agent": "ColliderAgent",
@@ -573,7 +612,7 @@ def _execute_iterative_refine(
         )
 
     # R10-Fix3: Skip iterative refinement in simulated mode (no real execution)
-    if config.experiment.mode == "simulated":
+    if config.experiment.mode == "simulated" and not workspace_native_enabled:
         logger.info(
             "Stage 13: Skipping iterative refinement in simulated mode "
             "(no real code execution available)"
@@ -900,6 +939,63 @@ def _execute_iterative_refine(
             error=reason,
             decision="resume",
             evidence_refs=tuple(f"stage-13/{a}" for a in artifacts),
+        )
+
+    if workspace_native_enabled:
+        from researchclaw.experiment.submitter import create_submitter
+        from researchclaw.experiment.workspace_agent import create_workspace_agent
+        from researchclaw.pipeline.workspace_orchestrator import run_workspace_pipeline
+
+        workspace_cfg = config.experiment.workspace_agent
+        exp_plan_text = _read_prior_artifact(run_dir, "exp_plan.yaml") or ""
+        prompt = _workspace_refine_prompt(
+            topic=config.research.topic,
+            metric_key=metric_key,
+            metric_direction=metric_direction,
+            exp_plan=exp_plan_text,
+            project_files=sorted(best_files.keys()),
+            run_summaries=run_summaries,
+            manifest_filename=workspace_cfg.manifest_filename,
+        )
+        agent = create_workspace_agent(config, llm=llm, prompts=prompts)
+        submitter = create_submitter(config)
+        result = run_workspace_pipeline(
+            workspace_path=Path(workspace_cfg.workspace_path),
+            run_dir=stage_dir,
+            stage=13,
+            agent=agent,
+            submitter=submitter,
+            prompt=prompt,
+            timeout_sec=workspace_cfg.timeout_sec,
+        )
+        log.update(
+            {
+                "workspace_native": True,
+                "converged": result.ok,
+                "stop_reason": "workspace_agent_submitted" if result.ok else "workspace_agent_failed",
+                "provider": result.provider_name,
+                "base_sha": result.base_sha,
+                "agent_commit_sha": result.agent_commit_sha,
+                "manifest_path": result.manifest_path,
+                "diff_stat": result.diff_stat,
+                "error": result.error,
+            }
+        )
+        _write_refinement_log()
+        artifacts = [
+            "refinement_log.json",
+            "stage-13-workspace-agent-result.json",
+            "workspace_experiment_registry.jsonl",
+        ]
+        if (stage_dir / "stage-13-submit-result.json").exists():
+            artifacts.append("stage-13-submit-result.json")
+        existing = tuple(a for a in artifacts if (stage_dir / a).exists())
+        return StageResult(
+            stage=Stage.ITERATIVE_REFINE,
+            status=StageStatus.DONE if result.ok else StageStatus.FAILED,
+            artifacts=existing,
+            error=result.error,
+            evidence_refs=tuple(f"stage-13/{a}" for a in existing),
         )
 
     if llm is None:

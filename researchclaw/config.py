@@ -117,6 +117,7 @@ EXPERIMENT_MODES = {
     "stat_agent",      # Statistics: stat_research_agent (sim studies, CI/coverage) via Claude Code
 }
 CLI_AGENT_PROVIDERS = {"llm", "claude_code", "codex"}
+SUBMITTER_TYPES = {"local", "slurm", "ssh_slurm", "manual", "custom_python"}
 
 
 def _get_by_path(data: dict[str, Any], dotted_key: str) -> Any:
@@ -141,14 +142,14 @@ class ValidationResult:
 
 @dataclass(frozen=True)
 class ProjectConfig:
-    name: str
+    name: str = "researchclaw"
     mode: str = "docs-first"
     profile: str = ""  # empty = auto-detect; non-empty forces domain profile by id
 
 
 @dataclass(frozen=True)
 class ResearchConfig:
-    topic: str
+    topic: str = ""
     domains: tuple[str, ...] = ()
     daily_paper_count: int = 0
     quality_threshold: float = 0.0
@@ -157,7 +158,7 @@ class ResearchConfig:
 
 @dataclass(frozen=True)
 class RuntimeConfig:
-    timezone: str
+    timezone: str = "UTC"
     max_parallel_tasks: int = 1
     approval_timeout_hours: int = 12
     retry_limit: int = 0
@@ -165,7 +166,7 @@ class RuntimeConfig:
 
 @dataclass(frozen=True)
 class NotificationsConfig:
-    channel: str
+    channel: str = "none"
     target: str = ""
     on_stage_start: bool = False
     on_stage_fail: bool = False
@@ -174,8 +175,8 @@ class NotificationsConfig:
 
 @dataclass(frozen=True)
 class KnowledgeBaseConfig:
-    backend: str
-    root: str
+    backend: str = "markdown"
+    root: str = "knowledge"
     obsidian_vault: str = ""
 
 
@@ -206,7 +207,7 @@ class AcpConfig:
 
 @dataclass(frozen=True)
 class LlmConfig:
-    provider: str
+    provider: str = "openai-compatible"
     base_url: str = ""
     wire_api: str = "chat_completions"
     api_key_env: str = ""
@@ -560,6 +561,34 @@ class CliAgentConfig:
 
 
 @dataclass(frozen=True)
+class WorkspaceAgentConfig:
+    """Existing-workspace mode for CLI coding agents.
+
+    When enabled, ResearchClaw invokes a code agent directly in
+    ``workspace_path`` and uses git commits plus an agent run manifest for
+    provenance instead of parsing generated code blocks.
+    """
+
+    enabled: bool = False
+    workspace_path: str = "."
+    git_mode: str = "auto"
+    manifest_filename: str = "run_manifest.json"
+    timeout_sec: int = 1800
+
+
+@dataclass(frozen=True)
+class SubmitterConfig:
+    """Training job submitter for workspace-native agent runs."""
+
+    type: str = "local"
+    custom_callable: str = ""
+    ssh_host: str = ""
+    ssh_user: str = ""
+    ssh_port: int = 22
+    ssh_key_path: str = ""
+
+
+@dataclass(frozen=True)
 class ExperimentConfig:
     mode: str = "simulated"
     time_budget_sec: int = 300
@@ -582,6 +611,8 @@ class ExperimentConfig:
     figure_agent: FigureAgentConfig = field(default_factory=FigureAgentConfig)
     repair: ExperimentRepairConfig = field(default_factory=ExperimentRepairConfig)
     cli_agent: CliAgentConfig = field(default_factory=CliAgentConfig)
+    workspace_agent: WorkspaceAgentConfig = field(default_factory=WorkspaceAgentConfig)
+    submitter: SubmitterConfig = field(default_factory=SubmitterConfig)
 
 
 @dataclass(frozen=True)
@@ -846,13 +877,13 @@ class CalendarConfig:
 
 @dataclass(frozen=True)
 class RCConfig:
-    project: ProjectConfig
-    research: ResearchConfig
-    runtime: RuntimeConfig
-    notifications: NotificationsConfig
-    knowledge_base: KnowledgeBaseConfig
-    openclaw_bridge: OpenClawBridgeConfig
-    llm: LlmConfig
+    project: ProjectConfig = field(default_factory=ProjectConfig)
+    research: ResearchConfig = field(default_factory=ResearchConfig)
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
+    knowledge_base: KnowledgeBaseConfig = field(default_factory=KnowledgeBaseConfig)
+    openclaw_bridge: OpenClawBridgeConfig = field(default_factory=OpenClawBridgeConfig)
+    llm: LlmConfig = field(default_factory=LlmConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     experiment: ExperimentConfig = field(default_factory=ExperimentConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
@@ -1134,6 +1165,10 @@ def validate_config(
     ):
         errors.append(f"Invalid experiment.cli_agent.provider: {cli_agent_provider}")
 
+    submitter_type = _get_by_path(data, "experiment.submitter.type")
+    if not _is_blank(submitter_type) and submitter_type not in SUBMITTER_TYPES:
+        errors.append(f"Invalid experiment.submitter.type: {submitter_type}")
+
     kb_root_raw = _get_by_path(data, "knowledge_base.root")
     if check_paths and not _is_blank(kb_root_raw) and project_root is not None:
         kb_root = project_root / str(kb_root_raw)
@@ -1332,6 +1367,10 @@ def _parse_experiment_config(data: dict[str, Any]) -> ExperimentConfig:
         figure_agent=_parse_figure_agent_config(data.get("figure_agent") or {}),
         repair=_parse_experiment_repair_config(data.get("repair") or {}),
         cli_agent=_parse_cli_agent_config(data.get("cli_agent") or {}),
+        workspace_agent=_parse_workspace_agent_config(
+            data.get("workspace_agent") or {}
+        ),
+        submitter=_parse_submitter_config(data.get("submitter") or {}),
     )
 
 
@@ -1399,6 +1438,31 @@ def _parse_cli_agent_config(data: dict[str, Any]) -> CliAgentConfig:
         max_budget_usd=_safe_float(data.get("max_budget_usd"), 5.0),
         timeout_sec=_safe_int(data.get("timeout_sec"), 600),
         extra_args=tuple(data.get("extra_args") or ()),
+    )
+
+
+def _parse_workspace_agent_config(data: dict[str, Any]) -> WorkspaceAgentConfig:
+    if not data:
+        return WorkspaceAgentConfig()
+    return WorkspaceAgentConfig(
+        enabled=bool(data.get("enabled", False)),
+        workspace_path=data.get("workspace_path", "."),
+        git_mode=data.get("git_mode", "auto"),
+        manifest_filename=data.get("manifest_filename", "run_manifest.json"),
+        timeout_sec=_safe_int(data.get("timeout_sec"), 1800),
+    )
+
+
+def _parse_submitter_config(data: dict[str, Any]) -> SubmitterConfig:
+    if not data:
+        return SubmitterConfig()
+    return SubmitterConfig(
+        type=data.get("type", "local"),
+        custom_callable=data.get("custom_callable", ""),
+        ssh_host=data.get("ssh_host", ""),
+        ssh_user=data.get("ssh_user", ""),
+        ssh_port=_safe_int(data.get("ssh_port"), 22),
+        ssh_key_path=data.get("ssh_key_path", ""),
     )
 
 

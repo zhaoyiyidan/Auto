@@ -627,6 +627,14 @@ def _get_repaired_code(
     """
     repair_cfg = config.experiment.repair
 
+    if getattr(getattr(config.experiment, "workspace_agent", None), "enabled", False):
+        result = _repair_via_workspace_agent(
+            repair_prompt, current_code, llm, config, run_dir, cycle,
+        )
+        if result:
+            return result
+        logger.info("Workspace-native repair unavailable, falling back to OpenCode/LLM")
+
     # Try OpenCode first if enabled
     if repair_cfg.use_opencode and config.experiment.opencode.enabled:
         result = _repair_via_opencode(repair_prompt, current_code, config, run_dir, cycle)
@@ -636,6 +644,68 @@ def _get_repaired_code(
 
     # LLM repair
     return _repair_via_llm(repair_prompt, current_code, llm)
+
+
+def _repair_via_workspace_agent(
+    repair_prompt: str,
+    current_code: dict[str, str],
+    llm: Any,
+    config: Any,
+    run_dir: Path,
+    cycle: int,
+) -> dict[str, str] | None:
+    """Attempt repair through the workspace-native agent + submitter path."""
+    try:
+        from researchclaw.experiment.submitter import create_submitter
+        from researchclaw.experiment.workspace_agent import create_workspace_agent
+        from researchclaw.pipeline.workspace_orchestrator import run_workspace_pipeline
+
+        workspace_cfg = config.experiment.workspace_agent
+        stage_dir = run_dir / f"stage-14-workspace-repair-v{cycle}"
+        prompt = (
+            "You are a workspace-native code agent repairing an existing git "
+            "repository. Apply the requested repair in place, commit your code "
+            "changes with git, and write the run manifest for ResearchClaw's "
+            "submitter. Do not submit the job yourself.\n\n"
+            f"MANIFEST FILENAME: {workspace_cfg.manifest_filename}\n\n"
+            f"REPAIR TASK:\n{repair_prompt}\n\n"
+            f"CURRENT RESEARCHCLAW CODE SNAPSHOT FILES:\n{sorted(current_code.keys())}\n"
+        )
+        agent = create_workspace_agent(config, llm=llm)
+        submitter = create_submitter(config)
+        result = run_workspace_pipeline(
+            workspace_path=Path(workspace_cfg.workspace_path),
+            run_dir=stage_dir,
+            stage=14,
+            agent=agent,
+            submitter=submitter,
+            prompt=prompt,
+            timeout_sec=workspace_cfg.timeout_sec,
+        )
+        if not result.ok:
+            logger.warning("Workspace-native repair failed: %s", result.error)
+            return None
+        merged = dict(current_code)
+        merged.update(_collect_workspace_text_files(Path(workspace_cfg.workspace_path)))
+        return merged
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Workspace-native repair failed: %s", exc)
+        return None
+
+
+def _collect_workspace_text_files(workspace: Path) -> dict[str, str]:
+    """Collect root-level text files for legacy repair-loop compatibility."""
+    files: dict[str, str] = {}
+    for path in sorted(workspace.iterdir()):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        if path.suffix not in (".py", ".txt", ".yaml", ".yml", ".json", ".cfg", ".ini", ".sh"):
+            continue
+        try:
+            files[path.name] = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+    return files
 
 
 def _repair_via_opencode(

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from researchclaw.config import RCConfig
+from researchclaw.experiment.workspace import WorkspaceAgentResult
 
 logger = logging.getLogger(__name__)
 
@@ -761,7 +762,10 @@ def create_code_agent(
             raise RuntimeError("LLM code agent requires an LLM client")
         from researchclaw.prompts import PromptManager
 
-        return LlmCodeAgent(llm, prompts or PromptManager(), config)  # type: ignore[return-value]
+        return _maybe_wrap_workspace_agent(
+            LlmCodeAgent(llm, prompts or PromptManager(), config),  # type: ignore[arg-type]
+            config,
+        )
 
     if provider == "claude_code":
         binary = agent_cfg.binary_path or shutil.which("claude")
@@ -770,14 +774,17 @@ def create_code_agent(
                 "Claude Code binary not found. "
                 "Install it or set experiment.code_agent.binary_path."
             )
-        return ClaudeCodeAgent(  # type: ignore[return-value]
-            binary_path=binary,
-            model=agent_cfg.model or "sonnet",
-            max_budget_usd=agent_cfg.max_budget_usd,
-            timeout_sec=agent_cfg.timeout_sec,
-            extra_args=list(agent_cfg.extra_args),
-            base_url=agent_cfg.base_url,
-            api_key_env=agent_cfg.api_key_env,
+        return _maybe_wrap_workspace_agent(
+            ClaudeCodeAgent(  # type: ignore[arg-type]
+                binary_path=binary,
+                model=agent_cfg.model or "sonnet",
+                max_budget_usd=agent_cfg.max_budget_usd,
+                timeout_sec=agent_cfg.timeout_sec,
+                extra_args=list(agent_cfg.extra_args),
+                base_url=agent_cfg.base_url,
+                api_key_env=agent_cfg.api_key_env,
+            ),
+            config,
         )
 
     if provider == "codex":
@@ -787,14 +794,43 @@ def create_code_agent(
                 "Codex binary not found. "
                 "Install it or set experiment.code_agent.binary_path."
             )
-        return CodexAgent(  # type: ignore[return-value]
-            binary_path=binary,
-            model=agent_cfg.model or "",
-            max_budget_usd=agent_cfg.max_budget_usd,
-            timeout_sec=agent_cfg.timeout_sec,
-            extra_args=list(agent_cfg.extra_args),
-            base_url=agent_cfg.base_url,
-            api_key_env=agent_cfg.api_key_env,
+        return _maybe_wrap_workspace_agent(
+            CodexAgent(  # type: ignore[arg-type]
+                binary_path=binary,
+                model=agent_cfg.model or "",
+                max_budget_usd=agent_cfg.max_budget_usd,
+                timeout_sec=agent_cfg.timeout_sec,
+                extra_args=list(agent_cfg.extra_args),
+                base_url=agent_cfg.base_url,
+                api_key_env=agent_cfg.api_key_env,
+            ),
+            config,
         )
 
     raise ValueError(f"Unknown code agent provider: {provider}")
+
+
+def _maybe_wrap_workspace_agent(
+    agent: CodeAgentProvider,
+    config: RCConfig,
+) -> CodeAgentProvider:
+    workspace_cfg = getattr(config.experiment, "workspace_agent", None)
+    if not workspace_cfg or not getattr(workspace_cfg, "enabled", False):
+        return agent
+    from researchclaw.experiment.workspace_agent import GitWorkspaceAgent
+
+    if isinstance(agent, GitWorkspaceAgent):
+        return agent
+    return GitWorkspaceAgent(
+        agent,
+        Path(workspace_cfg.workspace_path),
+        manifest_filename=workspace_cfg.manifest_filename,
+    )
+
+
+def __getattr__(name: str) -> Any:
+    if name == "WorkspaceAgentProvider":
+        from researchclaw.experiment.workspace_agent import WorkspaceAgentProvider
+
+        return WorkspaceAgentProvider
+    raise AttributeError(name)

@@ -43,6 +43,38 @@ _CONTINUOUS_ENVS = {
 }
 
 
+def _workspace_codegen_prompt(
+    *,
+    topic: str,
+    exp_plan: str,
+    metric: str,
+    pkg_hint: str,
+    compute_budget: str,
+    extra_guidance: str,
+    manifest_filename: str,
+) -> str:
+    return (
+        "You are a workspace-native code agent working inside an existing git "
+        "repository. Modify this repository to implement the experiment. Do not "
+        "emit code blocks for ResearchClaw to parse.\n\n"
+        f"TOPIC:\n{topic}\n\n"
+        f"EXPERIMENT PLAN:\n{exp_plan}\n\n"
+        f"PRIMARY METRIC: {metric}\n\n"
+        f"PACKAGE HINTS:\n{pkg_hint}\n\n"
+        f"COMPUTE BUDGET:\n{compute_budget}\n\n"
+        f"EXTRA GUIDANCE:\n{extra_guidance}\n\n"
+        "Required completion protocol:\n"
+        "1. Inspect the existing workspace and modify the appropriate files.\n"
+        "2. Prepare the command that should launch the training or experiment.\n"
+        "3. Commit your code changes with git.\n"
+        f"4. Write {manifest_filename} in the workspace root or .researchclaw/.\n"
+        "5. The manifest must contain code_commit, launch.command, launch.cwd, "
+        "launch.env, launch.resources, and result_paths.\n"
+        "6. Do not submit the job yourself; ResearchClaw's submitter will run "
+        "the launch command from the manifest.\n"
+    )
+
+
 def _execute_collider_plan_generation(
     stage_dir: Path,
     run_dir: Path,
@@ -490,6 +522,49 @@ def _execute_code_generation(
     _code_agent_active = False
     _beast_mode_used = False
     _code_max_tokens = 8192
+
+    if getattr(getattr(config.experiment, "workspace_agent", None), "enabled", False):
+        from researchclaw.experiment.submitter import create_submitter
+        from researchclaw.experiment.workspace_agent import create_workspace_agent
+        from researchclaw.pipeline.workspace_orchestrator import run_workspace_pipeline
+
+        workspace_cfg = config.experiment.workspace_agent
+        prompt = _workspace_codegen_prompt(
+            topic=config.research.topic,
+            exp_plan=exp_plan,
+            metric=metric,
+            pkg_hint=pkg_hint,
+            compute_budget=compute_budget,
+            extra_guidance=extra_guidance,
+            manifest_filename=workspace_cfg.manifest_filename,
+        )
+        agent = create_workspace_agent(config, llm=llm, prompts=_pm)
+        submitter = create_submitter(config)
+        result = run_workspace_pipeline(
+            workspace_path=Path(workspace_cfg.workspace_path),
+            run_dir=stage_dir,
+            stage=10,
+            agent=agent,
+            submitter=submitter,
+            prompt=prompt,
+            timeout_sec=workspace_cfg.timeout_sec,
+        )
+        artifacts = [
+            "stage-10-workspace-agent-result.json",
+            "workspace_experiment_registry.jsonl",
+        ]
+        submit_artifact = stage_dir / "stage-10-submit-result.json"
+        if submit_artifact.exists():
+            artifacts.append("stage-10-submit-result.json")
+        return StageResult(
+            stage=Stage.CODE_GENERATION,
+            status=StageStatus.DONE if result.ok else StageStatus.FAILED,
+            artifacts=tuple(a for a in artifacts if (stage_dir / a).exists()),
+            error=result.error,
+            evidence_refs=tuple(
+                f"stage-10/{a}" for a in artifacts if (stage_dir / a).exists()
+            ),
+        )
 
     # ── Beast Mode: OpenCode external agent (optional) ─────────────────
     _oc_cfg = config.experiment.opencode
@@ -1528,4 +1603,3 @@ Multi-file experiment project with {len(files)} file(s): {file_list}
         artifacts=tuple(artifacts),
         evidence_refs=tuple(f"stage-10/{a}" for a in artifacts),
     )
-

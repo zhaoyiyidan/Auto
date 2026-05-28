@@ -143,6 +143,7 @@ class ExperimentRecord:
     result_paths: list[str]
     recorded_at: str
     result_hashes: dict[str, str] = field(default_factory=dict)
+    session_name: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -161,4 +162,5 @@ class ExperimentRecord:
             result_paths=list(data.get("result_paths") or []),
             result_hashes=dict(data.get("result_hashes") or {}),
             recorded_at=str(data["recorded_at"]),
+            session_name=str(data.get("session_name", "")),
         )

@@ -19,6 +19,7 @@ from researchclaw.experiment.workspace import (
     SubmitResult,
     WorkspaceAgentResult,
 )
+from researchclaw.experiment.workspace_agent_ledger import WorkspaceAgentLedger
 from researchclaw.experiment.workspace_agent import WorkspaceAgentProvider
 from researchclaw.pipeline._helpers import _utcnow_iso
 
@@ -63,7 +64,7 @@ def submit_job(
     return submitter.submit(request)
 
 
-def run_workspace_pipeline(
+def run_workspace_agent_task(
     workspace_path: Path,
     run_dir: Path,
     stage: int,
@@ -71,11 +72,26 @@ def run_workspace_pipeline(
     submitter: TrainingSubmitter,
     prompt: str,
     timeout_sec: int,
+    *,
+    iteration: int | None = None,
+    ledger: WorkspaceAgentLedger | None = None,
+    close_policy: str = "keep",
 ) -> WorkspaceAgentResult:
-    """Run the opt-in workspace-native agent path end to end."""
+    """Run one workspace-native ACP agent task and record provenance."""
     workspace = workspace_path.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
+    ledger = ledger or WorkspaceAgentLedger(run_dir)
+    stage_ledger_dir = ledger.stage_dir(stage, iteration=iteration)
     base_sha = record_base_sha(workspace)
+    ledger.write_prompt(stage_ledger_dir, prompt)
+    ledger.write_base_sha(stage_ledger_dir, base_sha)
+    ledger.save_session_meta(
+        {
+            "provider": getattr(agent, "name", ""),
+            "session_name": _agent_session_name(agent),
+            "workspace": str(workspace),
+        }
+    )
     result = invoke_workspace_agent(
         agent=agent,
         workspace_path=workspace,
@@ -83,11 +99,14 @@ def run_workspace_pipeline(
         prompt=prompt,
         timeout_sec=timeout_sec,
     )
+    ledger.write_agent_result(stage_ledger_dir, result)
     (run_dir / f"stage-{stage:02d}-workspace-agent-result.json").write_text(
         json.dumps(asdict(result), indent=2, sort_keys=True),
         encoding="utf-8",
     )
     if not result.ok or not verify_agent_commit(result, base_sha):
+        _export_session_snapshot(agent, ledger, stage_ledger_dir)
+        _close_session_if_requested(agent, close_policy)
         return result
 
     manifest = _manifest_from_result(workspace, result) or read_agent_manifest(workspace)
@@ -106,7 +125,12 @@ def run_workspace_pipeline(
             json.dumps(asdict(failed), indent=2, sort_keys=True),
             encoding="utf-8",
         )
+        ledger.write_agent_result(stage_ledger_dir, failed)
+        _export_session_snapshot(agent, ledger, stage_ledger_dir)
+        _close_session_if_requested(agent, close_policy)
         return failed
+    if result.manifest_path:
+        ledger.copy_manifest(stage_ledger_dir, workspace / result.manifest_path)
 
     submit_result = submit_job(
         submitter,
@@ -117,6 +141,7 @@ def run_workspace_pipeline(
             stage=stage,
         ),
     )
+    ledger.write_submit_result(stage_ledger_dir, submit_result)
     (run_dir / f"stage-{stage:02d}-submit-result.json").write_text(
         json.dumps(asdict(submit_result), indent=2, sort_keys=True),
         encoding="utf-8",
@@ -132,6 +157,7 @@ def run_workspace_pipeline(
         base_sha=result.base_sha,
         agent_commit_sha=result.agent_commit_sha or "",
         provider=result.provider_name,
+        session_name=_agent_session_name(agent),
         agent_manifest=result.manifest_path or "",
         submitter=submit_result.submitter_name,
         job_id=submit_result.job_id,
@@ -140,7 +166,31 @@ def run_workspace_pipeline(
         recorded_at=_utcnow_iso(),
     )
     ExperimentRegistry(run_dir / "workspace_experiment_registry.jsonl").append(record)
+    ledger.write_registry_record(stage_ledger_dir, record)
+    _export_session_snapshot(agent, ledger, stage_ledger_dir)
+    _close_session_if_requested(agent, close_policy)
     return result
+
+
+def run_workspace_pipeline(
+    workspace_path: Path,
+    run_dir: Path,
+    stage: int,
+    agent: WorkspaceAgentProvider,
+    submitter: TrainingSubmitter,
+    prompt: str,
+    timeout_sec: int,
+) -> WorkspaceAgentResult:
+    """Backward-compatible alias for the workspace task runner."""
+    return run_workspace_agent_task(
+        workspace_path=workspace_path,
+        run_dir=run_dir,
+        stage=stage,
+        agent=agent,
+        submitter=submitter,
+        prompt=prompt,
+        timeout_sec=timeout_sec,
+    )
 
 
 def _manifest_from_result(
@@ -153,6 +203,48 @@ def _manifest_from_result(
     if not path.is_file():
         return None
     return RunManifest.from_path(path)
+
+
+def _agent_session_name(agent: WorkspaceAgentProvider) -> str:
+    session_name = getattr(agent, "session_name", "")
+    if session_name:
+        return str(session_name)
+    inner = getattr(agent, "inner", None)
+    if inner is not None:
+        return str(getattr(inner, "session_name", ""))
+    return ""
+
+
+def _agent_session(agent: WorkspaceAgentProvider) -> object | None:
+    session = getattr(agent, "session", None)
+    if session is not None:
+        return session
+    inner = getattr(agent, "inner", None)
+    if inner is not None:
+        return getattr(inner, "session", None)
+    return None
+
+
+def _export_session_snapshot(
+    agent: WorkspaceAgentProvider,
+    ledger: WorkspaceAgentLedger,
+    stage_ledger_dir: Path,
+) -> None:
+    session = _agent_session(agent)
+    if session is None or not hasattr(session, "export_session"):
+        return
+    ledger.write_session_export(stage_ledger_dir, session)
+
+
+def _close_session_if_requested(
+    agent: WorkspaceAgentProvider,
+    close_policy: str,
+) -> None:
+    if close_policy != "close":
+        return
+    session = _agent_session(agent)
+    if session is not None and hasattr(session, "close"):
+        session.close()
 
 
 def _git(workspace: Path, *args: str) -> str:

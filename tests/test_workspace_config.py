@@ -15,28 +15,44 @@ def test_workspace_agent_config_defaults() -> None:
     cfg = WorkspaceAgentConfig()
 
     assert cfg.enabled is False
+    assert cfg.transport == "acp"
     assert cfg.workspace_path == "."
-    assert cfg.git_mode == "auto"
+    assert cfg.session_name == ""
+    assert cfg.agent == "claude"
+    assert cfg.acpx_command == ""
     assert cfg.manifest_filename == "run_manifest.json"
     assert cfg.timeout_sec == 1800
+    assert cfg.max_turns == 50
+    assert cfg.close_policy == "keep"
+    assert not hasattr(cfg, "git_mode")
 
 
 def test_workspace_agent_config_from_dict() -> None:
     cfg = _parse_workspace_agent_config(
         {
             "enabled": True,
+            "transport": "acp",
             "workspace_path": "/tmp/workspace",
-            "git_mode": "strict",
+            "session_name": "researchclaw-code-test",
+            "agent": "codex",
+            "acpx_command": "/usr/local/bin/acpx",
             "manifest_filename": "manifest.json",
             "timeout_sec": 2400,
+            "max_turns": 80,
+            "close_policy": "close",
         }
     )
 
     assert cfg.enabled is True
+    assert cfg.transport == "acp"
     assert cfg.workspace_path == "/tmp/workspace"
-    assert cfg.git_mode == "strict"
+    assert cfg.session_name == "researchclaw-code-test"
+    assert cfg.agent == "codex"
+    assert cfg.acpx_command == "/usr/local/bin/acpx"
     assert cfg.manifest_filename == "manifest.json"
     assert cfg.timeout_sec == 2400
+    assert cfg.max_turns == 80
+    assert cfg.close_policy == "close"
 
 
 def test_submitter_config_defaults() -> None:
@@ -92,4 +108,30 @@ def test_parse_experiment_config_includes_workspace_agent_and_submitter() -> Non
 
     assert cfg.workspace_agent.enabled is True
     assert cfg.workspace_agent.workspace_path == "/tmp/workspace"
+    assert cfg.workspace_agent.transport == "acp"
     assert cfg.submitter.type == "manual"
+
+
+def test_workspace_agent_config_roundtrip_through_rc_config() -> None:
+    rc = RCConfig(
+        experiment=ExperimentConfig(
+            workspace_agent=WorkspaceAgentConfig(
+                enabled=True,
+                transport="acp",
+                workspace_path="/tmp/repo",
+                session_name="researchclaw-code-run-1",
+                agent="codex",
+                acpx_command="/opt/bin/acpx",
+                manifest_filename="agent_manifest.json",
+                timeout_sec=3600,
+                max_turns=120,
+                close_policy="close",
+            )
+        )
+    )
+
+    payload = rc.to_dict()
+    loaded = RCConfig.from_dict(payload, check_paths=False)
+
+    assert loaded.experiment.workspace_agent == rc.experiment.workspace_agent
+    assert "git_mode" not in payload["experiment"]["workspace_agent"]

@@ -273,6 +273,21 @@ class TestCliAgentEnvInjection:
 
 
 class TestPhase1Architecture:
+    def test_chat_requests_thinking_stripping(
+        self, stage_dir: Path, pm: PromptManager,
+    ) -> None:
+        llm = FakeLLM(responses=["ok"])
+        agent = CodeAgent(
+            llm=llm,
+            prompts=pm,
+            config=CodeAgentConfig(),
+            stage_dir=stage_dir,
+        )
+
+        agent._chat("system", "user")
+
+        assert llm.calls[0]["strip_thinking"] is True
+
     def test_architecture_planning_produces_spec(
         self, stage_dir: Path, pm: PromptManager,
     ) -> None:

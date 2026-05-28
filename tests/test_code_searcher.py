@@ -74,6 +74,37 @@ class TestQueryGeneration:
         assert isinstance(queries, list)
         assert len(queries) >= 2
 
+    def test_generate_with_llm_strips_thinking_and_parses_array(self):
+        class FakeLLM:
+            def __init__(self):
+                self.kwargs = {}
+
+            def chat(self, messages, **kwargs):
+                self.kwargs = kwargs
+                _ = messages
+                return type(
+                    "Resp",
+                    (),
+                    {
+                        "content": (
+                            "[thinking] I will produce query ideas.\n\n"
+                            '["numpy code agent example", "pytest repair agent"]'
+                        )
+                    },
+                )()
+
+        llm = FakeLLM()
+
+        queries = generate_search_queries(
+            topic="retrieval augmented generation for software agents",
+            domain_name="Machine Learning",
+            core_libraries=["numpy"],
+            llm=llm,
+        )
+
+        assert llm.kwargs["strip_thinking"] is True
+        assert queries == ["numpy code agent example", "pytest repair agent"]
+
 
 # ---------------------------------------------------------------------------
 # Pattern Extractor tests

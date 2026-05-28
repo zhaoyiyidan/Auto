@@ -32,6 +32,42 @@ from researchclaw.prompts import PromptManager
 
 logger = logging.getLogger(__name__)
 
+MANUAL_SEARCH_FIELDS: tuple[str, ...] = (
+    "cite_key",
+    "title",
+    "authors",
+    "year",
+    "venue",
+    "doi",
+    "arxiv_id",
+    "url",
+    "pdf_url",
+    "source",
+    "matched_query",
+    "paper_type",
+    "abstract",
+    "full_text_available",
+    "full_text_summary",
+    "key_evidence",
+    "datasets",
+    "metrics",
+    "limitations",
+    "relevance_reason",
+    "quality_notes",
+    "bibtex",
+)
+MANUAL_REQUIRED_FIELDS: tuple[str, ...] = ("cite_key", "title")
+MANUAL_EVIDENCE_FIELDS: tuple[str, ...] = (
+    "full_text_available",
+    "full_text_summary",
+    "key_evidence",
+    "datasets",
+    "metrics",
+    "limitations",
+    "relevance_reason",
+    "quality_notes",
+)
+
 
 # ---------------------------------------------------------------------------
 # Local helpers
@@ -76,6 +112,416 @@ def _expand_search_queries(queries: list[str], topic: str) -> list[str]:
             seen.add(variant.lower().strip())
 
     return expanded
+
+
+def _load_manual_search_context(
+    run_dir: Path, config: RCConfig
+) -> tuple[list[str], int, str, str, str]:
+    """Read Stage 3 and prior context for manual search handoff files."""
+    topic = config.research.topic
+    queries_text = _read_prior_artifact(run_dir, "queries.json")
+    queries_data = _safe_json_loads(queries_text or "{}", {})
+    raw_queries = queries_data.get("queries", []) if isinstance(queries_data, dict) else []
+    queries = [str(q).strip() for q in raw_queries if str(q).strip()]
+    if not queries:
+        queries = _build_fallback_queries(topic)[:5]
+    year_min = 2020
+    if isinstance(queries_data, dict):
+        try:
+            year_min = int(queries_data.get("year_min", 2020))
+        except (TypeError, ValueError):
+            year_min = 2020
+    plan_text = _read_prior_artifact(run_dir, "search_plan.yaml") or ""
+    goal_text = _read_prior_artifact(run_dir, "goal.md") or ""
+    problem_tree = _read_prior_artifact(run_dir, "problem_tree.md") or ""
+    return queries, year_min, plan_text, goal_text, problem_tree
+
+
+def _manual_search_template_row() -> dict[str, Any]:
+    return {
+        "cite_key": "smith2024ragagents",
+        "title": "Retrieval Augmented Generation for Code Agents",
+        "authors": "Smith, J. and Jones, K.",
+        "year": 2024,
+        "venue": "ICSE",
+        "doi": "10.1145/example",
+        "arxiv_id": "2401.12345",
+        "url": "https://example.org/paper",
+        "pdf_url": "https://example.org/paper.pdf",
+        "source": "manual_search_agent",
+        "matched_query": "retrieval augmented generation code agents",
+        "paper_type": "method",
+        "abstract": "One-paragraph abstract or concise abstract summary.",
+        "full_text_available": True,
+        "full_text_summary": "Short summary grounded in the paper body.",
+        "key_evidence": [
+            "Concrete finding, experiment, theorem, or comparison from the full text."
+        ],
+        "datasets": ["SWE-bench"],
+        "metrics": {"pass@1": 0.42},
+        "limitations": "Known limitations or threats to validity.",
+        "relevance_reason": "Why this paper matters for the research topic.",
+        "quality_notes": "Venue, reproducibility, citations, or methodological notes.",
+        "bibtex": "@inproceedings{smith2024ragagents, title={...}, year={2024}}",
+    }
+
+
+def _render_search_agent_prompt(
+    *,
+    topic: str,
+    queries: list[str],
+    year_min: int,
+    plan_text: str,
+    goal_text: str,
+    problem_tree: str,
+) -> str:
+    fields = ", ".join(MANUAL_SEARCH_FIELDS)
+    query_lines = "\n".join(f"- {q}" for q in queries)
+    template = json.dumps(_manual_search_template_row(), ensure_ascii=False)
+    return (
+        "# Manual Literature Search Agent Prompt\n\n"
+        "You are a literature search agent. Find real, relevant papers for the "
+        "research topic below. Prefer peer-reviewed papers, strong preprints, "
+        "surveys, baselines, benchmarks, seminal work, and credible negative "
+        "or limitation evidence. Inspect the abstract and paper body whenever "
+        "a full text or PDF is available.\n\n"
+        f"## Topic\n{topic}\n\n"
+        f"## Research Goal\n{goal_text.strip() or '(not provided)'}\n\n"
+        f"## Problem Tree\n{problem_tree.strip() or '(not provided)'}\n\n"
+        f"## Search Queries\n{query_lines}\n\n"
+        f"Minimum publication year: {year_min}\n\n"
+        f"## Stage 3 Search Plan\n```yaml\n{plan_text.strip()}\n```\n\n"
+        "## Output Requirements\n"
+        "Return only JSONL. Each line must be one JSON object for one paper. "
+        "Do not wrap the output in Markdown. Use these fields exactly:\n\n"
+        f"{fields}\n\n"
+        "paper_type must be one of: seminal, survey, method, benchmark, "
+        "baseline, negative_result, related.\n\n"
+        "If full text is available, fill full_text_summary and key_evidence "
+        "with claims grounded in the paper body. If it is not available, set "
+        "full_text_available to false and explain the evidence limit in "
+        "quality_notes.\n\n"
+        "## Example JSONL Line\n"
+        f"{template}\n"
+    )
+
+
+def _render_manual_instructions(stage_dir: Path) -> str:
+    return (
+        "# Manual Literature Search Instructions\n\n"
+        "Stage 4 is waiting for external manual search results.\n\n"
+        "1. Send `stage-04/search_agent_prompt.md` to your search agent.\n"
+        "2. Ask the search agent to return only JSONL in the requested schema.\n"
+        "3. Save the returned JSONL to `stage-04/manual_search_results.jsonl`.\n"
+        "4. Resume the pipeline from Stage 4, for example with `--resume` or "
+        "`--from-stage 4`.\n\n"
+        f"Current Stage 4 directory: `{stage_dir}`\n"
+    )
+
+
+def _generate_search_agent_handoff_files(
+    stage_dir: Path,
+    run_dir: Path,
+    config: RCConfig,
+) -> StageResult:
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    queries, year_min, plan_text, goal_text, problem_tree = _load_manual_search_context(
+        run_dir, config
+    )
+    prompt = _render_search_agent_prompt(
+        topic=config.research.topic,
+        queries=queries,
+        year_min=year_min,
+        plan_text=plan_text,
+        goal_text=goal_text,
+        problem_tree=problem_tree,
+    )
+    template = json.dumps(
+        _manual_search_template_row(), ensure_ascii=False
+    ) + "\n"
+    instructions = _render_manual_instructions(stage_dir)
+    (stage_dir / "search_agent_prompt.md").write_text(prompt, encoding="utf-8")
+    (stage_dir / "search_agent_output_template.jsonl").write_text(
+        template, encoding="utf-8"
+    )
+    (stage_dir / "manual_literature_instructions.md").write_text(
+        instructions, encoding="utf-8"
+    )
+    (stage_dir / "search_meta.json").write_text(
+        json.dumps(
+            {
+                "source": "manual_search_agent",
+                "status": "awaiting_input",
+                "real_search": False,
+                "external_manual": True,
+                "queries_used": queries,
+                "year_min": year_min,
+                "manual_results_file": "manual_search_results.jsonl",
+                "ts": _utcnow_iso(),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    artifacts = (
+        "search_agent_prompt.md",
+        "search_agent_output_template.jsonl",
+        "manual_literature_instructions.md",
+        "search_meta.json",
+    )
+    return StageResult(
+        stage=Stage.LITERATURE_COLLECT,
+        status=StageStatus.PAUSED,
+        artifacts=artifacts,
+        error=(
+            "Manual literature search required: save search-agent JSONL to "
+            "stage-04/manual_search_results.jsonl and resume."
+        ),
+        decision="awaiting_manual_search",
+        evidence_refs=tuple(f"stage-04/{a}" for a in artifacts),
+    )
+
+
+def _validate_manual_results_jsonl(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    rows: list[dict[str, Any]] = []
+    errors: list[str] = []
+    if not path.exists():
+        return rows, [f"Missing manual search results: {path.name}"]
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        return rows, [f"Cannot read {path.name}: {exc}"]
+    for line_no, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            errors.append(f"line {line_no}: invalid JSONL ({exc.msg})")
+            continue
+        if not isinstance(parsed, dict):
+            errors.append(f"line {line_no}: expected a JSON object")
+            continue
+        missing = [
+            field
+            for field in MANUAL_REQUIRED_FIELDS
+            if not str(parsed.get(field, "")).strip()
+        ]
+        if missing:
+            errors.append(
+                f"line {line_no}: missing required fields: {', '.join(missing)}"
+            )
+            continue
+        rows.append(parsed)
+    if not rows and not errors:
+        errors.append(f"{path.name} is empty")
+    return rows, errors
+
+
+def _coerce_author_list(value: Any) -> list[dict[str, str]]:
+    if isinstance(value, str):
+        names = [part.strip() for part in re.split(r"\s+and\s+", value) if part.strip()]
+        return [{"name": name} for name in names]
+    if isinstance(value, list):
+        authors: list[dict[str, str]] = []
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                authors.append({"name": item.strip()})
+            elif isinstance(item, dict):
+                name = str(item.get("name", "")).strip()
+                if name:
+                    authors.append({"name": name})
+                elif item:
+                    authors.append({str(k): str(v) for k, v in item.items()})
+        return authors
+    return []
+
+
+def _coerce_year(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _manual_candidate_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    candidate = {
+        "cite_key": str(row.get("cite_key", "")).strip(),
+        "title": str(row.get("title", "")).strip(),
+        "authors": _coerce_author_list(row.get("authors", [])),
+        "year": _coerce_year(row.get("year", 0)),
+        "venue": str(row.get("venue", "") or ""),
+        "doi": str(row.get("doi", "") or ""),
+        "arxiv_id": str(row.get("arxiv_id", "") or ""),
+        "url": str(row.get("url", "") or ""),
+        "pdf_url": str(row.get("pdf_url", "") or ""),
+        "source": str(row.get("source", "") or "manual_search_agent"),
+        "matched_query": str(row.get("matched_query", "") or ""),
+        "paper_type": str(row.get("paper_type", "") or "related"),
+        "abstract": str(row.get("abstract", "") or ""),
+        "collected_at": _utcnow_iso(),
+    }
+    if str(row.get("bibtex", "")).strip():
+        candidate["bibtex"] = str(row["bibtex"])
+    return candidate
+
+
+def _manual_evidence_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    evidence = {"cite_key": str(row.get("cite_key", "")).strip()}
+    for field in MANUAL_EVIDENCE_FIELDS:
+        if field in row:
+            evidence[field] = row[field]
+    return evidence
+
+
+def _author_string(authors: Any) -> str:
+    names: list[str] = []
+    if isinstance(authors, list):
+        for item in authors:
+            if isinstance(item, str):
+                names.append(item)
+            elif isinstance(item, dict):
+                names.append(str(item.get("name", "")).strip())
+    elif isinstance(authors, str):
+        names = [part.strip() for part in re.split(r"\s+and\s+", authors) if part.strip()]
+    return " and ".join(name for name in names if name)
+
+
+def _fallback_bibtex(candidate: dict[str, Any]) -> str:
+    cite_key = str(candidate.get("cite_key", "") or "manualpaper")
+    title = str(candidate.get("title", "") or "Untitled")
+    year = candidate.get("year", "")
+    authors = _author_string(candidate.get("authors", [])) or "Unknown"
+    venue = str(candidate.get("venue", "") or "")
+    doi = str(candidate.get("doi", "") or "")
+    url = str(candidate.get("url", "") or "")
+    lines = [
+        f"@article{{{cite_key},",
+        f"  title={{{title}}},",
+        f"  author={{{authors}}},",
+    ]
+    if year:
+        lines.append(f"  year={{{year}}},")
+    if venue:
+        lines.append(f"  journal={{{venue}}},")
+    if doi:
+        lines.append(f"  doi={{{doi}}},")
+    if url:
+        lines.append(f"  url={{{url}}},")
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def _write_manual_search_meta(
+    stage_dir: Path,
+    *,
+    status: str,
+    queries: list[str],
+    year_min: int,
+    total_candidates: int = 0,
+    bibtex_entries: int = 0,
+    errors: list[str] | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "source": "manual_search_agent",
+        "status": status,
+        "real_search": False,
+        "external_manual": True,
+        "queries_used": queries,
+        "year_min": year_min,
+        "total_candidates": total_candidates,
+        "bibtex_entries": bibtex_entries,
+        "manual_results_file": "manual_search_results.jsonl",
+        "ts": _utcnow_iso(),
+    }
+    if errors:
+        payload["errors"] = errors
+    (stage_dir / "search_meta.json").write_text(
+        json.dumps(payload, indent=2), encoding="utf-8"
+    )
+
+
+def _manual_done_result(stage_dir: Path) -> StageResult:
+    artifacts = ["candidates.jsonl"]
+    for optional in ("references.bib", "paper_evidence.jsonl"):
+        if (stage_dir / optional).is_file():
+            artifacts.append(optional)
+    artifacts.append("search_meta.json")
+    return StageResult(
+        stage=Stage.LITERATURE_COLLECT,
+        status=StageStatus.DONE,
+        artifacts=tuple(artifacts),
+        evidence_refs=tuple(f"stage-04/{a}" for a in artifacts),
+    )
+
+
+def _convert_manual_results_to_pipeline_format(
+    stage_dir: Path,
+    run_dir: Path,
+    config: RCConfig,
+) -> StageResult:
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    queries, year_min, _plan_text, _goal_text, _problem_tree = _load_manual_search_context(
+        run_dir, config
+    )
+    candidates_path = stage_dir / "candidates.jsonl"
+    if candidates_path.is_file() and candidates_path.stat().st_size > 0:
+        rows = _parse_jsonl_rows(candidates_path.read_text(encoding="utf-8"))
+        if not (stage_dir / "search_meta.json").is_file():
+            _write_manual_search_meta(
+                stage_dir,
+                status="completed",
+                queries=queries,
+                year_min=year_min,
+                total_candidates=len(rows),
+                bibtex_entries=0,
+            )
+        return _manual_done_result(stage_dir)
+
+    manual_path = stage_dir / "manual_search_results.jsonl"
+    if not manual_path.exists():
+        return _generate_search_agent_handoff_files(stage_dir, run_dir, config)
+
+    rows, errors = _validate_manual_results_jsonl(manual_path)
+    if errors:
+        _write_manual_search_meta(
+            stage_dir,
+            status="failed",
+            queries=queries,
+            year_min=year_min,
+            errors=errors,
+        )
+        return StageResult(
+            stage=Stage.LITERATURE_COLLECT,
+            status=StageStatus.FAILED,
+            artifacts=("search_meta.json",),
+            error="; ".join(errors),
+            decision="retry",
+            evidence_refs=("stage-04/search_meta.json",),
+        )
+
+    candidates = [_manual_candidate_from_row(row) for row in rows]
+    evidence_rows = [_manual_evidence_from_row(row) for row in rows]
+    bibtex_entries = [
+        str(row.get("bibtex", "")).strip() or _fallback_bibtex(candidate)
+        for row, candidate in zip(rows, candidates, strict=False)
+    ]
+    _write_jsonl(candidates_path, candidates)
+    (stage_dir / "references.bib").write_text(
+        "\n\n".join(entry for entry in bibtex_entries if entry) + "\n",
+        encoding="utf-8",
+    )
+    _write_jsonl(stage_dir / "paper_evidence.jsonl", evidence_rows)
+    _write_manual_search_meta(
+        stage_dir,
+        status="completed",
+        queries=queries,
+        year_min=year_min,
+        total_candidates=len(candidates),
+        bibtex_entries=len([entry for entry in bibtex_entries if entry]),
+    )
+    return _manual_done_result(stage_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +771,23 @@ def _execute_search_strategy(
 
 
 def _execute_literature_collect(
+    stage_dir: Path,
+    run_dir: Path,
+    config: RCConfig,
+    adapters: AdapterBundle,
+    *,
+    llm: LLMClient | None = None,
+    prompts: PromptManager | None = None,
+) -> StageResult:
+    """Stage 4: collect literature via manual handoff or legacy APIs."""
+    if getattr(config.research, "manual_search", True):
+        return _convert_manual_results_to_pipeline_format(stage_dir, run_dir, config)
+    return _execute_api_search_legacy(
+        stage_dir, run_dir, config, adapters, llm=llm, prompts=prompts
+    )
+
+
+def _execute_api_search_legacy(
     stage_dir: Path,
     run_dir: Path,
     config: RCConfig,
@@ -601,6 +1064,75 @@ def _execute_literature_collect(
 
 _MAX_ABSTRACT_LEN = 800  # Truncate long abstracts to reduce token usage
 _MAX_CANDIDATES_CHARS = 30_000  # Cap total candidates text sent to LLM
+_EVIDENCE_PROMPT_LIMITS: dict[str, int] = {
+    "full_text_summary": 500,
+    "key_evidence": 500,
+    "datasets": 200,
+    "metrics": 200,
+    "limitations": 200,
+    "relevance_reason": 200,
+    "quality_notes": 200,
+}
+
+
+def _truncate_for_prompt(value: Any, limit: int) -> Any:
+    text = json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
+    if len(text) <= limit:
+        return value
+    return text[:limit] + "..."
+
+
+def _load_paper_evidence(run_dir: Path) -> dict[str, dict[str, Any]]:
+    evidence_text = _read_prior_artifact(run_dir, "paper_evidence.jsonl") or ""
+    evidence_by_key: dict[str, dict[str, Any]] = {}
+    for row in _parse_jsonl_rows(evidence_text):
+        cite_key = str(row.get("cite_key", "")).strip()
+        if cite_key:
+            evidence_by_key[cite_key] = row
+    return evidence_by_key
+
+
+def _prompt_evidence_fields(evidence: dict[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for key, limit in _EVIDENCE_PROMPT_LIMITS.items():
+        if key in evidence and evidence[key] not in ("", None, [], {}):
+            compact[key] = _truncate_for_prompt(evidence[key], limit)
+    return compact
+
+
+def _attach_evidence(row: dict[str, Any], evidence: dict[str, Any]) -> None:
+    for key in MANUAL_EVIDENCE_FIELDS:
+        if key in evidence and evidence[key] not in ("", None, [], {}):
+            row[key] = evidence[key]
+
+
+def _merge_shortlist_with_candidates(
+    shortlist: list[dict[str, Any]],
+    filtered_rows: list[dict[str, Any]],
+    evidence_by_key: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_key = {
+        str(row.get("cite_key", "")).strip(): row
+        for row in filtered_rows
+        if str(row.get("cite_key", "")).strip()
+    }
+    by_title = {
+        str(row.get("title", "")).strip().lower(): row
+        for row in filtered_rows
+        if str(row.get("title", "")).strip()
+    }
+    merged: list[dict[str, Any]] = []
+    for item in shortlist:
+        cite_key = str(item.get("cite_key", "")).strip()
+        title = str(item.get("title", "")).strip().lower()
+        base = by_key.get(cite_key) or by_title.get(title) or {}
+        row = dict(base)
+        row.update(item)
+        evidence = evidence_by_key.get(str(row.get("cite_key", "")).strip())
+        if evidence:
+            _attach_evidence(row, evidence)
+        merged.append(row)
+    return merged
 
 
 def _execute_literature_screen(
@@ -613,6 +1145,7 @@ def _execute_literature_screen(
     prompts: PromptManager | None = None,
 ) -> StageResult:
     candidates_text = _read_prior_artifact(run_dir, "candidates.jsonl") or ""
+    evidence_by_key = _load_paper_evidence(run_dir)
 
     # --- P1-1: keyword relevance pre-filter ---
     # Before LLM screening, drop papers whose title+abstract share no keywords
@@ -641,17 +1174,27 @@ def _execute_literature_screen(
     # If pre-filter dropped everything, fall back to original (safety valve)
     if not filtered_rows:
         filtered_rows = _parse_jsonl_rows(candidates_text)
-    # Truncate abstracts and strip authors to reduce token usage
+    # Truncate abstracts and attach full-text evidence when available.
     for row in filtered_rows:
         abstract = row.get("abstract", "")
         if isinstance(abstract, str) and len(abstract) > _MAX_ABSTRACT_LEN:
             row["abstract"] = abstract[:_MAX_ABSTRACT_LEN] + "..."
-        # Strip authors list — not needed for screening and inflates tokens
-        row.pop("authors", None)
+        evidence = evidence_by_key.get(str(row.get("cite_key", "")).strip())
+        if evidence:
+            _attach_evidence(row, evidence)
 
-    # Rebuild candidates_text from filtered rows
+    # Rebuild candidates_text from filtered rows with compact evidence fields.
+    prompt_rows: list[dict[str, Any]] = []
+    for row in filtered_rows:
+        prompt_row = dict(row)
+        evidence = evidence_by_key.get(str(row.get("cite_key", "")).strip())
+        if evidence:
+            for key in MANUAL_EVIDENCE_FIELDS:
+                prompt_row.pop(key, None)
+            prompt_row.update(_prompt_evidence_fields(evidence))
+        prompt_rows.append(prompt_row)
     candidates_text = "\n".join(
-        json.dumps(r, ensure_ascii=False) for r in filtered_rows
+        json.dumps(r, ensure_ascii=False) for r in prompt_rows
     )
     # Cap total candidates text size to avoid blowing token budget
     if len(candidates_text) > _MAX_CANDIDATES_CHARS:
@@ -692,6 +1235,9 @@ def _execute_literature_screen(
         payload = _safe_json_loads(resp.content, {})
         if isinstance(payload, dict) and isinstance(payload.get("shortlist"), list):
             shortlist = [row for row in payload["shortlist"] if isinstance(row, dict)]
+            shortlist = _merge_shortlist_with_candidates(
+                shortlist, filtered_rows, evidence_by_key
+            )
     # T2.2: Ensure minimum shortlist size of 15 for adequate related work
     _MIN_SHORTLIST = 15
     if not shortlist:

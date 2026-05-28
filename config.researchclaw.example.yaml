@@ -8,6 +8,9 @@ research:
     - "machine-learning"
   daily_paper_count: 10
   quality_threshold: 4.0
+  # Stage 4 default: generate a search-agent handoff prompt and pause.
+  # Set false to use the legacy OpenAlex/Semantic Scholar/arXiv API path.
+  manual_search: true
 
 runtime:
   timezone: "America/New_York"

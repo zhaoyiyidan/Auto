@@ -50,7 +50,12 @@ def test_previous_stage_boundary_values():
 
 def test_gate_stages_matches_expected_set():
     assert GATE_STAGES == frozenset(
-        {Stage.LITERATURE_SCREEN, Stage.EXPERIMENT_DESIGN, Stage.QUALITY_GATE}
+        {
+            Stage.LITERATURE_SCREEN,
+            Stage.EXPERIMENT_DESIGN,
+            Stage.RESEARCH_DECISION,
+            Stage.QUALITY_GATE,
+        }
     )
 
 
@@ -59,6 +64,7 @@ def test_gate_rollback_map_matches_expected_targets():
         Stage.LITERATURE_SCREEN: Stage.LITERATURE_COLLECT,
         Stage.EXPERIMENT_DESIGN: Stage.HYPOTHESIS_GEN,
         Stage.CODE_GENERATION: Stage.EXPERIMENT_DESIGN,
+        Stage.RESEARCH_DECISION: Stage.RESULT_ANALYSIS,
         Stage.QUALITY_GATE: Stage.PAPER_OUTLINE,
     }
 

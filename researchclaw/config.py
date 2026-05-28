@@ -562,7 +562,7 @@ class CliAgentConfig:
 
 @dataclass(frozen=True)
 class WorkspaceAgentConfig:
-    """Existing-workspace mode for CLI coding agents.
+    """Existing-workspace mode for ACP coding agents.
 
     When enabled, ResearchClaw invokes a code agent directly in
     ``workspace_path`` and uses git commits plus an agent run manifest for
@@ -570,10 +570,15 @@ class WorkspaceAgentConfig:
     """
 
     enabled: bool = False
+    transport: str = "acp"
     workspace_path: str = "."
-    git_mode: str = "auto"
+    session_name: str = ""
+    agent: str = "claude"
+    acpx_command: str = ""
     manifest_filename: str = "run_manifest.json"
     timeout_sec: int = 1800
+    max_turns: int = 50
+    close_policy: str = "keep"
 
 
 @dataclass(frozen=True)
@@ -1446,10 +1451,15 @@ def _parse_workspace_agent_config(data: dict[str, Any]) -> WorkspaceAgentConfig:
         return WorkspaceAgentConfig()
     return WorkspaceAgentConfig(
         enabled=bool(data.get("enabled", False)),
+        transport=data.get("transport", "acp"),
         workspace_path=data.get("workspace_path", "."),
-        git_mode=data.get("git_mode", "auto"),
+        session_name=data.get("session_name", ""),
+        agent=data.get("agent", "claude"),
+        acpx_command=data.get("acpx_command", ""),
         manifest_filename=data.get("manifest_filename", "run_manifest.json"),
         timeout_sec=_safe_int(data.get("timeout_sec"), 1800),
+        max_turns=_safe_int(data.get("max_turns"), 50),
+        close_policy=data.get("close_policy", "keep"),
     )
 
 

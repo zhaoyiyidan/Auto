@@ -3,18 +3,13 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from researchclaw.experiment.code_agent import (
-    ClaudeCodeAgent,
-    CodexAgent,
-    create_code_agent,
-)
+from researchclaw.experiment.code_agent import create_code_agent
 from researchclaw.llm.client import LLMResponse
 from researchclaw.pipeline.code_agent import (
     CodeAgent,
@@ -117,154 +112,51 @@ class TestCodeAgentConfig:
 
 
 # ---------------------------------------------------------------------------
-# CLI agent env injection
+# Removed one-shot CLI agents
 # ---------------------------------------------------------------------------
 
 
-class TestCliAgentEnvInjection:
-    def test_codex_env_injects_openai_base_url_and_api_key(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        captured: dict[str, Any] = {}
+class TestRemovedOneShotCliAgents:
+    def test_create_code_agent_rejects_claude_code_provider(self, tmp_path: Path) -> None:
+        config = _rc_config_for_cli_provider(tmp_path, "claude_code")
 
-        class FakeProcess:
-            returncode = 0
+        with pytest.raises(ValueError, match="workspace_agent.transport=acp"):
+            create_code_agent(config)
 
-            def communicate(self, timeout: int) -> tuple[bytes, bytes]:
-                return b"", b""
+    def test_create_code_agent_rejects_codex_provider(self, tmp_path: Path) -> None:
+        config = _rc_config_for_cli_provider(tmp_path, "codex")
 
-        def fake_popen(*args: Any, **kwargs: Any) -> FakeProcess:
-            captured.update(kwargs)
-            return FakeProcess()
+        with pytest.raises(ValueError, match="workspace_agent.transport=acp"):
+            create_code_agent(config)
 
-        monkeypatch.setenv("MY_CODEX_KEY", "secret-key")
-        monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
-        agent = CodexAgent(
-            binary_path="codex",
-            base_url="https://provider.example.com/v1",
-            api_key_env="MY_CODEX_KEY",
-        )
-        agent._run_subprocess(["codex", "exec", "test"], tmp_path, 10)
+def _rc_config_for_cli_provider(tmp_path: Path, provider: str):
+    from researchclaw.config import RCConfig
 
-        env = captured["env"]
-        assert env["OPENAI_BASE_URL"] == "https://provider.example.com/v1"
-        assert env["OPENAI_API_KEY"] == "secret-key"
-
-    def test_codex_env_no_injection_when_fields_empty(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        captured: dict[str, Any] = {}
-
-        class FakeProcess:
-            returncode = 0
-
-            def communicate(self, timeout: int) -> tuple[bytes, bytes]:
-                return b"", b""
-
-        def fake_popen(*args: Any, **kwargs: Any) -> FakeProcess:
-            captured.update(kwargs)
-            return FakeProcess()
-
-        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.setattr(subprocess, "Popen", fake_popen)
-
-        agent = CodexAgent(binary_path="codex")
-        agent._run_subprocess(["codex", "exec", "test"], tmp_path, 10)
-
-        env = captured["env"]
-        assert "OPENAI_BASE_URL" not in env
-        assert "OPENAI_API_KEY" not in env
-
-    def test_codex_env_skips_api_key_when_env_var_not_set(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        captured: dict[str, Any] = {}
-
-        class FakeProcess:
-            returncode = 0
-
-            def communicate(self, timeout: int) -> tuple[bytes, bytes]:
-                return b"", b""
-
-        def fake_popen(*args: Any, **kwargs: Any) -> FakeProcess:
-            captured.update(kwargs)
-            return FakeProcess()
-
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.delenv("MISSING_KEY", raising=False)
-        monkeypatch.setattr(subprocess, "Popen", fake_popen)
-
-        agent = CodexAgent(binary_path="codex", api_key_env="MISSING_KEY")
-        agent._run_subprocess(["codex", "exec", "test"], tmp_path, 10)
-
-        env = captured["env"]
-        assert "OPENAI_API_KEY" not in env
-
-    def test_claude_env_injects_anthropic_vars(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        captured: dict[str, Any] = {}
-
-        class FakeProcess:
-            returncode = 0
-
-            def communicate(self, timeout: int) -> tuple[bytes, bytes]:
-                return b"", b""
-
-        def fake_popen(*args: Any, **kwargs: Any) -> FakeProcess:
-            captured.update(kwargs)
-            return FakeProcess()
-
-        monkeypatch.setenv("MY_CLAUDE_KEY", "anthropic-secret")
-        monkeypatch.setattr(subprocess, "Popen", fake_popen)
-
-        agent = ClaudeCodeAgent(
-            binary_path="claude",
-            base_url="https://anthropic-provider.example.com",
-            api_key_env="MY_CLAUDE_KEY",
-        )
-        agent._run_subprocess(["claude", "-p", "test"], tmp_path, 10)
-
-        env = captured["env"]
-        assert env["ANTHROPIC_BASE_URL"] == "https://anthropic-provider.example.com"
-        assert env["ANTHROPIC_AUTH_TOKEN"] == "anthropic-secret"
-
-    def test_create_code_agent_wires_provider_config(self, tmp_path: Path) -> None:
-        from researchclaw.config import RCConfig
-
-        data = {
-            "project": {"name": "test", "mode": "docs-first"},
-            "research": {"topic": "test", "domains": ["ml"]},
-            "runtime": {"timezone": "UTC"},
-            "notifications": {"channel": "local"},
-            "knowledge_base": {"backend": "markdown", "root": str(tmp_path / "kb")},
-            "openclaw_bridge": {"use_memory": True, "use_message": True},
-            "llm": {
-                "provider": "openai-compatible",
-                "base_url": "http://localhost:1234/v1",
-                "api_key_env": "TEST",
-                "primary_model": "test",
-                "fallback_models": [],
+    data = {
+        "project": {"name": "test", "mode": "docs-first"},
+        "research": {"topic": "test", "domains": ["ml"]},
+        "runtime": {"timezone": "UTC"},
+        "notifications": {"channel": "local"},
+        "knowledge_base": {"backend": "markdown", "root": str(tmp_path / "kb")},
+        "openclaw_bridge": {"use_memory": True, "use_message": True},
+        "llm": {
+            "provider": "openai-compatible",
+            "base_url": "http://localhost:1234/v1",
+            "api_key_env": "TEST",
+            "primary_model": "test",
+            "fallback_models": [],
+        },
+        "experiment": {
+            "mode": "sandbox",
+            "cli_agent": {
+                "provider": provider,
+                "binary_path": f"/bin/{provider}",
             },
-            "experiment": {
-                "mode": "sandbox",
-                "cli_agent": {
-                    "provider": "codex",
-                    "binary_path": "/bin/codex",
-                    "base_url": "https://provider.example.com/v1",
-                    "api_key_env": "MY_CODEX_KEY",
-                },
-            },
-        }
-        config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
-
-        agent = create_code_agent(config)
-
-        assert isinstance(agent, CodexAgent)
-        assert agent._base_url == "https://provider.example.com/v1"
-        assert agent._api_key_env == "MY_CODEX_KEY"
+        },
+        "security": {"hitl_required_stages": [5, 9, 20]},
+    }
+    return RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
 
 
 # ---------------------------------------------------------------------------

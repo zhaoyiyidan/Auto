@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import json
-import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from researchclaw.experiment.code_agent import CodeAgentResult
-from researchclaw.experiment.workspace import LaunchCommand, RunManifest
+from researchclaw.experiment.acp_workspace_agent import AcpWorkspaceAgent
+from researchclaw.experiment.workspace import WorkspaceAgentResult
 from researchclaw.experiment.workspace_agent import (
     GitWorkspaceAgent,
     WorkspaceAgentProvider,
@@ -16,104 +14,29 @@ from researchclaw.experiment.workspace_agent import (
 )
 
 
-@pytest.fixture()
-def tmp_git_repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
-    subprocess.run(
-        ["git", "config", "user.email", "test@example.com"],
-        cwd=repo,
-        check=True,
-    )
-    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
-    (repo / "README.md").write_text("# demo\n", encoding="utf-8")
-    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True)
-    return repo
-
-
-class DummyInnerAgent:
+class DummyWorkspaceAgent:
     name = "dummy"
+    session_name = "dummy-session"
 
-    def __init__(
-        self,
-        *,
-        commit: bool = True,
-        manifest: bool = True,
-        error: str | None = None,
-    ) -> None:
-        self.commit = commit
-        self.manifest = manifest
-        self.error = error
-        self.prompts: list[str] = []
+    def __init__(self) -> None:
+        self.calls: list[tuple[Path, str, Path | None, int]] = []
 
-    def generate(
+    def generate_in_workspace(
         self,
-        *,
-        exp_plan: str,
-        topic: str,
-        metric_key: str,
-        pkg_hint: str,
-        compute_budget: str,
-        extra_guidance: str,
-        workdir: Path,
+        workspace_path: Path,
+        prompt: str,
+        workdir: Path | None = None,
         timeout_sec: int = 600,
-    ) -> CodeAgentResult:
-        return self._run(extra_guidance, workdir)
-
-    def refine(
-        self,
-        *,
-        current_files: dict[str, str],
-        run_summaries: list[str],
-        metric_key: str,
-        metric_direction: str,
-        topic: str,
-        extra_hints: str,
-        workdir: Path,
-        timeout_sec: int = 600,
-    ) -> CodeAgentResult:
-        return self._run(extra_hints, workdir)
-
-    def repair(
-        self,
-        *,
-        files: dict[str, str],
-        issues: str,
-        workdir: Path,
-        timeout_sec: int = 300,
-    ) -> CodeAgentResult:
-        return self._run(issues, workdir)
-
-    def _run(self, prompt: str, workdir: Path) -> CodeAgentResult:
-        self.prompts.append(prompt)
-        (workdir / "train.py").write_text("print('trained')\n", encoding="utf-8")
-        subprocess.run(["git", "add", "train.py"], cwd=workdir, check=True)
-        if self.commit:
-            subprocess.run(["git", "commit", "-m", "agent update"], cwd=workdir, check=True)
-        if self.manifest:
-            sha = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=workdir,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
-            manifest = RunManifest(
-                code_commit=sha,
-                launch=LaunchCommand(command="python train.py"),
-                result_paths=["outputs/metrics.json"],
-            )
-            (workdir / "run_manifest.json").write_text(
-                manifest.to_json(), encoding="utf-8"
-            )
-        return CodeAgentResult(
-            files={"train.py": "print('trained')\n"},
+    ) -> WorkspaceAgentResult:
+        self.calls.append((workspace_path, prompt, workdir, timeout_sec))
+        return WorkspaceAgentResult(
+            base_sha="base",
+            agent_commit_sha="head",
+            manifest_path="run_manifest.json",
+            diff_stat=" train.py | 1 +",
+            raw_log="done",
             provider_name=self.name,
             elapsed_sec=0.01,
-            raw_output="done",
-            error=self.error,
         )
 
 
@@ -141,108 +64,80 @@ class TestWorkspaceAgentProtocol:
 
 
 class TestGitWorkspaceAgent:
-    def test_records_base_sha(self, tmp_git_repo: Path) -> None:
-        base_sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=tmp_git_repo,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
+    def test_delegates_to_workspace_native_inner(self, tmp_path: Path) -> None:
+        inner = DummyWorkspaceAgent()
+        agent = GitWorkspaceAgent(inner, tmp_path)
 
-        result = GitWorkspaceAgent(DummyInnerAgent(), tmp_git_repo).generate_in_workspace(
-            tmp_git_repo, "improve experiment"
+        result = agent.generate_in_workspace(
+            tmp_path,
+            "modify workspace",
+            workdir=tmp_path,
+            timeout_sec=123,
         )
 
-        assert result.base_sha == base_sha
-
-    def test_detects_agent_commit(self, tmp_git_repo: Path) -> None:
-        result = GitWorkspaceAgent(DummyInnerAgent(), tmp_git_repo).generate_in_workspace(
-            tmp_git_repo, "improve experiment"
-        )
-
-        assert result.agent_commit_sha is not None
-        assert result.agent_commit_sha != result.base_sha
         assert result.ok is True
+        assert result.provider_name == "dummy"
+        assert inner.calls == [(tmp_path.resolve(), "modify workspace", tmp_path, 123)]
 
-    def test_detects_missing_commit(self, tmp_git_repo: Path) -> None:
-        result = GitWorkspaceAgent(
-            DummyInnerAgent(commit=False), tmp_git_repo
-        ).generate_in_workspace(tmp_git_repo, "improve experiment")
+    def test_requires_workspace_native_inner(self, tmp_path: Path) -> None:
+        class OneShotOnly:
+            name = "old-cli"
 
-        assert result.agent_commit_sha is None
-        assert result.ok is False
-        assert "commit" in (result.error or "").lower()
-
-    def test_collects_diff_stat(self, tmp_git_repo: Path) -> None:
-        result = GitWorkspaceAgent(DummyInnerAgent(), tmp_git_repo).generate_in_workspace(
-            tmp_git_repo, "improve experiment"
-        )
-
-        assert "train.py" in result.diff_stat
-
-    def test_manifest_exists(self, tmp_git_repo: Path) -> None:
-        result = GitWorkspaceAgent(DummyInnerAgent(), tmp_git_repo).generate_in_workspace(
-            tmp_git_repo, "improve experiment"
-        )
-
-        assert result.manifest_path == "run_manifest.json"
-        assert (tmp_git_repo / "run_manifest.json").exists()
-
-    def test_manifest_missing(self, tmp_git_repo: Path) -> None:
-        result = GitWorkspaceAgent(
-            DummyInnerAgent(manifest=False), tmp_git_repo
-        ).generate_in_workspace(tmp_git_repo, "improve experiment")
-
-        assert result.manifest_path is None
-        assert result.ok is False
-        assert "manifest" in (result.error or "").lower()
+        with pytest.raises(TypeError, match="generate_in_workspace"):
+            GitWorkspaceAgent(OneShotOnly(), tmp_path)  # type: ignore[arg-type]
 
 
 class TestCreateWorkspaceAgent:
-    def test_factory_claude(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        cfg = _config(provider="claude_code", workspace_path=str(tmp_path))
-        monkeypatch.setattr("researchclaw.experiment.code_agent.shutil.which", lambda _: "claude")
+    def test_factory_creates_acp_workspace_agent(self, tmp_path: Path) -> None:
+        cfg = _config(workspace_path=str(tmp_path), agent="claude")
 
         agent = create_workspace_agent(cfg)
 
-        assert agent.name == "claude_code"
+        assert isinstance(agent, GitWorkspaceAgent)
+        assert agent.name == "acp"
+        assert isinstance(agent.inner, AcpWorkspaceAgent)
+        assert agent.inner.session.session_name == "researchclaw-code-run-1"
+        assert agent.inner.session.cwd == tmp_path
 
-    def test_factory_codex(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        cfg = _config(provider="codex", workspace_path=str(tmp_path))
-        monkeypatch.setattr("researchclaw.experiment.code_agent.shutil.which", lambda _: "codex")
+    def test_factory_supports_codex_acp_agent(self, tmp_path: Path) -> None:
+        cfg = _config(workspace_path=str(tmp_path), agent="codex")
 
         agent = create_workspace_agent(cfg)
 
-        assert agent.name == "codex"
+        assert isinstance(agent, GitWorkspaceAgent)
+        assert agent.name == "acp"
+        assert agent.inner.session.agent == "codex"
 
-    def test_factory_llm(self, tmp_path: Path) -> None:
-        cfg = _config(provider="llm", workspace_path=str(tmp_path))
+    def test_factory_rejects_non_acp_transport(self, tmp_path: Path) -> None:
+        cfg = _config(workspace_path=str(tmp_path), transport="oneshot")
 
-        with pytest.raises(RuntimeError):
-            create_workspace_agent(cfg)
-
-    def test_factory_invalid(self, tmp_path: Path) -> None:
-        cfg = _config(provider="invalid", workspace_path=str(tmp_path))
-
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Unsupported workspace agent transport"):
             create_workspace_agent(cfg)
 
 
-def _config(*, provider: str, workspace_path: str) -> Any:
+def _config(
+    *,
+    workspace_path: str,
+    agent: str = "claude",
+    transport: str = "acp",
+) -> Any:
     from researchclaw.config import (
         ExperimentConfig,
         RCConfig,
-        CliAgentConfig,
         WorkspaceAgentConfig,
     )
 
     return RCConfig(
         experiment=ExperimentConfig(
-            cli_agent=CliAgentConfig(provider=provider),
             workspace_agent=WorkspaceAgentConfig(
                 enabled=True,
+                transport=transport,
                 workspace_path=workspace_path,
+                session_name="researchclaw-code-run-1",
+                agent=agent,
+                acpx_command="acpx",
+                timeout_sec=1200,
+                max_turns=40,
             ),
         )
     )

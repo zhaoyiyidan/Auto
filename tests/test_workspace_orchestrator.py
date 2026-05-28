@@ -15,6 +15,12 @@ from researchclaw.experiment.workspace_agent_ledger import WorkspaceAgentLedger
 from researchclaw.pipeline.workspace_orchestrator import run_workspace_agent_task
 
 
+def test_legacy_workspace_pipeline_alias_removed() -> None:
+    import researchclaw.pipeline.workspace_orchestrator as orchestrator
+
+    assert not hasattr(orchestrator, "run_workspace_pipeline")
+
+
 class DummySession:
     def __init__(self) -> None:
         self.exports: list[Path] = []

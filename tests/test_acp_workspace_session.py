@@ -112,19 +112,17 @@ def test_ensure_session_falls_back_to_new(
 
     session.ensure_session()
 
-    assert calls[-3:] == [
-        [
-            "acpx",
-            "--ttl",
-            "0",
-            "--cwd",
-            str(tmp_path.resolve()),
-            "claude",
-            "sessions",
-            "new",
-            "--name",
-            "researchclaw-code-run-1",
-        ]
+    assert calls[-1] == [
+        "acpx",
+        "--ttl",
+        "0",
+        "--cwd",
+        str(tmp_path.resolve()),
+        "claude",
+        "sessions",
+        "new",
+        "--name",
+        "researchclaw-code-run-1",
     ]
 
 

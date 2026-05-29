@@ -85,7 +85,7 @@ def test_workspace_native_stage_contracts_are_exact():
             ("run_manifest.json",),
             ("manifest_validation.json", "run_manifest.json"),
             "E11_MANIFEST_INVALID",
-            1,
+            0,
         ),
         Stage.HARNESS_SUBMIT_AND_COLLECT: (
             ("manifest_validation.json",),
@@ -95,9 +95,9 @@ def test_workspace_native_stage_contracts_are_exact():
         ),
         Stage.EXPERIMENT_ROUTE_DECISION: (
             ("execution_record.json",),
-            ("refine_record.json", "run_manifest.json"),
-            "E13_REFINE_FAIL",
-            2,
+            ("experiment_decision.json",),
+            "E13_ROUTE_FAIL",
+            0,
         ),
         Stage.RESULT_ANALYSIS: (
             ("execution_record.json",),

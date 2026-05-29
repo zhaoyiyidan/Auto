@@ -532,6 +532,71 @@ External AI agents (Claude, OpenClaw) can interact with the HITL system via MCP 
 
 This enables **agent-in-the-loop** workflows where another AI system reviews and approves the pipeline's work.
 
+### Lark/Feishu Bot Listener
+
+`researchclaw lark-listen <run_dir>` runs a separate daemon that bridges a
+Feishu group chat into the existing HITL file wait loop. The pipeline process
+does not import Lark code: it keeps blocking on `hitl/response.json`, while the
+listener sends the pause prompt, reads human replies from the configured chat,
+and writes the response file that resumes the run.
+
+Setup:
+
+1. Create a Feishu/Lark app bot and add it to the review group.
+2. Install and authenticate the official `lark-cli`.
+3. Get the group `chat_id` (`oc_...`), for example with
+   `lark-cli api GET /open-apis/im/v1/chats --format json`.
+4. Export `LARK_APP_ID` and `LARK_APP_SECRET`, or set local gitignored config
+   values for testing.
+5. Start the pipeline in a HITL mode so it writes `<run_dir>/hitl/waiting.json`.
+6. In a second terminal, run `researchclaw lark-listen <run_dir>`.
+
+Example local config:
+
+```yaml
+notifications:
+  channel: lark
+  lark:
+    enabled: true
+    app_id_env: LARK_APP_ID
+    app_secret_env: LARK_APP_SECRET
+    targets:
+      review_group:
+        kind: chat
+        receive_id_type: chat_id
+        receive_id: oc_abc123
+    hitl:
+      enabled: true
+      chat_id: oc_abc123
+      poll_interval_sec: 2.0
+      reply_timeout_sec: 0
+      allowed_actions: [approve, reject, abort, skip, inject]
+      allowed_senders: []
+      notify: true
+```
+
+Reply grammar:
+
+| Reply | Action |
+|-------|--------|
+| `approve`, `ok`, `lgtm`, `yes`, `同意`, `通过` | approve |
+| `reject: reason`, `no`, `拒绝`, `驳回` | reject |
+| `abort`, `stop`, `cancel`, `终止`, `取消` | abort |
+| `skip`, `跳过` | skip |
+| `guidance: text`, `guide: text`, `inject: text`, `指导: text`, `建议: text` | inject guidance |
+| `edit`, `collaborate`, `resume`, `take_over` | matching HITL action when allowed |
+| `rollback: 7` | rollback to stage 7 |
+
+Security notes:
+
+- Prefer environment variables for app credentials. Plain config values are only
+  for local gitignored testing.
+- Use `allowed_senders` to restrict who can resume a run from a group chat.
+- Use `allowed_actions` to narrow chat-driven actions even when the waiting
+  state allows more.
+- Direct 1:1 DM support is not included in this listener; use a group `chat_id`
+  that contains the bot.
+
 ---
 
 ## 13. Configuration Reference

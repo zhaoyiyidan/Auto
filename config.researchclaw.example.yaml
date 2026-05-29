@@ -43,6 +43,14 @@ notifications:
   #       kind: "chat"
   #       receive_id_type: "chat_id"
   #       receive_id: "oc_xxx"
+  #   hitl:
+  #     enabled: false
+  #     chat_id: "oc_xxx"
+  #     poll_interval_sec: 2.0
+  #     reply_timeout_sec: 0
+  #     allowed_actions: ["approve", "reject", "abort", "skip", "inject"]
+  #     allowed_senders: []
+  #     notify: true
 
 knowledge_base:
   backend: "markdown"

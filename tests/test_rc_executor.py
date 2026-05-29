@@ -1804,7 +1804,13 @@ class TestSynthesizePerspectives:
 
 
 class TestHypothesisGenDebate:
-    def _acp_config(self, rc_config: RCConfig, tmp_path: Path) -> RCConfig:
+    def _acp_config(
+        self,
+        rc_config: RCConfig,
+        tmp_path: Path,
+        *,
+        enable_debate: bool = True,
+    ) -> RCConfig:
         data = rc_config.to_dict()
         data["llm"]["provider"] = "acp"
         data["llm"]["acp"] = {
@@ -1814,6 +1820,7 @@ class TestHypothesisGenDebate:
             "session_name": "main",
             "debate_max_rounds": 2,
             "debate_confidence_min": 0.6,
+            "enable_debate": enable_debate,
         }
         data["security"]["hitl_required_stages"] = list(
             data["security"]["hitl_required_stages"]
@@ -1953,6 +1960,83 @@ class TestHypothesisGenDebate:
         assert not (stage_dir / "perspectives").exists()
         assert "judge" not in output.lower()
         assert "debate" not in output.lower()
+
+    def test_hypothesis_gen_acp_debate_skipped_when_disabled(
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _stub_novelty_check(monkeypatch)
+        from researchclaw.pipeline.stage_impls import _hypothesis_debate
+
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-08"
+        stage_dir.mkdir(parents=True)
+        _write_prior_artifact(run_dir, 7, "synthesis.md", "# Synthesis\nGap found.")
+        config = self._acp_config(rc_config, tmp_path, enable_debate=False)
+
+        called = {"debate": False}
+
+        def fake_debate(*args: object, **kwargs: object) -> str:
+            _ = args, kwargs
+            called["debate"] = True
+            return "## H1: should not appear\nStatement: debate ran."
+
+        monkeypatch.setattr(_hypothesis_debate, "run_acp_debate", fake_debate)
+        fake_llm = FakeLLMClient("## H1\nFallback hypothesis")
+
+        result = rc_executor._execute_hypothesis_gen(
+            stage_dir, run_dir, config, adapters, llm=fake_llm
+        )
+
+        # Debate skipped -> never invoked, falls straight through to
+        # multi-perspective generation. (A raised exception would be swallowed by
+        # the stage's try/except, so assert on the call flag, not on raising.)
+        output = (stage_dir / "hypotheses.md").read_text(encoding="utf-8")
+        assert called["debate"] is False
+        assert "should not appear" not in output
+        assert result.status == StageStatus.DONE
+        assert (stage_dir / "perspectives").exists()
+        assert len(list((stage_dir / "perspectives").glob("*.md"))) == 3
+
+    def test_hypothesis_gen_acp_debate_runs_when_enabled(
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _stub_novelty_check(monkeypatch)
+        from researchclaw.pipeline.stage_impls import _hypothesis_debate
+
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-08"
+        stage_dir.mkdir(parents=True)
+        _write_prior_artifact(run_dir, 7, "synthesis.md", "# Synthesis\nGap found.")
+        config = self._acp_config(rc_config, tmp_path, enable_debate=True)
+
+        called = {"debate": False}
+
+        def fake_debate(*args: object, **kwargs: object) -> str:
+            _ = args, kwargs
+            called["debate"] = True
+            return "## H1: Debate-derived hypothesis\nStatement: from debate."
+
+        monkeypatch.setattr(_hypothesis_debate, "run_acp_debate", fake_debate)
+
+        result = rc_executor._execute_hypothesis_gen(
+            stage_dir, run_dir, config, adapters, llm=FakeLLMClient("unused")
+        )
+
+        output = (stage_dir / "hypotheses.md").read_text(encoding="utf-8")
+        assert called["debate"] is True
+        assert "hypotheses.md" in result.artifacts
+        assert "Debate-derived hypothesis" in output
+        assert not (stage_dir / "perspectives").exists()
 
     def test_hypothesis_gen_acp_debate_failure_falls_back_to_perspectives(
         self,

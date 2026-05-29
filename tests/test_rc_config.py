@@ -302,6 +302,39 @@ def test_acp_config_default_base_url_and_api_key_env():
     assert cfg.debate_confidence_min == 0.6
 
 
+def test_acp_config_enable_debate_defaults_true():
+    cfg = AcpConfig()
+
+    assert cfg.enable_debate is True
+
+
+def test_acp_config_enable_debate_override_false(tmp_path: Path):
+    data = _valid_config_data()
+    data["llm"] = {
+        "provider": "acp",
+        "acp": {
+            "agent": "codex",
+            "enable_debate": False,
+        },
+    }
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.llm.acp.enable_debate is False
+
+
+def test_acp_config_enable_debate_defaults_true_when_absent(tmp_path: Path):
+    data = _valid_config_data()
+    data["llm"] = {
+        "provider": "acp",
+        "acp": {"agent": "codex"},
+    }
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.llm.acp.enable_debate is True
+
+
 def test_acp_config_roundtrip_custom_provider_fields(tmp_path: Path):
     data = _valid_config_data()
     data["llm"] = {

@@ -1156,6 +1156,50 @@ class TestWorkspaceAgentStageWiring:
         assert provenance["commits"] == ["commit-1"]
         assert provenance["result_hashes"]["outputs/metrics.json"] == "sha"
 
+    def test_stage14_ignores_stray_refine_record(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        cfg = _workspace_agent_rc_config(tmp_path)
+        self._write_stage12_execution(run_dir, metrics={"accuracy": 0.91})
+        _write_prior_artifact(
+            run_dir,
+            13,
+            "refine_record.json",
+            json.dumps(
+                {
+                    "best_metric": 0.01,
+                    "iterations": [
+                        {"sandbox": {"metrics": {"accuracy": 0.01}}},
+                    ],
+                }
+            ),
+        )
+        stage_dir = run_dir / "stage-14"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_result_analysis(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.DONE
+        summary = json.loads(
+            (stage_dir / "experiment_summary.json").read_text(encoding="utf-8")
+        )
+        assert summary["best_metric"] == 0.91
+
+    def test_stage14_analysis_has_no_r13_merge_block(self) -> None:
+        import inspect
+        import researchclaw.pipeline.stage_impls._analysis as analysis
+
+        assert "R13-1" not in inspect.getsource(analysis)
+
 
 def _workspace_agent_rc_config(tmp_path: Path) -> RCConfig:
     workspace = tmp_path / "workspace"

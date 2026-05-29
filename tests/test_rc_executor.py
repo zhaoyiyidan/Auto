@@ -303,19 +303,61 @@ class TestWorkspaceAgentStageWiring:
         assert "Do not submit" in prompt
         assert "run_manifest.json" in prompt
 
-    def test_stage10_calls_workspace_agent_task(
+    def test_stage10_drives_agent_implement_and_copies_manifest(
         self,
         tmp_path: Path,
         run_dir: Path,
         adapters: AdapterBundle,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        from researchclaw.experiment.workspace import LaunchCommand, RunManifest
+
         cfg = _workspace_agent_rc_config(tmp_path)
         calls: list[dict[str, Any]] = []
         agent = object()
-        submitter = object()
 
-        _patch_workspace_runner(monkeypatch, calls, agent, submitter)
+        monkeypatch.setattr(
+            "researchclaw.experiment.workspace_agent.create_workspace_agent",
+            lambda *args, **kwargs: agent,
+        )
+
+        def fake_implement(**kwargs: Any):
+            from researchclaw.experiment.workspace import WorkspaceAgentResult
+
+            calls.append(kwargs)
+            workspace = Path(cfg.experiment.workspace_agent.workspace_path)
+            manifest = RunManifest(
+                code_commit="head",
+                launch=LaunchCommand(command="python train.py"),
+                result_paths=["outputs/metrics.json"],
+            )
+            (workspace / "run_manifest.json").write_text(
+                manifest.to_json(),
+                encoding="utf-8",
+            )
+            return WorkspaceAgentResult(
+                base_sha="base",
+                agent_commit_sha="head",
+                manifest_path="run_manifest.json",
+                diff_stat=" train.py | 1 +",
+                raw_log="done",
+                provider_name="acp",
+                elapsed_sec=0.1,
+            )
+
+        monkeypatch.setattr(
+            "researchclaw.pipeline.workspace_orchestrator.run_workspace_agent_implement",
+            fake_implement,
+        )
+        _write_prior_artifact(
+            run_dir,
+            9,
+            "task_spec.yaml",
+            "workspace: .\nobjective: improve\nconstraints: []\n"
+            "primary_metric: accuracy\nmetric_direction: maximize\n"
+            "allowed_scope: ['.']\nforbidden_scope: []\n"
+            "expected_outputs: ['outputs/metrics.json']\n",
+        )
         stage_dir = run_dir / "stage-10"
         stage_dir.mkdir()
 
@@ -330,8 +372,66 @@ class TestWorkspaceAgentStageWiring:
         assert result.status is StageStatus.DONE
         assert calls[0]["stage"] == 10
         assert calls[0]["agent"] is agent
-        assert calls[0]["submitter"] is submitter
-        assert calls[0]["close_policy"] == "close"
+        assert calls[0]["close_policy"] == "keep"
+        assert "submitter" not in calls[0]
+        assert (stage_dir / "run_manifest.json").is_file()
+        assert (stage_dir / "stage-10-workspace-agent-result.json").is_file()
+
+    def test_stage10_failed_agent_does_not_copy_manifest(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg = _workspace_agent_rc_config(tmp_path)
+        agent = object()
+
+        monkeypatch.setattr(
+            "researchclaw.experiment.workspace_agent.create_workspace_agent",
+            lambda *args, **kwargs: agent,
+        )
+
+        def fake_implement(**kwargs: Any):
+            from researchclaw.experiment.workspace import WorkspaceAgentResult
+
+            return WorkspaceAgentResult(
+                base_sha="base",
+                agent_commit_sha=None,
+                manifest_path=None,
+                diff_stat="",
+                raw_log="no commit",
+                provider_name="acp",
+                elapsed_sec=0.1,
+                error="Agent did not create a new git commit",
+            )
+
+        monkeypatch.setattr(
+            "researchclaw.pipeline.workspace_orchestrator.run_workspace_agent_implement",
+            fake_implement,
+        )
+        _write_prior_artifact(
+            run_dir,
+            9,
+            "task_spec.yaml",
+            "workspace: .\nobjective: improve\nconstraints: []\n"
+            "primary_metric: accuracy\nmetric_direction: maximize\n"
+            "allowed_scope: ['.']\nforbidden_scope: []\n"
+            "expected_outputs: ['outputs/metrics.json']\n",
+        )
+        stage_dir = run_dir / "stage-10"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_code_generation(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=FakeLLMClient(),
+        )
+
+        assert result.status is StageStatus.FAILED
+        assert not (stage_dir / "run_manifest.json").exists()
 
     def test_stage13_calls_workspace_agent_task(
         self,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 import time
 from dataclasses import asdict
@@ -14,7 +15,10 @@ from researchclaw.experiment.record import (
 )
 from researchclaw.experiment.submitter import TrainingSubmitter
 from researchclaw.experiment.workspace import (
+    ExecutionRecord,
     ExperimentRecord,
+    ResultArtifact,
+    ResultArtifacts,
     RunManifest,
     SubmitRequest,
     SubmitResult,
@@ -154,6 +158,95 @@ def run_workspace_agent_implement(
     return result
 
 
+def submit_and_collect(
+    manifest: RunManifest,
+    submitter: TrainingSubmitter,
+    workspace_path: Path,
+    run_dir: Path,
+    stage: int,
+    *,
+    wait: bool,
+    timeout_sec: int,
+    poll_interval_sec: int,
+    base_sha: str,
+    agent_commit_sha: str,
+    provider: str,
+    session_name: str,
+) -> ExecutionRecord:
+    """Submit a manifest launch command and record result provenance."""
+    started = time.monotonic()
+    workspace = workspace_path.resolve()
+    run_dir.mkdir(parents=True, exist_ok=True)
+    submit_result = submit_job(
+        submitter,
+        SubmitRequest(
+            manifest=manifest,
+            workspace_path=workspace,
+            run_dir=run_dir,
+            stage=stage,
+        ),
+    )
+    final_status = (
+        wait_for_completion(
+            submitter,
+            submit_result,
+            timeout_sec=timeout_sec,
+            poll_interval_sec=poll_interval_sec,
+        )
+        if wait
+        else submit_result.status
+    )
+    result_artifacts = _collect_result_artifacts(manifest, workspace)
+    result_hashes = {
+        artifact.path: artifact.sha256
+        for artifact in result_artifacts.artifacts
+        if artifact.exists and artifact.sha256
+    }
+    execution = ExecutionRecord(
+        stage=stage,
+        code_commit=manifest.code_commit,
+        submitter=submit_result.submitter_name,
+        job_id=submit_result.job_id,
+        submit_status=submit_result.status,
+        final_status=final_status,
+        log_path=str(submit_result.metadata.get("log_path", "")),
+        result_paths=manifest.result_paths,
+        result_hashes=result_hashes,
+        metrics=_collect_metrics(manifest.result_paths, workspace),
+        elapsed_sec=round(time.monotonic() - started, 6),
+        waited=wait,
+        recorded_at=_utcnow_iso(),
+    )
+    (run_dir / "submit_result.json").write_text(
+        json.dumps(asdict(submit_result), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    (run_dir / "execution_record.json").write_text(
+        json.dumps(execution.to_dict(), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    (run_dir / "result_artifacts.json").write_text(
+        json.dumps(result_artifacts.to_dict(), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    record = ExperimentRecord(
+        workspace=str(workspace),
+        stage=stage,
+        base_sha=base_sha,
+        agent_commit_sha=agent_commit_sha,
+        provider=provider,
+        session_name=session_name,
+        agent_manifest="run_manifest.json",
+        submitter=submit_result.submitter_name,
+        job_id=submit_result.job_id,
+        result_paths=manifest.result_paths,
+        result_hashes=result_hashes,
+        recorded_at=_utcnow_iso(),
+    )
+    ExperimentRegistry(run_dir / "workspace_experiment_registry.jsonl").append(record)
+    return execution
+
+
 def run_workspace_agent_task(
     workspace_path: Path,
     run_dir: Path,
@@ -271,6 +364,72 @@ def _write_workspace_agent_result(
         json.dumps(asdict(result), indent=2, sort_keys=True),
         encoding="utf-8",
     )
+
+
+def _collect_result_artifacts(
+    manifest: RunManifest,
+    workspace: Path,
+) -> ResultArtifacts:
+    artifacts: list[ResultArtifact] = []
+    root = workspace.resolve()
+    for rel in manifest.result_paths:
+        path = (root / rel).resolve()
+        if not path.exists():
+            artifacts.append(
+                ResultArtifact(path=rel, sha256="", size_bytes=0, exists=False)
+            )
+            continue
+        artifacts.append(
+            ResultArtifact(
+                path=rel,
+                sha256=_sha256_path(path),
+                size_bytes=_path_size(path),
+                exists=True,
+            )
+        )
+    return ResultArtifacts(
+        code_commit=manifest.code_commit,
+        artifacts=artifacts,
+        collected_at=_utcnow_iso(),
+    )
+
+
+def _collect_metrics(result_paths: list[str], workspace: Path) -> dict[str, object]:
+    metrics: dict[str, object] = {}
+    for rel in result_paths:
+        path = (workspace / rel).resolve()
+        if not path.is_file() or path.suffix.lower() != ".json":
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            metrics.update(payload)
+    return metrics
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    if path.is_file():
+        _update_digest_from_file(digest, path)
+        return digest.hexdigest()
+    for child in sorted(item for item in path.rglob("*") if item.is_file()):
+        digest.update(child.relative_to(path).as_posix().encode("utf-8"))
+        _update_digest_from_file(digest, child)
+    return digest.hexdigest()
+
+
+def _update_digest_from_file(digest: "hashlib._Hash", path: Path) -> None:
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+
+
+def _path_size(path: Path) -> int:
+    if path.is_file():
+        return path.stat().st_size
+    return sum(child.stat().st_size for child in path.rglob("*") if child.is_file())
 
 
 def _manifest_from_result(

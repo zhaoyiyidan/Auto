@@ -80,13 +80,19 @@ def _message_item(
     }
 
 
-def _stdout_with_items(items: list[dict[str, object]], *, has_more: bool = False) -> str:
+def _stdout_with_items(
+    items: list[dict[str, object]],
+    *,
+    has_more: bool = False,
+    page_token: str = "",
+) -> str:
     return json.dumps(
         {
             "code": 0,
             "data": {
                 "items": items,
                 "has_more": has_more,
+                "page_token": page_token,
             },
         },
         ensure_ascii=False,
@@ -264,3 +270,52 @@ def test_create_time_ms_string_coerced_int():
         )
 
     assert messages[0].create_time_ms == 12345
+
+
+def test_paginates_until_has_more_false():
+    with patch("researchclaw.notify.lark.subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            _completed(
+                stdout=_stdout_with_items(
+                    [_message_item(message_id="om_1")],
+                    has_more=True,
+                    page_token="next-token",
+                )
+            ),
+            _completed(
+                stdout=_stdout_with_items(
+                    [_message_item(message_id="om_2")],
+                    has_more=False,
+                )
+            ),
+        ]
+
+        messages = LarkMessageReader(_config()).list_messages(
+            chat_id="oc_abc123",
+            since_iso="1970-01-01T00:00:00+00:00",
+        )
+
+    assert [message.message_id for message in messages] == ["om_1", "om_2"]
+    assert mock_run.call_count == 2
+    second_params = _params_from_command(mock_run.call_args_list[1].args[0])
+    assert second_params["page_token"] == "next-token"
+
+
+def test_pagination_capped_by_max_pages():
+    with patch("researchclaw.notify.lark.subprocess.run") as mock_run:
+        mock_run.return_value = _completed(
+            stdout=_stdout_with_items(
+                [_message_item(message_id="om_1")],
+                has_more=True,
+                page_token="next-token",
+            )
+        )
+
+        messages = LarkMessageReader(_config()).list_messages(
+            chat_id="oc_abc123",
+            since_iso="1970-01-01T00:00:00+00:00",
+            max_pages=1,
+        )
+
+    assert [message.message_id for message in messages] == ["om_1"]
+    assert mock_run.call_count == 1

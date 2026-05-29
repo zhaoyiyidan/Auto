@@ -545,7 +545,7 @@ def test_pivot_decision_triggers_rollback_to_hypothesis_gen(
     assert history[0]["decision"] == "pivot"
 
 
-def test_refine_decision_triggers_rollback_to_iterative_refine(
+def test_refine_decision_runs_workspace_refine_iteration(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,
     rc_config: RCConfig,
@@ -570,9 +570,58 @@ def test_refine_decision_triggers_rollback_to_iterative_refine(
         config=rc_config,
         adapters=adapters,
     )
-    # Should have seen ITERATIVE_REFINE at least twice
-    refine_stage_count = sum(1 for s in seen if s == Stage.CODE_AGENT_REFINE)
-    assert refine_stage_count >= 2
+    decision_index = seen.index(Stage.RESEARCH_DECISION)
+    assert seen[decision_index + 1 : decision_index + 5] == [
+        Stage.CODE_AGENT_REFINE,
+        Stage.MANIFEST_VALIDATE_AND_PREPARE,
+        Stage.HARNESS_SUBMIT_AND_COLLECT,
+        Stage.RESULT_ANALYSIS,
+    ]
+
+
+def test_run_refine_iteration_versions_and_executes_13_11_12_14(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    for num in (11, 12, 13, 14):
+        stage_dir = run_dir / f"stage-{num:02d}"
+        stage_dir.mkdir()
+        (stage_dir / "marker.txt").write_text(str(num), encoding="utf-8")
+    seen: list[Stage] = []
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        seen.append(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+
+    results = rc_runner._run_refine_iteration(
+        run_dir=run_dir,
+        run_id="run-refine",
+        config=rc_config,
+        adapters=adapters,
+        attempt=1,
+        auto_approve_gates=True,
+        stop_on_gate=False,
+        skip_noncritical=False,
+        kb_root=None,
+        cancel_event=None,
+    )
+
+    assert [result.stage for result in results] == [
+        Stage.CODE_AGENT_REFINE,
+        Stage.MANIFEST_VALIDATE_AND_PREPARE,
+        Stage.HARNESS_SUBMIT_AND_COLLECT,
+        Stage.RESULT_ANALYSIS,
+    ]
+    assert seen == [result.stage for result in results]
+    assert (run_dir / "stage-11_v1").is_dir()
+    assert (run_dir / "stage-12_v1").is_dir()
+    assert (run_dir / "stage-13_v1").is_dir()
+    assert (run_dir / "stage-14_v1").is_dir()
 
 
 def test_max_pivot_count_prevents_infinite_loop(

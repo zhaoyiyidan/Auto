@@ -283,12 +283,12 @@ class TestWorkspaceAgentStageWiring:
         assert "run_manifest.json" in prompt
         assert "main.py" not in prompt
 
-    def test_workspace_refine_prompt_has_agent_contract(self) -> None:
-        from researchclaw.pipeline.stage_impls._execution import (
-            _workspace_refine_prompt,
+    def test_stage10_repair_or_refine_prompt_has_agent_contract(self) -> None:
+        from researchclaw.pipeline.stage_impls._code_generation import (
+            _repair_or_refine_prompt,
         )
 
-        prompt = _workspace_refine_prompt(
+        prompt = _repair_or_refine_prompt(
             topic="topic",
             metric_key="accuracy",
             metric_direction="maximize",
@@ -296,6 +296,7 @@ class TestWorkspaceAgentStageWiring:
             project_files=["train.py"],
             run_summaries=["previous run"],
             manifest_filename="run_manifest.json",
+            repair_request={"reason": "code_defect", "errors": ["accuracy stuck at 0"]},
         )
 
         assert prompt.count("MUST") >= 6
@@ -303,6 +304,62 @@ class TestWorkspaceAgentStageWiring:
         assert "git commit" in prompt.lower()
         assert "Do not submit" in prompt
         assert "run_manifest.json" in prompt
+        assert "REPAIR REQUEST" in prompt
+        assert "accuracy stuck at 0" in prompt
+
+    def _write_stage10_task_spec(self, run_dir: Path) -> None:
+        _write_prior_artifact(
+            run_dir,
+            9,
+            "task_spec.yaml",
+            "workspace: .\nobjective: improve\nconstraints: []\n"
+            "primary_metric: accuracy\nmetric_direction: maximize\n"
+            "allowed_scope: ['.']\nforbidden_scope: []\n"
+            "expected_outputs: ['outputs/metrics.json']\n",
+        )
+
+    def _install_stage10_success_agent(
+        self,
+        cfg: RCConfig,
+        monkeypatch: pytest.MonkeyPatch,
+        calls: list[dict[str, Any]],
+    ) -> None:
+        from researchclaw.experiment.workspace import LaunchCommand, RunManifest
+
+        agent = object()
+        monkeypatch.setattr(
+            "researchclaw.experiment.workspace_agent.create_workspace_agent",
+            lambda *args, **kwargs: agent,
+        )
+
+        def fake_implement(**kwargs: Any):
+            from researchclaw.experiment.workspace import WorkspaceAgentResult
+
+            calls.append(kwargs)
+            workspace = Path(cfg.experiment.workspace_agent.workspace_path)
+            manifest = RunManifest(
+                code_commit="head",
+                launch=LaunchCommand(command="python train.py"),
+                result_paths=["outputs/metrics.json"],
+            )
+            (workspace / "run_manifest.json").write_text(
+                manifest.to_json(),
+                encoding="utf-8",
+            )
+            return WorkspaceAgentResult(
+                base_sha="base",
+                agent_commit_sha="head",
+                manifest_path="run_manifest.json",
+                diff_stat=" train.py | 1 +",
+                raw_log="done",
+                provider_name="acp",
+                elapsed_sec=0.1,
+            )
+
+        monkeypatch.setattr(
+            "researchclaw.pipeline.workspace_orchestrator.run_workspace_agent_implement",
+            fake_implement,
+        )
 
     def test_stage10_drives_agent_implement_and_copies_manifest(
         self,
@@ -377,6 +434,108 @@ class TestWorkspaceAgentStageWiring:
         assert "submitter" not in calls[0]
         assert (stage_dir / "run_manifest.json").is_file()
         assert (stage_dir / "stage-10-workspace-agent-result.json").is_file()
+
+    def test_stage10_initial_prompt_has_no_repair_section(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg = _workspace_agent_rc_config(tmp_path)
+        calls: list[dict[str, Any]] = []
+        self._install_stage10_success_agent(cfg, monkeypatch, calls)
+        self._write_stage10_task_spec(run_dir)
+        stage_dir = run_dir / "stage-10"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_code_generation(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=FakeLLMClient(),
+        )
+
+        assert result.status is StageStatus.DONE
+        assert "REPAIR REQUEST" not in calls[0]["prompt"]
+
+    def test_stage10_repair_merges_repair_request_into_prompt(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg = _workspace_agent_rc_config(tmp_path)
+        calls: list[dict[str, Any]] = []
+        self._install_stage10_success_agent(cfg, monkeypatch, calls)
+        self._write_stage10_task_spec(run_dir)
+        (run_dir / "repair_request.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "researchclaw.repair_request.v1",
+                    "origin_stage": 13,
+                    "reason": "code_defect",
+                    "errors": ["accuracy stuck at 0"],
+                    "iteration": 2,
+                }
+            ),
+            encoding="utf-8",
+        )
+        stage_dir = run_dir / "stage-10"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_code_generation(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=FakeLLMClient(),
+        )
+
+        assert result.status is StageStatus.DONE
+        assert "REPAIR REQUEST" in calls[0]["prompt"]
+        assert "accuracy stuck at 0" in calls[0]["prompt"]
+
+    def test_stage10_consumes_and_clears_repair_request(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg = _workspace_agent_rc_config(tmp_path)
+        calls: list[dict[str, Any]] = []
+        self._install_stage10_success_agent(cfg, monkeypatch, calls)
+        self._write_stage10_task_spec(run_dir)
+        repair_request = run_dir / "repair_request.json"
+        repair_request.write_text(
+            json.dumps(
+                {
+                    "schema_version": "researchclaw.repair_request.v1",
+                    "origin_stage": 11,
+                    "reason": "manifest_invalid",
+                    "errors": ["result_paths must contain at least one path"],
+                    "iteration": 1,
+                }
+            ),
+            encoding="utf-8",
+        )
+        stage_dir = run_dir / "stage-10"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_code_generation(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=FakeLLMClient(),
+        )
+
+        assert result.status is StageStatus.DONE
+        assert not repair_request.is_file()
+        assert list(run_dir.glob("repair_request_consumed_v*.json"))
 
     def test_stage10_failed_agent_does_not_copy_manifest(
         self,

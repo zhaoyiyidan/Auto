@@ -12,7 +12,10 @@ from researchclaw.experiment.workspace import (
     WorkspaceAgentResult,
 )
 from researchclaw.experiment.workspace_agent_ledger import WorkspaceAgentLedger
-from researchclaw.pipeline.workspace_orchestrator import run_workspace_agent_task
+from researchclaw.pipeline.workspace_orchestrator import (
+    run_workspace_agent_task,
+    wait_for_completion,
+)
 
 
 def test_legacy_workspace_pipeline_alias_removed() -> None:
@@ -92,6 +95,59 @@ class DummySubmitter:
             status="submitted",
             metadata={"command": request.manifest.launch.command},
         )
+
+
+class PollingDummySubmitter:
+    name = "polling"
+
+    def __init__(self, states: list[str]) -> None:
+        self.states = states
+
+    def poll(self, result: SubmitResult) -> str:
+        if self.states:
+            return self.states.pop(0)
+        return "running"
+
+
+def test_wait_for_completion_polls_until_terminal_state() -> None:
+    submitter = PollingDummySubmitter(["running", "running", "completed"])
+    result = SubmitResult(job_id="job-1", submitter_name="polling", status="submitted")
+
+    final_status = wait_for_completion(
+        submitter,
+        result,
+        timeout_sec=5,
+        poll_interval_sec=0,
+    )
+
+    assert final_status == "completed"
+
+
+def test_wait_for_completion_times_out() -> None:
+    submitter = PollingDummySubmitter(["running"])
+    result = SubmitResult(job_id="job-1", submitter_name="polling", status="submitted")
+
+    final_status = wait_for_completion(
+        submitter,
+        result,
+        timeout_sec=0,
+        poll_interval_sec=0,
+    )
+
+    assert final_status == "timeout"
+
+
+def test_wait_for_completion_without_poll_returns_unknown() -> None:
+    result = SubmitResult(job_id="job-1", submitter_name="dummy", status="submitted")
+
+    final_status = wait_for_completion(
+        DummySubmitter(),
+        result,
+        timeout_sec=5,
+        poll_interval_sec=0,
+    )
+
+    assert final_status == "unknown"
 
 
 def test_run_workspace_agent_task_writes_ledger_registry_and_hashes(tmp_path: Path) -> None:

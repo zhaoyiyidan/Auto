@@ -319,3 +319,94 @@ def test_pagination_capped_by_max_pages():
 
     assert [message.message_id for message in messages] == ["om_1"]
     assert mock_run.call_count == 1
+
+
+def test_subprocess_oserror_returns_empty():
+    with patch("researchclaw.notify.lark.subprocess.run") as mock_run:
+        mock_run.side_effect = OSError("os error")
+
+        messages = LarkMessageReader(_config()).list_messages(
+            chat_id="oc_abc123",
+            since_iso="1970-01-01T00:00:00+00:00",
+        )
+
+    assert messages == []
+
+
+def test_timeout_returns_empty():
+    with patch("researchclaw.notify.lark.subprocess.run") as mock_run:
+        mock_run.side_effect = subprocess.TimeoutExpired("lark-cli", timeout=15)
+
+        messages = LarkMessageReader(_config()).list_messages(
+            chat_id="oc_abc123",
+            since_iso="1970-01-01T00:00:00+00:00",
+        )
+
+    assert messages == []
+
+
+def test_filenotfound_returns_empty():
+    with patch("researchclaw.notify.lark.subprocess.run") as mock_run:
+        mock_run.side_effect = FileNotFoundError("missing")
+
+        messages = LarkMessageReader(_config()).list_messages(
+            chat_id="oc_abc123",
+            since_iso="1970-01-01T00:00:00+00:00",
+        )
+
+    assert messages == []
+
+
+def test_api_business_error_returns_empty():
+    with patch("researchclaw.notify.lark.subprocess.run") as mock_run:
+        mock_run.return_value = _completed(
+            stdout='{"code":99991663,"msg":"container id invalid"}'
+        )
+
+        messages = LarkMessageReader(_config()).list_messages(
+            chat_id="oc_abc123",
+            since_iso="1970-01-01T00:00:00+00:00",
+        )
+
+    assert messages == []
+
+
+def test_invalid_json_returns_empty():
+    with patch("researchclaw.notify.lark.subprocess.run") as mock_run:
+        mock_run.return_value = _completed(stdout="{bad")
+
+        messages = LarkMessageReader(_config()).list_messages(
+            chat_id="oc_abc123",
+            since_iso="1970-01-01T00:00:00+00:00",
+        )
+
+    assert messages == []
+
+
+def test_secret_not_logged_on_error(caplog: pytest.LogCaptureFixture):
+    secret = "reader-secret-value"
+    with patch("researchclaw.notify.lark.subprocess.run") as mock_run:
+        mock_run.return_value = _completed(
+            stdout=json.dumps({"code": 999, "msg": f"failed {secret}"}),
+        )
+
+        with caplog.at_level("WARNING", logger="researchclaw.notify.lark"):
+            messages = LarkMessageReader(_config(app_secret=secret)).list_messages(
+                chat_id="oc_abc123",
+                since_iso="1970-01-01T00:00:00+00:00",
+            )
+
+    assert messages == []
+    assert secret not in caplog.text
+    assert "[redacted]" in caplog.text
+
+
+def test_empty_chat_id_no_subprocess():
+    with patch("researchclaw.notify.lark.subprocess.run") as mock_run:
+        messages = LarkMessageReader(_config()).list_messages(
+            chat_id="",
+            since_iso="1970-01-01T00:00:00+00:00",
+        )
+
+    assert messages == []
+    mock_run.assert_not_called()

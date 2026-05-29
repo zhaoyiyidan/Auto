@@ -416,9 +416,10 @@ STAGES["result_analysis"] = {
         "8. DEGENERATE METRICS: If ALL conditions produce the SAME growth "
         "rate or yield, flag as DEGENERATE. Common causes: medium too rich "
         "(every KO is rescued by an alternative pathway), substrate uptake "
-        "bound saturates the objective, FVA fraction too loose. Recommend "
-        "REFINE with a concrete remediation (tighter medium, alternative "
-        "objective, etc.).\n\n"
+        "bound saturates the objective, FVA fraction too loose. Flag the "
+        "needed remediation concretely (tighter medium, alternative objective, "
+        "etc.) so the decision stage can choose PROCEED with caveats, PIVOT, "
+        "or EXTEND.\n\n"
         "Required sections: Metrics Summary (real flux numbers with units), "
         "Consensus Findings (high-confidence stoichiometric / pathway "
         "implications), Contested Points (with evidence-based resolution — "
@@ -430,7 +431,7 @@ STAGES["result_analysis"] = {
         "- Result quality rating (1-10)\n"
         "- Key findings (3-5; reference specific reactions / genes / pathways)\n"
         "- Methodology gaps to address next (curation, additional perturbations)\n"
-        "- Recommendation: PROCEED / REFINE / PIVOT\n\n"
+        "- Recommendation: PROCEED / PIVOT / EXTEND\n\n"
         "Run context:\n{context}"
     ),
     "max_tokens": 8192,

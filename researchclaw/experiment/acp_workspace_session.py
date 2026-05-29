@@ -1,0 +1,455 @@
+"""ACP persistent session runner for workspace-native code agents."""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import subprocess
+import sys
+import threading
+import time
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Any
+
+from researchclaw.llm.acp_client import _find_acpx
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class AcpWorkspaceSessionConfig:
+    """Configuration for a persistent ACP session in a user workspace."""
+
+    agent: str = "claude"
+    cwd: Path = Path(".")
+    acpx_command: str = ""
+    session_name: str = "researchclaw-code"
+    timeout_sec: int = 1800
+    max_turns: int = 50
+    base_url: str = ""
+    api_key_env: str = ""
+    model: str = ""
+
+
+class AcpWorkspaceSession:
+    """Manage a named acpx session whose cwd is the user workspace repo."""
+
+    _MAX_CLI_PROMPT_BYTES = 20_000 if sys.platform == "win32" else 100_000
+    _MAX_CMD_WRAPPER_PROMPT_BYTES = 6_000 if sys.platform == "win32" else 100_000
+    _CMD_TOO_LONG_HINTS = (
+        "too long",
+        "trop long",
+        "zu lang",
+        "demasiado larg",
+        "e2big",
+    )
+
+    def __init__(
+        self,
+        *,
+        agent: str = "claude",
+        cwd: str | Path = ".",
+        acpx_command: str = "",
+        session_name: str = "researchclaw-code",
+        timeout_sec: int = 1800,
+        max_turns: int = 50,
+        base_url: str = "",
+        api_key_env: str = "",
+        model: str = "",
+    ) -> None:
+        self.config = AcpWorkspaceSessionConfig(
+            agent=agent,
+            cwd=Path(cwd),
+            acpx_command=acpx_command,
+            session_name=session_name,
+            timeout_sec=timeout_sec,
+            max_turns=max_turns,
+            base_url=base_url,
+            api_key_env=api_key_env,
+            model=model,
+        )
+        self._acpx: str | None = acpx_command or None
+        self._session_ready = False
+
+    @property
+    def session_name(self) -> str:
+        return self.config.session_name
+
+    @property
+    def agent(self) -> str:
+        return self.config.agent
+
+    @property
+    def cwd(self) -> Path:
+        return self.config.cwd
+
+    def ensure_session(self) -> None:
+        """Find or create the named acpx session without text-only warmup."""
+        if self._session_ready:
+            return
+        acpx = self._resolve_acpx()
+        if not acpx:
+            raise RuntimeError("acpx not found")
+        result = subprocess.run(
+            [
+                *self._acpx_base_args(acpx),
+                "sessions",
+                "ensure",
+                "--name",
+                self.config.session_name,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            env=self._build_env(),
+        )
+        if result.returncode != 0:
+            result = subprocess.run(
+                [
+                    *self._acpx_base_args(acpx),
+                    "sessions",
+                    "new",
+                    "--name",
+                    self.config.session_name,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                env=self._build_env(),
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to create ACP workspace session: {result.stderr.strip()}"
+                )
+        self._session_ready = True
+
+    def run_task(self, prompt: str) -> str:
+        """Send *prompt* to the persistent code session and return raw stdout."""
+        prompt = prompt.replace("\x00", "")
+        acpx = self._resolve_acpx()
+        if not acpx:
+            raise RuntimeError("acpx not found")
+        self.ensure_session()
+        prompt_bytes = len(prompt.encode("utf-8"))
+        use_stdin = prompt_bytes > self._cli_prompt_limit(acpx) or (
+            sys.platform == "win32" and "\n" in prompt
+        )
+        try:
+            if use_stdin:
+                result = self._send_prompt_via_stdin(acpx, prompt)
+            else:
+                result = self._send_prompt_cli(acpx, prompt)
+        except RuntimeError as exc:
+            exc_lower = str(exc).lower()
+            if use_stdin or not any(hint in exc_lower for hint in self._CMD_TOO_LONG_HINTS):
+                raise
+            result = self._send_prompt_via_stdin(acpx, prompt)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"ACP workspace task failed (exit {result.returncode}): "
+                f"{(result.stderr or '').strip()}"
+            )
+        return result.stdout or ""
+
+    def export_session(self, output_path: Path) -> None:
+        """Export the current named ACP session to *output_path*."""
+        acpx = self._resolve_acpx()
+        if not acpx:
+            raise RuntimeError("acpx not found")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        def _run_export() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [
+                    *self._acpx_base_args(acpx),
+                    "sessions",
+                    "export",
+                    self.config.session_name,
+                    "--output",
+                    str(output_path),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60,
+                env=self._build_env(),
+            )
+
+        result = _run_export()
+        stderr = (result.stderr or "").strip()
+        if result.returncode != 0 and "currently locked" in stderr.lower():
+            self.close_session(self.config.session_name)
+            self._session_ready = False
+            result = _run_export()
+            stderr = (result.stderr or "").strip()
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Failed to export ACP workspace session "
+                f"'{self.config.session_name}': {stderr}"
+            )
+
+    def fork_from_archive(self, archive_path: Path, fork_name: str) -> AcpWorkspaceSession:
+        """Import *archive_path* as *fork_name* and return a session for it."""
+        acpx = self._resolve_acpx()
+        if not acpx:
+            raise RuntimeError("acpx not found")
+        result = subprocess.run(
+            [
+                *self._acpx_base_args(acpx),
+                "sessions",
+                "import",
+                str(archive_path),
+                "--name",
+                fork_name,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            env=self._build_env(),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Failed to import ACP workspace session '{fork_name}': "
+                f"{(result.stderr or '').strip()}"
+            )
+        fork_config = replace(self.config, session_name=fork_name)
+        return self.__class__(
+            agent=fork_config.agent,
+            cwd=fork_config.cwd,
+            acpx_command=self._resolve_acpx() or fork_config.acpx_command,
+            session_name=fork_config.session_name,
+            timeout_sec=fork_config.timeout_sec,
+            max_turns=fork_config.max_turns,
+            base_url=fork_config.base_url,
+            api_key_env=fork_config.api_key_env,
+            model=fork_config.model,
+        )
+
+    def close_session(self, name: str) -> None:
+        """Close a named ACP workspace session, ignoring cleanup failures."""
+        acpx = self._resolve_acpx()
+        if not acpx:
+            return
+        try:
+            subprocess.run(
+                [*self._acpx_base_args(acpx), "sessions", "close", name],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=15,
+                env=self._build_env(),
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("ACP workspace session close failed", exc_info=True)
+
+    def close(self) -> None:
+        """Close this session if it was opened by this process."""
+        if not self._session_ready:
+            return
+        self.close_session(self.config.session_name)
+        self._session_ready = False
+
+    def _resolve_acpx(self) -> str | None:
+        if self._acpx:
+            return self._acpx
+        self._acpx = _find_acpx()
+        return self._acpx
+
+    def _abs_cwd(self) -> str:
+        return str(self.config.cwd.resolve())
+
+    def _acpx_base_args(self, acpx: str) -> list[str]:
+        return [acpx, "--ttl", "0", "--cwd", self._abs_cwd(), self.config.agent]
+
+    def _provider_env_names(self) -> tuple[str, str]:
+        agent_name = os.path.basename(self.config.agent).lower()
+        if "codex" in agent_name:
+            return "OPENAI_BASE_URL", "OPENAI_API_KEY"
+        if "claude" in agent_name:
+            return "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"
+        return "", ""
+
+    def _codex_acp_config(self) -> str:
+        provider_name = "custom-gateway"
+        config: dict[str, Any] = {
+            "model_provider": provider_name,
+            "model_providers": {
+                provider_name: {
+                    "name": "Custom Gateway",
+                    "base_url": self.config.base_url,
+                    "env_key": self.config.api_key_env,
+                    "requires_openai_auth": False,
+                    "wire_api": "responses",
+                }
+            },
+        }
+        if self.config.model:
+            config["model"] = self.config.model
+        return json.dumps(config, separators=(",", ":"))
+
+    def _build_env(self) -> dict[str, str]:
+        env = {**os.environ}
+        base_url_env, api_key_env = self._provider_env_names()
+        if self.config.base_url and base_url_env:
+            env[base_url_env] = self.config.base_url
+        if self.config.api_key_env and api_key_env:
+            api_key = os.environ.get(self.config.api_key_env)
+            if api_key:
+                env[api_key_env] = api_key
+        if (
+            "codex" in os.path.basename(self.config.agent).lower()
+            and self.config.base_url
+            and self.config.api_key_env
+        ):
+            env["MODEL_PROVIDER"] = "custom-gateway"
+            env["CODEX_CONFIG"] = self._codex_acp_config()
+        return env
+
+    def _cli_prompt_limit(self, acpx: str | None) -> int:
+        limit = self._MAX_CLI_PROMPT_BYTES
+        if sys.platform == "win32" and acpx:
+            lower = acpx.lower()
+            if lower.endswith((".cmd", ".bat")):
+                return min(limit, self._MAX_CMD_WRAPPER_PROMPT_BYTES)
+        return limit
+
+    def _send_prompt_cli(
+        self,
+        acpx: str,
+        prompt: str,
+    ) -> subprocess.CompletedProcess[str]:
+        cmd = [
+            acpx,
+            "--approve-all",
+            "--max-turns",
+            str(self.config.max_turns),
+            "--ttl",
+            "0",
+            "--cwd",
+            self._abs_cwd(),
+            self.config.agent,
+            "-s",
+            self.config.session_name,
+            prompt,
+        ]
+        try:
+            return self._run_acp_with_heartbeat(cmd, label="ACP workspace task")
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"ACP workspace task timed out after {self.config.timeout_sec}s"
+            ) from exc
+
+    def _send_prompt_via_stdin(
+        self,
+        acpx: str,
+        prompt: str,
+    ) -> subprocess.CompletedProcess[str]:
+        cmd = [
+            acpx,
+            "--approve-all",
+            "--max-turns",
+            str(self.config.max_turns),
+            "--ttl",
+            "0",
+            "--cwd",
+            self._abs_cwd(),
+            self.config.agent,
+            "-s",
+            self.config.session_name,
+            "-f",
+            "-",
+        ]
+        try:
+            return self._run_acp_with_heartbeat(
+                cmd,
+                label="ACP workspace task",
+                input_data=prompt,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"ACP workspace task timed out after {self.config.timeout_sec}s"
+            ) from exc
+
+    def _run_acp_with_heartbeat(
+        self,
+        cmd: list[str],
+        *,
+        label: str = "ACP workspace task",
+        input_data: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run acpx with heartbeat logging while the code agent works."""
+        timeout = self.config.timeout_sec
+        heartbeat_interval = 30
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE if input_data else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            encoding="utf-8",
+            errors="replace",
+            env=self._build_env(),
+        )
+        if input_data and proc.stdin:
+            try:
+                proc.stdin.write(input_data)
+                proc.stdin.close()
+            except OSError:
+                pass
+
+        stdout_chunks: list[str] = []
+        stderr_chunks: list[str] = []
+
+        def _reader(stream: Any, buf: list[str]) -> None:
+            try:
+                for line in stream:
+                    buf.append(line)
+            except Exception:  # noqa: BLE001
+                pass
+
+        t_out = threading.Thread(target=_reader, args=(proc.stdout, stdout_chunks), daemon=True)
+        t_err = threading.Thread(target=_reader, args=(proc.stderr, stderr_chunks), daemon=True)
+        t_out.start()
+        t_err.start()
+
+        start = time.monotonic()
+        while True:
+            try:
+                proc.wait(timeout=heartbeat_interval)
+                break
+            except subprocess.TimeoutExpired:
+                elapsed = time.monotonic() - start
+                if elapsed >= timeout:
+                    proc.kill()
+                    t_out.join(timeout=5)
+                    t_err.join(timeout=5)
+                    raise subprocess.TimeoutExpired(
+                        cmd,
+                        timeout,
+                        output="".join(stdout_chunks),
+                        stderr="".join(stderr_chunks),
+                    )
+                logger.info(
+                    "%s still running... %.0fs elapsed (timeout: %ds)",
+                    label,
+                    elapsed,
+                    timeout,
+                )
+
+        t_out.join(timeout=5)
+        t_err.join(timeout=5)
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=proc.returncode or 0,
+            stdout="".join(stdout_chunks),
+            stderr="".join(stderr_chunks),
+        )

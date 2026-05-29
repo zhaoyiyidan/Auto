@@ -17,8 +17,8 @@ TREE_DIRNAME = "hypothesis_tree"
 ROOT_NODE_ID = "root"
 
 _VALID_STATUSES = {"active", "inactive", "blocked", "completed"}
-_VALID_TRANSITIONS = {"extend", "pivot", "refine"}
-_DECISIONS = {"proceed", "extend", "pivot", "refine"}
+_VALID_TRANSITIONS = {"extend", "pivot"}
+_DECISIONS = {"proceed", "extend", "pivot"}
 _NODE_ID_RE = re.compile(r"^h-(\d+)$")
 
 
@@ -678,10 +678,6 @@ def finalize_after_stage8(run_dir: Path, hypotheses_md: str) -> str | None:
         return None
 
     if duplicate_id:
-        if pending.transition_type == "refine":
-            clear_pending_transition(run_dir)
-            _append_transition_finalized(run_dir, pending, node_id=pending.source_node_id)
-            return None
         if duplicate_id != pending.source_node_id:
             set_current_node(run_dir, duplicate_id)
             clear_pending_transition(run_dir)
@@ -710,11 +706,6 @@ def finalize_after_stage8(run_dir: Path, hypotheses_md: str) -> str | None:
         raise ValueError(f"Unknown pending source node: {pending.source_node_id}")
     if source.status == "blocked":
         raise ValueError(f"Cannot finalize transition from blocked node: {source.id}")
-
-    if pending.transition_type == "refine":
-        clear_pending_transition(run_dir)
-        _append_transition_finalized(run_dir, pending, node_id=source.id)
-        return None
 
     if pending.transition_type == "extend":
         if source.id != ROOT_NODE_ID:

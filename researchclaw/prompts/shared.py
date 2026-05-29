@@ -782,7 +782,7 @@ _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
             "3. Rates result quality (1-10 with justification)\n"
             "4. Lists 3-5 key findings\n"
             "5. Notes methodology gaps that need addressing\n"
-            "6. Gives a clear PROCEED/PIVOT/REFINE recommendation\n\n"
+            "6. Gives a clear PROCEED/PIVOT/EXTEND recommendation\n\n"
             "Required sections: Metrics Summary, Consensus Findings, "
             "Contested Points, Statistical Checks, Methodology Audit, "
             "Limitations, Conclusion.\n\n"

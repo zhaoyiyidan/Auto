@@ -34,7 +34,7 @@ _STAGE_SUMMARIES: dict[int, str] = {
     12: "Experiments running/completed. Check if results look reasonable and training is progressing normally.",
     13: "Iterative refinement done. Review the improvement trajectory.",
     14: "Results analyzed. Verify the statistical analysis and conclusions are sound.",
-    15: "Research decision point. Choose: PROCEED to paper writing, PIVOT to new hypothesis, or REFINE experiments.",
+    15: "Research decision point. Choose: PROCEED to paper writing, PIVOT to new hypothesis, or EXTEND follow-up hypotheses.",
     16: "Paper outline created. Review the section structure and key points for each section.",
     17: "Paper draft written. Review the complete draft for accuracy, clarity, and completeness.",
     18: "Peer reviews generated. Review the simulated feedback and prioritize which issues to address.",
@@ -146,19 +146,20 @@ def _dynamic_stage_analysis(stage_num: int, run_dir: Path) -> list[str]:
                 assessment = data.get("assessment", "N/A")
                 lines.append(f"Novelty score: {score} ({assessment})")
 
-        # Stage 9: Experiment plan analysis
+        # Stage 9: Experiment task spec analysis
         elif stage_num == 9:
             import yaml as _yaml_sum
-            for plan_file in (stage_dir / "exp_plan.yaml",):
-                if plan_file.exists():
-                    plan = _yaml_sum.safe_load(plan_file.read_text(encoding="utf-8"))
-                    if isinstance(plan, dict):
-                        baselines = plan.get("baselines", [])
-                        conditions = plan.get("conditions", [])
-                        lines.append(f"\nBaselines: {len(baselines)}")
-                        lines.append(f"Conditions: {len(conditions)}")
-                        if len(baselines) < 2:
-                            lines.append("⚠ Few baselines — consider adding standard comparisons")
+            task_spec_file = stage_dir / "task_spec.yaml"
+            if task_spec_file.exists():
+                spec = _yaml_sum.safe_load(task_spec_file.read_text(encoding="utf-8"))
+                if isinstance(spec, dict):
+                    expected_outputs = spec.get("expected_outputs", [])
+                    constraints = spec.get("constraints", [])
+                    lines.append(f"\nExpected outputs: {len(expected_outputs)}")
+                    lines.append(f"Constraints: {len(constraints)}")
+                    metric = spec.get("primary_metric")
+                    if metric:
+                        lines.append(f"Primary metric: {metric}")
 
         # Stage 14: Result analysis
         elif stage_num == 14:

@@ -73,11 +73,11 @@ _STAGE_CRITICALITY: dict[int, float] = {
     6: 0.2,   # KNOWLEDGE_EXTRACT
     7: 0.7,   # SYNTHESIS — critical for idea quality
     8: 0.9,   # HYPOTHESIS_GEN — the idea itself
-    9: 0.8,   # EXPERIMENT_DESIGN — experiment quality
-    10: 0.6,  # CODE_GENERATION
-    11: 0.2,  # RESOURCE_PLANNING
-    12: 0.5,  # EXPERIMENT_RUN
-    13: 0.4,  # ITERATIVE_REFINE
+    9: 0.8,   # EXPERIMENT_TASK_SPEC — experiment quality
+    10: 0.6,  # CODE_AGENT_IMPLEMENT_OR_REPAIR
+    11: 0.2,  # MANIFEST_VALIDATE_AND_PREPARE
+    12: 0.5,  # HARNESS_SUBMIT_AND_COLLECT
+    13: 0.4,  # EXPERIMENT_ROUTE_DECISION
     14: 0.5,  # RESULT_ANALYSIS
     15: 0.7,  # RESEARCH_DECISION — pivot or proceed
     16: 0.5,  # PAPER_OUTLINE

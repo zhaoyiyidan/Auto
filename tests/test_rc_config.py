@@ -6,15 +6,12 @@ import pytest
 
 from researchclaw.config import (
     AcpConfig,
-    CliAgentConfig,
     ExperimentConfig,
     LarkNotifyConfig,
     LarkTargetConfig,
     RCConfig,
-    SandboxConfig,
     SecurityConfig,
     ValidationResult,
-    _parse_cli_agent_config,
     load_config,
     validate_config,
 )
@@ -62,7 +59,7 @@ llm:
 security:
   hitl_required_stages: [5, 9, 20]
 experiment:
-  mode: simulated
+  mode: workspace
 """.strip()
         + "\n",
         encoding="utf-8",
@@ -94,7 +91,7 @@ def _valid_config_data() -> dict[str, dict[str, object]]:
         },
         "security": {"hitl_required_stages": [5, 9, 20]},
         "experiment": {
-            "mode": "simulated",
+            "mode": "workspace",
             "metric_direction": "minimize",
         },
     }
@@ -189,25 +186,6 @@ def test_validate_config_rejects_non_list_hitl_required_stages(tmp_path: Path):
     assert "security.hitl_required_stages must be a list" in result.errors
 
 
-def test_validate_config_rejects_invalid_experiment_mode(tmp_path: Path):
-    data = _valid_config_data()
-    data["experiment"]["mode"] = "kubernetes"
-
-    result = validate_config(data, project_root=tmp_path, check_paths=False)
-
-    assert result.ok is False
-    assert "Invalid experiment.mode: kubernetes" in result.errors
-
-
-def test_validate_config_accepts_docker_mode(tmp_path: Path):
-    data = _valid_config_data()
-    data["experiment"]["mode"] = "docker"
-
-    result = validate_config(data, project_root=tmp_path, check_paths=False)
-
-    assert result.ok is True
-
-
 def test_validate_config_rejects_invalid_metric_direction(tmp_path: Path):
     data = _valid_config_data()
     data["experiment"]["metric_direction"] = "upward"
@@ -238,61 +216,6 @@ def test_rcconfig_from_dict_parses_llm_wire_api(tmp_path: Path):
     config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
 
     assert config.llm.wire_api == "responses"
-
-
-def test_cli_agent_config_default_base_url_and_api_key_env():
-    cfg = CliAgentConfig()
-
-    assert cfg.base_url == ""
-    assert cfg.api_key_env == ""
-
-
-def test_cli_agent_config_custom_provider_fields():
-    cfg = CliAgentConfig(
-        provider="codex",
-        base_url="https://x.com/v1",
-        api_key_env="MY_KEY",
-    )
-
-    assert cfg.base_url == "https://x.com/v1"
-    assert cfg.api_key_env == "MY_KEY"
-
-
-def test_parse_cli_agent_config_parses_provider_fields():
-    cfg = _parse_cli_agent_config(
-        {
-            "provider": "codex",
-            "base_url": "https://x.com/v1",
-            "api_key_env": "MY_KEY",
-        }
-    )
-
-    assert cfg.provider == "codex"
-    assert cfg.base_url == "https://x.com/v1"
-    assert cfg.api_key_env == "MY_KEY"
-
-
-def test_parse_cli_agent_config_empty_returns_empty_defaults():
-    cfg = _parse_cli_agent_config({})
-
-    assert cfg.base_url == ""
-    assert cfg.api_key_env == ""
-
-
-def test_cli_agent_config_roundtrip_through_experiment_config(tmp_path: Path):
-    data = _valid_config_data()
-    experiment_data = cast(dict[str, object], data["experiment"])
-    experiment_data["cli_agent"] = {
-        "provider": "codex",
-        "base_url": "https://x.com/v1",
-        "api_key_env": "MY_KEY",
-    }
-
-    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
-
-    assert config.experiment.cli_agent.provider == "codex"
-    assert config.experiment.cli_agent.base_url == "https://x.com/v1"
-    assert config.experiment.cli_agent.api_key_env == "MY_KEY"
 
 
 def test_acp_config_default_base_url_and_api_key_env():
@@ -422,22 +345,11 @@ def test_security_config_defaults_match_expected_values():
     assert defaults.redact_sensitive_logs is True
 
 
-def test_experiment_config_defaults_mode_is_simulated():
+def test_experiment_config_defaults_mode_is_workspace_native():
     defaults = ExperimentConfig()
 
-    assert defaults.mode == "simulated"
+    assert defaults.mode == "workspace"
     assert defaults.metric_direction == "minimize"
-
-
-def test_sandbox_config_defaults_match_expected_values():
-    from researchclaw.config import DEFAULT_PYTHON_PATH
-
-    defaults = SandboxConfig()
-
-    assert defaults.python_path == DEFAULT_PYTHON_PATH
-    assert defaults.gpu_required is False
-    assert defaults.max_memory_mb == 4096
-    assert "numpy" in defaults.allowed_imports
 
 
 def test_to_dict_roundtrip_rehydrates_equivalent_rcconfig(tmp_path: Path):

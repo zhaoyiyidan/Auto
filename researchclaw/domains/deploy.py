@@ -192,15 +192,10 @@ _SEQUENCE_FIELD_MAP: dict[str, str] = {
     "pip_packages": "experiment.docker.pip_pre_install",
 }
 
-# Nested-block fields: entire sub-dicts (e.g. collider_agent, agentic,
-# figure_agent) replace the corresponding sub-config only where the user
-# has not set anything.
+# Nested-block fields: entire sub-dicts replace the corresponding sub-config
+# only where the user has not set anything.
 _NESTED_BLOCK_FIELDS: tuple[str, ...] = (
-    "collider_agent",
-    "agentic",
     "figure_agent",
-    "code_agent",
-    "cli_agent",
     "benchmark_agent",
     "repair",
 )
@@ -324,7 +319,7 @@ def apply_profile_defaults(
         if _is_unset(_get_by_path(result, dotted)):
             _set_by_path(result, dotted, list(overlay_val))
 
-    # 3. Nested experiment sub-blocks (collider_agent, agentic, ...).
+    # 3. Nested experiment sub-blocks.
     experiment_section = result.get("experiment")
     if not isinstance(experiment_section, dict):
         experiment_section = {}
@@ -400,15 +395,7 @@ def describe_profile(
 
 
 def _experiment_modes() -> list[str]:
-    try:
-        from researchclaw.config import EXPERIMENT_MODES
-
-        return sorted(EXPERIMENT_MODES)
-    except Exception:  # noqa: BLE001
-        return [
-            "simulated", "sandbox", "docker", "ssh_remote",
-            "colab_drive", "agentic", "collider_agent",
-        ]
+    return ["workspace"]
 
 
 def _project_modes() -> list[str]:

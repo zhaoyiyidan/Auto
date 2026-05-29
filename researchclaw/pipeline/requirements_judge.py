@@ -1,10 +1,9 @@
-"""LLM requirements-judge — proceed/reject gate for agent-based experiments.
+"""LLM requirements-judge — proceed/reject gate for workspace experiments.
 
-Agent-based experiment modes (``collider_agent``, ``biology_agent``) run an
-end-to-end Claude Code session that produces a canonical ``results.json`` at
-the workspace root.  The pipeline then needs to decide whether the run met
-the **research requirements** (not just numeric thresholds) before passing
-to paper-writing.
+Workspace-native experiments run through a persistent code agent session and
+produce manifest-declared artifacts.  The pipeline then needs to decide
+whether the run met the **research requirements** (not just numeric thresholds)
+before passing to paper-writing.
 
 This module provides that decision via an LLM:
 

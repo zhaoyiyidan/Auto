@@ -38,13 +38,10 @@ logger = logging.getLogger(__name__)
 
 
 def _select_output_files(contract, config) -> tuple[str, ...]:
-    """Pick the contract's collider-mode outputs when running collider_agent."""
+    """Return the contract's declared outputs."""
+    _ = config
     if contract is None:
         return ()
-    mode = getattr(getattr(config, "experiment", None), "mode", "") or ""
-    alt = getattr(contract, "collider_output_files", ()) or ()
-    if mode == "collider_agent" and alt:
-        return tuple(alt)
     return tuple(contract.output_files)
 
 # ---------------------------------------------------------------------------
@@ -75,8 +72,6 @@ from researchclaw.pipeline._helpers import (  # noqa: E402
     _default_quality_report,
     _detect_runtime_issues,
     _ensure_sandbox_deps,
-    _extract_code_block,
-    _extract_multi_file_blocks,
     _extract_paper_title,
     _extract_topic_keywords,
     _extract_yaml_block,
@@ -146,7 +141,7 @@ from researchclaw.pipeline.stage_impls._code_generation import (  # noqa: E402
 from researchclaw.pipeline.stage_impls._execution import (  # noqa: E402
     _execute_resource_planning,
     _execute_experiment_run,
-    _execute_iterative_refine,
+    _execute_experiment_route_decision,
 )
 
 # ---------------------------------------------------------------------------
@@ -216,7 +211,7 @@ def _run_hitl_pre_stage(
 
     from researchclaw.hitl.intervention import HumanAction, PauseReason
 
-    # Collect output file names from contract (mode-aware: collider_agent → collider_plan.md)
+    # Collect output file names from the stage contract.
     contract = CONTRACTS.get(stage)
     output_files = _select_output_files(contract, config)
 
@@ -574,11 +569,11 @@ _STAGE_EXECUTORS: dict[Stage, Callable[..., StageResult]] = {
     Stage.KNOWLEDGE_EXTRACT: _execute_knowledge_extract,
     Stage.SYNTHESIS: _execute_synthesis,
     Stage.HYPOTHESIS_GEN: _execute_hypothesis_gen,
-    Stage.EXPERIMENT_DESIGN: _execute_experiment_design,
-    Stage.CODE_GENERATION: _execute_code_generation,
-    Stage.RESOURCE_PLANNING: _execute_resource_planning,
-    Stage.EXPERIMENT_RUN: _execute_experiment_run,
-    Stage.ITERATIVE_REFINE: _execute_iterative_refine,
+    Stage.EXPERIMENT_TASK_SPEC: _execute_experiment_design,
+    Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR: _execute_code_generation,
+    Stage.MANIFEST_VALIDATE_AND_PREPARE: _execute_resource_planning,
+    Stage.HARNESS_SUBMIT_AND_COLLECT: _execute_experiment_run,
+    Stage.EXPERIMENT_ROUTE_DECISION: _execute_experiment_route_decision,
     Stage.RESULT_ANALYSIS: _execute_result_analysis,
     Stage.RESEARCH_DECISION: _execute_research_decision,
     Stage.PAPER_OUTLINE: _execute_paper_outline,

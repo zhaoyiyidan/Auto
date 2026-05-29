@@ -138,23 +138,6 @@ def test_archive_does_not_overwrite_existing_cycle(tmp_path: Path) -> None:
     assert (existing / "sentinel.txt").read_text(encoding="utf-8") == "keep"
 
 
-def test_archive_refine_same_node_multi_cycle(tmp_path: Path) -> None:
-    _create_initial_current(tmp_path)
-    _write_stage_artifacts(tmp_path)
-    first = ca.archive_current_hypothesis_cycle(tmp_path, decision="refine")
-    (tmp_path / "decision_history.json").write_text(
-        json.dumps([{"decision": "refine"}]), encoding="utf-8"
-    )
-
-    second = ca.archive_current_hypothesis_cycle(tmp_path, decision="proceed")
-
-    assert first.parent == second.parent
-    assert [path.name for path in ca._existing_cycles(first.parent)] == [
-        "cycle-001",
-        "cycle-002",
-    ]
-
-
 def test_archive_pivot_records_pivoted_from_in_index(tmp_path: Path) -> None:
     _create_pivot_current(tmp_path)
     _write_stage_artifacts(tmp_path)

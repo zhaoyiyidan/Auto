@@ -347,7 +347,7 @@ stages:
       {revised}'
   research_decision:
     system: You are a research program lead making go/no-go decisions.
-    user: 'Make a PROCEED, PIVOT, EXTEND, or REFINE decision from analysis.
+    user: 'Make a PROCEED, PIVOT, or EXTEND decision from analysis. Experiment-level repair and rerun decisions have already been handled before this stage.
 
       Output markdown with: Decision, Justification, Evidence, Next Actions.
 

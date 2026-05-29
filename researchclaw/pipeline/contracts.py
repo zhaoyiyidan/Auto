@@ -23,7 +23,6 @@ class StageContract:
     dod: str
     error_code: str
     max_retries: int = 1
-    collider_output_files: tuple[str, ...] = ()
 
 
 CONTRACTS: dict[Stage, StageContract] = {
@@ -90,60 +89,61 @@ CONTRACTS: dict[Stage, StageContract] = {
         error_code="E08_HYP_INVALID",
     ),
     # Phase D: Experiment Design
-    Stage.EXPERIMENT_DESIGN: StageContract(
-        stage=Stage.EXPERIMENT_DESIGN,
+    Stage.EXPERIMENT_TASK_SPEC: StageContract(
+        stage=Stage.EXPERIMENT_TASK_SPEC,
         input_files=("hypotheses.md",),
-        output_files=("exp_plan.yaml",),
-        dod="Experiment plan with baselines, ablations, metrics approved",
-        error_code="E09_GATE_REJECT",
+        output_files=("task_spec.yaml",),
+        dod="Code-agent task spec with workspace, objective, metric, and scopes",
+        error_code="E09_TASKSPEC_REJECT",
         max_retries=0,
     ),
-    Stage.CODE_GENERATION: StageContract(
-        stage=Stage.CODE_GENERATION,
-        input_files=("exp_plan.yaml",),
-        output_files=("experiment/", "experiment_spec.md"),
-        collider_output_files=("collider_plan.md",),
-        dod="Multi-file experiment project + spec document",
-        error_code="E10_CODEGEN_FAIL",
+    Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR: StageContract(
+        stage=Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
+        input_files=("task_spec.yaml",),
+        output_files=("stage-10-workspace-agent-result.json", "run_manifest.json"),
+        dod="Workspace code agent committed implementation and wrote run manifest",
+        error_code="E10_CODE_AGENT_FAIL",
         max_retries=2,
     ),
-    Stage.RESOURCE_PLANNING: StageContract(
-        stage=Stage.RESOURCE_PLANNING,
-        input_files=("exp_plan.yaml",),
-        output_files=("schedule.json",),
-        dod="Resource schedule with GPU/time estimates",
-        error_code="E11_SCHED_CONFLICT",
+    Stage.MANIFEST_VALIDATE_AND_PREPARE: StageContract(
+        stage=Stage.MANIFEST_VALIDATE_AND_PREPARE,
+        input_files=("run_manifest.json",),
+        output_files=("manifest_validation.json", "run_manifest.json"),
+        dod="Run manifest schema, git commit, and workspace state validated",
+        error_code="E11_MANIFEST_INVALID",
+        max_retries=0,
     ),
     # Phase E: Experiment Execution
-    Stage.EXPERIMENT_RUN: StageContract(
-        stage=Stage.EXPERIMENT_RUN,
-        input_files=("schedule.json", "experiment/"),
-        output_files=("runs/",),
-        dod="All scheduled experiment runs completed with artifacts",
-        error_code="E12_RUN_FAIL",
+    Stage.HARNESS_SUBMIT_AND_COLLECT: StageContract(
+        stage=Stage.HARNESS_SUBMIT_AND_COLLECT,
+        input_files=("manifest_validation.json",),
+        output_files=("execution_record.json", "submit_result.json", "result_artifacts.json"),
+        dod="Submitter ran manifest command and collected hashed result artifacts",
+        error_code="E12_HARNESS_FAIL",
         max_retries=2,
     ),
-    Stage.ITERATIVE_REFINE: StageContract(
-        stage=Stage.ITERATIVE_REFINE,
-        input_files=("runs/",),
-        output_files=("refinement_log.json", "experiment_final/"),
-        dod="Edit-run-eval loop converged or max iterations reached",
-        error_code="E13_REFINE_FAIL",
-        max_retries=2,
+    Stage.EXPERIMENT_ROUTE_DECISION: StageContract(
+        stage=Stage.EXPERIMENT_ROUTE_DECISION,
+        input_files=("execution_record.json",),
+        output_files=("experiment_decision.json",),
+        dod="Read-only experiment route decision written from execution evidence",
+        error_code="E13_ROUTE_FAIL",
+        max_retries=0,
     ),
     # Phase F: Analysis & Decision
     Stage.RESULT_ANALYSIS: StageContract(
         stage=Stage.RESULT_ANALYSIS,
-        input_files=("runs/",),
-        output_files=("analysis.md",),
-        dod="Metrics analyzed with statistical tests and conclusions",
+        input_files=("execution_record.json",),
+        output_files=("analysis.md", "experiment_summary.json", "provenance.json"),
+        dod="Workspace-native metrics, provenance, and artifact hashes analyzed",
         error_code="E14_ANALYSIS_ERR",
+        max_retries=1,
     ),
     Stage.RESEARCH_DECISION: StageContract(
         stage=Stage.RESEARCH_DECISION,
         input_files=("analysis.md",),
         output_files=("decision.md",),
-        dod="PROCEED/PIVOT/EXTEND/REFINE decision with evidence-based justification",
+        dod="PROCEED/PIVOT/EXTEND decision with evidence-based justification",
         error_code="E15_DECISION_FAIL",
         max_retries=0,
     ),

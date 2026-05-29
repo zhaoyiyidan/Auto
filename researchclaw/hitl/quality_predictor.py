@@ -192,28 +192,25 @@ class QualityPredictor:
         risks: list[str] = []
         score = 5.0
 
-        for exp_path in [
-            self.run_dir / "stage-09" / "exp_plan.yaml",
-            self.run_dir / "stage-09" / "experiment_design.json",
-        ]:
+        for exp_path in [self.run_dir / "stage-09" / "task_spec.yaml"]:
             if exp_path.exists():
                 try:
                     text = exp_path.read_text(encoding="utf-8")
-                    has_baselines = "baseline" in text.lower()
+                    has_objective = "objective" in text.lower()
                     has_metrics = "metric" in text.lower()
-                    has_ablation = "ablation" in text.lower()
+                    has_outputs = "expected_outputs" in text
 
                     score = 4.0
-                    if has_baselines:
+                    if has_objective:
                         score += 2.0
                     else:
-                        risks.append("No baselines in experiment")
+                        risks.append("No objective in experiment task spec")
                     if has_metrics:
                         score += 1.0
-                    if has_ablation:
+                    if has_outputs:
                         score += 1.0
                     else:
-                        risks.append("No ablation study planned")
+                        risks.append("No expected outputs in experiment task spec")
                 except OSError:
                     pass
                 break

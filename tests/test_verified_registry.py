@@ -33,17 +33,6 @@ def _load_experiment_summary(run_id: str) -> dict:
     return json.loads(summary_path.read_text())
 
 
-def _load_refinement_log(run_id: str) -> dict | None:
-    pattern = f"rc-*-{run_id}"
-    matches = sorted(ARTIFACTS.glob(pattern))
-    if not matches:
-        return None
-    log_path = matches[0] / "stage-13" / "refinement_log.json"
-    if not log_path.exists():
-        return None
-    return json.loads(log_path.read_text())
-
-
 # ---------------------------------------------------------------------------
 # Unit tests — ConditionResult
 # ---------------------------------------------------------------------------
@@ -233,23 +222,6 @@ class TestFromExperiment:
         assert 1500.0 not in reg.values
         assert reg.training_config.get("total_elapsed_seconds") == 1500.0
 
-    def test_with_refinement_log(self):
-        summary = self._make_summary()
-        ref_log = {
-            "best_metric": 82.5,
-            "best_version": "experiment_v1/",
-            "iterations": [
-                {
-                    "version_dir": "experiment_v1/",
-                    "metric": 82.5,
-                    "sandbox": {"metrics": {"CondA/0/metric": 80.0}},
-                }
-            ],
-        }
-        reg = VerifiedRegistry.from_experiment(summary, ref_log)
-        assert reg.is_verified(82.5)
-
-
 # ---------------------------------------------------------------------------
 # Integration tests — real artifact data
 # ---------------------------------------------------------------------------
@@ -261,8 +233,7 @@ class TestRealArtifacts:
     def test_run_e57360_rl_exploration(self):
         """Run 38 (RL LACE) — 3 conditions, CartPole + Acrobot."""
         summary = _load_experiment_summary("e57360")
-        ref_log = _load_refinement_log("e57360")
-        reg = VerifiedRegistry.from_experiment(summary, ref_log)
+        reg = VerifiedRegistry.from_experiment(summary)
 
         # Conditions that actually ran
         assert reg.verify_condition("DQN")
@@ -300,8 +271,7 @@ class TestRealArtifacts:
     def test_run_85fefc_contrastive_kd(self):
         """Run 85fefc (CRAFT) — contrastive KD."""
         summary = _load_experiment_summary("85fefc")
-        ref_log = _load_refinement_log("85fefc")
-        reg = VerifiedRegistry.from_experiment(summary, ref_log)
+        reg = VerifiedRegistry.from_experiment(summary)
 
         # Should have conditions
         assert len(reg.condition_names) > 0
@@ -419,11 +389,10 @@ class TestFromRunDir:
         assert not reg.is_verified(0.6930)
         assert not reg.is_verified(69.30)
 
-    def test_best_only_excludes_refinement_log(self, tmp_path: Path) -> None:
-        """best_only=True should NOT merge refinement_log.json sandbox data."""
+    def test_best_only_uses_only_promoted_summary(self, tmp_path: Path) -> None:
+        """best_only=True should ignore non-promoted stage summaries."""
         run_dir = tmp_path / "run"
         run_dir.mkdir()
-        # Best summary
         self._write_summary(
             run_dir / "experiment_summary_best.json",
             {
@@ -432,18 +401,18 @@ class TestFromRunDir:
                 "metrics_summary": {"metric": {"mean": 0.7452}},
             },
         )
-        # Refinement log with sandbox metrics from regressed iteration
-        rl_dir = run_dir / "stage-13"
-        rl_dir.mkdir(parents=True)
-        (rl_dir / "refinement_log.json").write_text(json.dumps({
-            "iterations": [
-                {"sandbox": {"metrics": {"primary_metric": 0.6930, "best_metric": 0.6930}}}
-            ]
-        }), encoding="utf-8")
+        self._write_summary(
+            run_dir / "stage-14" / "experiment_summary.json",
+            {
+                "best_run": {"metrics": {"primary_metric": 0.6930}},
+                "condition_summaries": {"Regressed": {"metrics": {"metric": 0.6930}}},
+                "metrics_summary": {"metric": {"mean": 0.6930}},
+            },
+        )
 
         reg = VerifiedRegistry.from_run_dir(run_dir, best_only=True)
         assert reg.is_verified(0.7452)
-        assert not reg.is_verified(0.6930), "Refinement log sandbox values should NOT be in best_only registry"
+        assert not reg.is_verified(0.6930)
 
     def test_best_only_falls_back_to_stage14(self, tmp_path: Path) -> None:
         """best_only=True without best.json falls back to stage-14/ (non-versioned)."""

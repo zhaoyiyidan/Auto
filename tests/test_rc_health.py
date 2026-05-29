@@ -5,6 +5,7 @@ import json
 import socket
 import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 from typing import NamedTuple, cast
 from unittest.mock import patch
 
@@ -234,22 +235,22 @@ def test_check_model_chain_no_models() -> None:
     assert "No models configured" in result.detail
 
 
-def test_check_sandbox_python_exists() -> None:
-    with (
-        patch.object(Path, "exists", return_value=True),
-        patch("os.access", return_value=True),
-    ):
-        result = health.check_sandbox_python(".venv_arc/bin/python3")
+def test_check_workspace_agent_config_enabled_path_exists(tmp_path: Path) -> None:
+    cfg = SimpleNamespace(enabled=True, transport="acp", workspace_path=str(tmp_path))
+
+    result = health.check_workspace_agent_config(cfg)
+
     assert result.status == "pass"
+    assert result.name == "workspace_agent"
 
 
-def test_check_sandbox_python_missing() -> None:
-    with (
-        patch.object(Path, "exists", return_value=False),
-        patch("os.access", return_value=False),
-    ):
-        result = health.check_sandbox_python(".venv_arc/bin/python3")
+def test_check_workspace_agent_config_disabled() -> None:
+    cfg = SimpleNamespace(enabled=False, transport="acp", workspace_path=".")
+
+    result = health.check_workspace_agent_config(cfg)
+
     assert result.status == "warn"
+    assert "disabled" in result.detail
 
 
 def test_check_matplotlib_available() -> None:
@@ -265,14 +266,21 @@ def test_check_matplotlib_missing() -> None:
     assert result.detail == "Not installed; charts will be skipped"
 
 
-def test_check_experiment_mode_simulated() -> None:
-    result = health.check_experiment_mode("simulated")
-    assert result.status == "warn"
+def test_check_submitter_config_local_pass() -> None:
+    cfg = SimpleNamespace(type="local", custom_callable="")
 
+    result = health.check_submitter_config(cfg)
 
-def test_check_experiment_mode_sandbox() -> None:
-    result = health.check_experiment_mode("sandbox")
     assert result.status == "pass"
+    assert result.name == "submitter"
+
+
+def test_check_submitter_config_custom_missing_callable() -> None:
+    cfg = SimpleNamespace(type="custom_python", custom_callable="")
+
+    result = health.check_submitter_config(cfg)
+
+    assert result.status == "warn"
 
 
 def test_run_doctor_all_pass_openai(tmp_path: Path) -> None:
@@ -311,8 +319,8 @@ def test_run_doctor_all_pass_openai(tmp_path: Path) -> None:
         ),
         patch.object(
             health,
-            "check_sandbox_python",
-            return_value=health.CheckResult("sandbox_python", "pass", "ok"),
+            "check_workspace_agent_config",
+            return_value=health.CheckResult("workspace_agent", "pass", "ok"),
         ),
         patch.object(
             health,
@@ -321,8 +329,8 @@ def test_run_doctor_all_pass_openai(tmp_path: Path) -> None:
         ),
         patch.object(
             health,
-            "check_experiment_mode",
-            return_value=health.CheckResult("experiment_mode", "pass", "ok"),
+            "check_submitter_config",
+            return_value=health.CheckResult("submitter", "pass", "ok"),
         ),
     ):
         report = health.run_doctor(config_path)
@@ -366,8 +374,8 @@ def test_run_doctor_with_failures(tmp_path: Path) -> None:
         ),
         patch.object(
             health,
-            "check_sandbox_python",
-            return_value=health.CheckResult("sandbox_python", "pass", "ok"),
+            "check_workspace_agent_config",
+            return_value=health.CheckResult("workspace_agent", "pass", "ok"),
         ),
         patch.object(
             health,
@@ -376,8 +384,8 @@ def test_run_doctor_with_failures(tmp_path: Path) -> None:
         ),
         patch.object(
             health,
-            "check_experiment_mode",
-            return_value=health.CheckResult("experiment_mode", "pass", "ok"),
+            "check_submitter_config",
+            return_value=health.CheckResult("submitter", "pass", "ok"),
         ),
     ):
         report = health.run_doctor(config_path)
@@ -514,16 +522,16 @@ def test_run_doctor_acp_skips_http_checks(tmp_path: Path) -> None:
             return_value=health.CheckResult("acp_agent", "pass", "ok"),
         ),
         patch.object(
-            health, "check_sandbox_python",
-            return_value=health.CheckResult("sandbox_python", "pass", "ok"),
+            health, "check_workspace_agent_config",
+            return_value=health.CheckResult("workspace_agent", "pass", "ok"),
         ),
         patch.object(
             health, "check_matplotlib",
             return_value=health.CheckResult("matplotlib", "pass", "ok"),
         ),
         patch.object(
-            health, "check_experiment_mode",
-            return_value=health.CheckResult("experiment_mode", "pass", "ok"),
+            health, "check_submitter_config",
+            return_value=health.CheckResult("submitter", "pass", "ok"),
         ),
     ):
         report = health.run_doctor(config_path)
@@ -555,16 +563,16 @@ def test_run_doctor_acp_includes_agent_check(tmp_path: Path) -> None:
             return_value=health.CheckResult("acp_agent", "pass", "ok"),
         ),
         patch.object(
-            health, "check_sandbox_python",
-            return_value=health.CheckResult("sandbox_python", "pass", "ok"),
+            health, "check_workspace_agent_config",
+            return_value=health.CheckResult("workspace_agent", "pass", "ok"),
         ),
         patch.object(
             health, "check_matplotlib",
             return_value=health.CheckResult("matplotlib", "pass", "ok"),
         ),
         patch.object(
-            health, "check_experiment_mode",
-            return_value=health.CheckResult("experiment_mode", "pass", "ok"),
+            health, "check_submitter_config",
+            return_value=health.CheckResult("submitter", "pass", "ok"),
         ),
     ):
         report = health.run_doctor(config_path)

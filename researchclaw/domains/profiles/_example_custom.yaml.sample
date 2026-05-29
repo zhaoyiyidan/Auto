@@ -19,7 +19,7 @@ parent_domain: ""                        # e.g. "ml", "physics", "biology"
 
 # --- Deployment defaults --------------------------------------------------
 # Only used when this profile is deployed; user's config.yaml always wins.
-preferred_experiment_mode: docker            # simulated | docker | ssh_remote | agentic | collider_agent
+preferred_experiment_mode: workspace         # workspace-native Code Agent + manifest
 preferred_project_mode: full-auto            # docs-first | semi-auto | full-auto
 preferred_target_conference: neurips_2025    # conference template id
 default_time_budget_sec: 1800

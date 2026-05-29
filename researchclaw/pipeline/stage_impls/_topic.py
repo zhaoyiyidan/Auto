@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
-from researchclaw.hardware import detect_hardware, ensure_torch_available
+from researchclaw.hardware import detect_hardware
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._domain import _detect_domain
 from researchclaw.pipeline._helpers import (
@@ -86,9 +86,7 @@ Investigate the topic with emphasis on reproducible methods and measurable outco
     (stage_dir / "goal.md").write_text(goal_md, encoding="utf-8")
 
     # --- Hardware detection (GPU / MPS / CPU) ---
-    # When using ssh_remote, detect hardware on the remote host instead of locally
-    _ssh_cfg = config.experiment.ssh_remote if config.experiment.mode == "ssh_remote" else None
-    hw = detect_hardware(ssh_config=_ssh_cfg)
+    hw = detect_hardware()
     (stage_dir / "hardware_profile.json").write_text(
         json.dumps(hw.to_dict(), indent=2), encoding="utf-8"
     )
@@ -96,16 +94,6 @@ Investigate the topic with emphasis on reproducible methods and measurable outco
         logger.warning("Hardware advisory: %s", hw.warning)
     else:
         logger.info("Hardware detected: %s (%s, %s MB VRAM)", hw.gpu_name, hw.gpu_type, hw.vram_mb)
-
-    # --- Optionally ensure PyTorch is available ---
-    if hw.has_gpu and config.experiment.mode == "sandbox":
-        torch_ok = ensure_torch_available(config.experiment.sandbox.python_path, hw.gpu_type)
-        if torch_ok:
-            logger.info("PyTorch is available for sandbox experiments")
-        else:
-            logger.warning("PyTorch could not be installed; sandbox will use CPU-only packages")
-    elif hw.has_gpu and config.experiment.mode == "docker":
-        logger.info("Docker sandbox: PyTorch pre-installed in container image")
 
     return StageResult(
         stage=Stage.TOPIC_INIT,

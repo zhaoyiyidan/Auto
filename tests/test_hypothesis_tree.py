@@ -241,16 +241,6 @@ class TestHypothesisTreeUnit:
         assert pending is not None
         assert pending.transition_type == "pivot"
 
-    def test_record_stage15_decision_refine_writes_pending(self, tmp_path: Path) -> None:
-        _create_initial_node(tmp_path)
-        ht.set_current_node(tmp_path, "h-1")
-
-        ht.record_stage15_decision(tmp_path, "refine", "## Decision\nREFINE", human_edited=False)
-
-        pending = ht.read_pending_transition(tmp_path)
-        assert pending is not None
-        assert pending.transition_type == "refine"
-
     def test_record_stage15_decision_no_tree_auto_inits(self, tmp_path: Path) -> None:
         _seed_stage8(tmp_path)
 
@@ -320,18 +310,6 @@ class TestHypothesisTreeFinalize:
         ht.finalize_after_stage8(tmp_path, _hypothesis_text(2))
 
         assert _node_json(tmp_path, "h-2")["pivoted_from"] == "h-1"
-
-    def test_finalize_refine_no_new_node_logs_event(self, tmp_path: Path) -> None:
-        _create_initial_node(tmp_path)
-        ht.set_current_node(tmp_path, "h-1")
-        ht.record_stage15_decision(tmp_path, "refine", "## Decision\nREFINE", human_edited=False)
-
-        node_id = ht.finalize_after_stage8(tmp_path, _hypothesis_text(1))
-
-        assert node_id is None
-        assert ht.get_current_node_id(tmp_path) == "h-1"
-        assert _events(tmp_path)[-1]["event_type"] == "transition_finalized"
-        assert _events(tmp_path)[-1]["data"]["transition_type"] == "refine"
 
     def test_finalize_empty_hypotheses_clears_pending_no_node(self, tmp_path: Path) -> None:
         _create_initial_node(tmp_path)
@@ -587,45 +565,6 @@ class TestHypothesisTreePipeline:
         assert _node_json(tmp_path, "h-2")["parent_id"] == "root"
         assert _tree(tmp_path)["edges"][-1]["edge_type"] == "pivot"
 
-    def test_pipeline_refine_logs_event_no_new_node(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from researchclaw.pipeline import runner as rc_runner
-        from researchclaw.pipeline.stages import Stage
-
-        decision_count = 0
-
-        def mock_execute_stage(stage: Any, **kwargs: Any) -> Any:
-            _ = kwargs
-            _write_pipeline_stage_artifacts(tmp_path, stage, 1)
-            if stage == Stage.RESEARCH_DECISION:
-                nonlocal decision_count
-                decision = "refine" if decision_count == 0 else "proceed"
-                decision_count += 1
-                stage_dir = tmp_path / "stage-15"
-                stage_dir.mkdir(parents=True, exist_ok=True)
-                decision_md = f"## Decision\n{decision.upper()}"
-                (stage_dir / "decision.md").write_text(decision_md, encoding="utf-8")
-                ht.record_stage15_decision(tmp_path, decision, decision_md, human_edited=False)
-                return _done_result(stage, decision=decision)
-            return _done_result(stage)
-
-        monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
-
-        rc_runner.execute_pipeline(
-            run_dir=tmp_path,
-            run_id="run-refine-tree",
-            config=_pipeline_config(tmp_path),
-            adapters=_pipeline_adapters(),
-        )
-
-        assert set(_tree(tmp_path)["nodes"]) == {"root", "h-1"}
-        assert any(
-            event["event_type"] == "transition_pending"
-            and event["data"]["transition_type"] == "refine"
-            for event in _events(tmp_path)
-        )
-
     def test_pipeline_human_gate_extend_follows_edited_decision(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -729,7 +668,8 @@ class TestHypothesisTreePipeline:
 
         ht.finalize_after_stage8(tmp_path, _hypothesis_text(1))
         (tmp_path / "decision_history.json").write_text(
-            json.dumps([{"decision": "refine"}]), encoding="utf-8"
+            json.dumps([{"decision": "pivot"}, {"decision": "extend"}]),
+            encoding="utf-8",
         )
         for name in ("stage-14", "stage-14_v1"):
             stage14 = tmp_path / name
@@ -742,13 +682,13 @@ class TestHypothesisTreePipeline:
             _ = kwargs
             _write_pipeline_stage_artifacts(tmp_path, stage, 1)
             if stage == Stage.RESEARCH_DECISION:
-                decision_md = "## Decision\nREFINE"
+                decision_md = "## Decision\nEXTEND"
                 (tmp_path / "stage-15").mkdir(parents=True, exist_ok=True)
                 (tmp_path / "stage-15" / "decision.md").write_text(
                     decision_md, encoding="utf-8"
                 )
-                ht.record_stage15_decision(tmp_path, "refine", decision_md, human_edited=False)
-                return _done_result(stage, decision="refine")
+                ht.record_stage15_decision(tmp_path, "extend", decision_md, human_edited=False)
+                return _done_result(stage, decision="extend")
             return _done_result(stage)
 
         monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
@@ -918,44 +858,6 @@ class TestHypothesisCycleArchivePipeline:
         assert (_cycle_dir(tmp_path, "root", "h-1") / "cycle-001").is_dir()
         assert (_cycle_dir(tmp_path, "root", "h-2") / "cycle-001").is_dir()
         assert nt.read_index(tmp_path)["nodes"]["h-2"]["pivoted_from"] == "h-1"
-
-    def test_pipeline_refine_accumulates_cycles_same_node(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from researchclaw.pipeline import runner as rc_runner
-        from researchclaw.pipeline.stages import Stage
-
-        decision_count = 0
-
-        def mock_execute_stage(stage: Any, **kwargs: Any) -> Any:
-            _ = kwargs
-            _write_pipeline_stage_artifacts(tmp_path, stage, 1)
-            if stage == Stage.RESEARCH_DECISION:
-                nonlocal decision_count
-                decision = "refine" if decision_count == 0 else "proceed"
-                decision_count += 1
-                decision_md = f"## Decision\n{decision.upper()}"
-                _write_pipeline_decision_artifacts(tmp_path, decision, decision_md)
-                ht.record_stage15_decision(
-                    tmp_path, decision, decision_md, human_edited=False
-                )
-                return _done_result(stage, decision=decision)
-            return _done_result(stage)
-
-        monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
-
-        rc_runner.execute_pipeline(
-            run_dir=tmp_path,
-            run_id="run-refine-archive",
-            config=_pipeline_config(tmp_path),
-            adapters=_pipeline_adapters(),
-            from_stage=Stage.HYPOTHESIS_GEN,
-        )
-
-        cycle_root = _cycle_dir(tmp_path, "root", "h-1")
-        assert (cycle_root / "cycle-001").is_dir()
-        assert (cycle_root / "cycle-002").is_dir()
-        assert ht.get_current_node_id(tmp_path) == "h-1"
 
     def test_pipeline_archive_before_rollback_rename(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

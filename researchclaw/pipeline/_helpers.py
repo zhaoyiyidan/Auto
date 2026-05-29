@@ -579,95 +579,6 @@ def _safe_json_loads(text: str, default: Any) -> Any:
     return default
 
 
-def _extract_code_block(content: str) -> str:
-    match = re.search(r"```(?:python)?\s*(.*?)\s*```", content, flags=re.DOTALL)
-    if match is not None:
-        return match.group(1).strip()
-    return content.strip()
-
-
-def _extract_multi_file_blocks(content: str) -> dict[str, str]:
-    """Parse LLM response containing multiple files with filename markers.
-
-    Expected format::
-
-        ```filename:main.py
-        import model
-        ...
-        ```
-
-        ```filename:model.py
-        class MyModel:
-        ...
-        ```
-
-    Also handles common LLM format variations:
-    - ````` ```python filename:main.py````` (space before filename)
-    - ````` ``` filename:main.py````` (space after backticks)
-    - ``filename:main.py`` on next line after backticks
-    - ``# FILE: main.py`` comment markers inside code blocks
-
-    Falls back to treating the entire code block as ``main.py`` if no
-    ``filename:`` markers are found.
-
-    Returns a dict mapping filename → code content.
-    """
-    # R13-2: Multiple patterns to handle LLM format variations
-    patterns = [
-        # Original: ```filename:xxx.py or ```python filename:xxx.py
-        re.compile(
-            r"```(?:python\s+)?filename:(\S+)\s*\n(.*?)```",
-            flags=re.DOTALL,
-        ),
-        # Variation: ``` filename:xxx.py (space after backticks)
-        re.compile(
-            r"```\s+filename:(\S+)\s*\n(.*?)```",
-            flags=re.DOTALL,
-        ),
-        # Variation: ```python\nfilename:xxx.py (filename on next line)
-        re.compile(
-            r"```(?:python)?\s*\nfilename:(\S+)\s*\n(.*?)```",
-            flags=re.DOTALL,
-        ),
-        # Variation: ```python\n# filename: xxx.py (comment marker)
-        re.compile(
-            r"```(?:python)?\s*\n#\s*(?:FILE|filename)\s*:\s*(\S+\.py)\s*\n(.*?)```",
-            flags=re.DOTALL,
-        ),
-    ]
-
-    matches: list[tuple[str, str]] = []
-    for pattern in patterns:
-        matches = pattern.findall(content)
-        if matches:
-            break
-
-    if matches:
-        files: dict[str, str] = {}
-        for fname, code in matches:
-            fname = fname.strip()
-            # Security: prevent path traversal
-            if ".." in fname or fname.startswith("/"):
-                continue
-            # Normalise to flat filenames (strip leading ./ or subdirs for safety)
-            fname = fname.replace("\\", "/").split("/")[-1]
-            if fname and fname.endswith(".py"):
-                files[fname] = code.strip()
-        if files:
-            # Ensure there is a main.py entry point
-            if "main.py" not in files:
-                # Pick the first file as main.py
-                first_key = next(iter(files))
-                files["main.py"] = files.pop(first_key)
-            return files
-
-    # Fallback: single code block → main.py
-    code = _extract_code_block(content)
-    if code.strip():
-        return {"main.py": code}
-    return {}
-
-
 def _parse_jsonl_rows(text: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for line in text.splitlines():
@@ -1012,23 +923,12 @@ def _collect_experiment_results(
         latex_lines.append(r"\end{tabular}")
     latex_lines.append(r"\end{table}")
 
-    # R18-1: Extract paired statistical comparisons from stdout
-    from researchclaw.experiment.sandbox import extract_paired_comparisons
-
-    paired_comparisons: list[dict[str, object]] = []
-    for r in runs_data:
-        stdout = r.get("stdout", "")
-        if stdout:
-            paired_comparisons.extend(extract_paired_comparisons(stdout))
-
     collected: dict[str, Any] = {
         "runs": runs_data,
         "metrics_summary": metrics_summary,
         "best_run": best_run,
         "latex_table": "\n".join(latex_lines),
     }
-    if paired_comparisons:
-        collected["paired_comparisons"] = paired_comparisons
     if structured_results is not None:
         collected["structured_results"] = structured_results
     return collected
@@ -1041,7 +941,7 @@ def _build_context_preamble(
     include_goal: bool = False,
     include_hypotheses: bool = False,
     include_synthesis: bool = False,
-    include_exp_plan: bool = False,
+    include_task_spec: bool = False,
     include_analysis: bool = False,
     include_decision: bool = False,
     include_experiment_data: bool = False,
@@ -1063,10 +963,10 @@ def _build_context_preamble(
         synthesis = _read_prior_artifact(run_dir, "synthesis.md")
         if synthesis:
             parts.append(f"\n### Synthesis\n{synthesis[:2200]}")
-    if include_exp_plan:
-        plan = _read_prior_artifact(run_dir, "exp_plan.yaml")
-        if plan:
-            parts.append(f"\n### Experiment Plan\n{plan[:2000]}")
+    if include_task_spec:
+        task_spec = _read_prior_artifact(run_dir, "task_spec.yaml")
+        if task_spec:
+            parts.append(f"\n### Experiment Task Spec\n{task_spec[:2000]}")
     if include_analysis:
         analysis = _read_best_analysis(run_dir)
         if analysis:

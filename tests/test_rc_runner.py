@@ -83,6 +83,43 @@ def _with_hitl_required_stages(
     )
 
 
+def test_run_experiment_diagnosis_is_read_only(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    _ = adapters
+    called: list[int] = []
+    monkeypatch.setattr(
+        "researchclaw.experiment.workspace_agent.create_workspace_agent",
+        lambda *args, **kwargs: called.append(1),
+    )
+    s14 = run_dir / "stage-14"
+    s14.mkdir()
+    (s14 / "experiment_summary.json").write_text(
+        json.dumps(
+            {
+                "condition_summaries": {"A": {"metrics": {"accuracy": 0.1}}},
+                "best_run": {"metrics": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    s12 = run_dir / "stage-12"
+    s12.mkdir()
+    (s12 / "execution_record.json").write_text(
+        json.dumps({"stdout": "", "stderr": "", "final_status": "completed"}),
+        encoding="utf-8",
+    )
+
+    rc_runner._run_experiment_diagnosis(run_dir, rc_config, "rid")
+
+    assert called == []
+    assert (run_dir / "experiment_diagnosis.json").is_file()
+    assert not (run_dir / "repair_prompt.txt").exists()
+
+
 def test_execute_pipeline_runs_stages_in_sequence(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,
@@ -140,7 +177,7 @@ def test_execute_pipeline_stops_on_paused_stage(
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
-    pause_stage = Stage.ITERATIVE_REFINE
+    pause_stage = Stage.HARNESS_SUBMIT_AND_COLLECT
 
     def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
         _ = kwargs
@@ -159,7 +196,7 @@ def test_execute_pipeline_stops_on_paused_stage(
     assert results[-1].status == StageStatus.PAUSED
     assert len(results) == int(pause_stage)
     checkpoint = json.loads((run_dir / "checkpoint.json").read_text(encoding="utf-8"))
-    assert checkpoint["last_completed_stage"] == int(Stage.EXPERIMENT_RUN)
+    assert checkpoint["last_completed_stage"] == int(Stage.MANIFEST_VALIDATE_AND_PREPARE)
     summary = json.loads((run_dir / "pipeline_summary.json").read_text(encoding="utf-8"))
     assert summary["stages_paused"] == 1
     assert summary["final_status"] == "paused"
@@ -505,7 +542,7 @@ def test_pipeline_prints_elapsed_time(
     )
 
 
-# ── PIVOT/PROCEED/REFINE decision loop tests ──
+# ── PIVOT/PROCEED/EXTEND decision loop tests ──
 
 
 def _pivot_result(stage: Stage) -> StageResult:
@@ -514,9 +551,12 @@ def _pivot_result(stage: Stage) -> StageResult:
     )
 
 
-def _refine_result(stage: Stage) -> StageResult:
+def _route_result(stage: Stage, route: str) -> StageResult:
     return StageResult(
-        stage=stage, status=StageStatus.DONE, artifacts=("decision.md",), decision="refine"
+        stage=stage,
+        status=StageStatus.DONE,
+        artifacts=("experiment_decision.json",),
+        decision=route,
     )
 
 
@@ -524,6 +564,12 @@ def _extend_result(stage: Stage) -> StageResult:
     return StageResult(
         stage=stage, status=StageStatus.DONE, artifacts=("decision.md",), decision="extend"
     )
+
+
+def _touch_stage_dir(run_dir: Path, stage: Stage) -> None:
+    stage_dir = run_dir / f"stage-{int(stage):02d}"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    (stage_dir / "marker.txt").write_text(stage.name, encoding="utf-8")
 
 
 def test_pivot_decision_triggers_rollback_to_hypothesis_gen(
@@ -562,34 +608,249 @@ def test_pivot_decision_triggers_rollback_to_hypothesis_gen(
     assert history[0]["decision"] == "pivot"
 
 
-def test_refine_decision_triggers_rollback_to_iterative_refine(
+def test_experiment_loop_continue_runs_10_11_12_13_then_14(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
     seen: list[Stage] = []
-    refine_count = 0
 
     def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
         _ = kwargs
         seen.append(stage)
-        nonlocal refine_count
-        if stage == Stage.RESEARCH_DECISION and refine_count == 0:
-            refine_count += 1
-            return _refine_result(stage)
+        _touch_stage_dir(run_dir, stage)
+        if stage == Stage.EXPERIMENT_ROUTE_DECISION:
+            return _route_result(stage, "continue")
         return _done(stage)
 
     monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
-    results = rc_runner.execute_pipeline(
+    rc_runner.execute_pipeline(
         run_dir=run_dir,
-        run_id="run-refine",
+        run_id="run-loop-continue",
         config=rc_config,
         adapters=adapters,
     )
-    # Should have seen ITERATIVE_REFINE at least twice
-    refine_stage_count = sum(1 for s in seen if s == Stage.ITERATIVE_REFINE)
-    assert refine_stage_count >= 2
+    start = seen.index(Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR)
+    assert seen[start : start + 5] == [
+        Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
+        Stage.MANIFEST_VALIDATE_AND_PREPARE,
+        Stage.HARNESS_SUBMIT_AND_COLLECT,
+        Stage.EXPERIMENT_ROUTE_DECISION,
+        Stage.RESULT_ANALYSIS,
+    ]
+
+
+def test_experiment_loop_stage11_invalid_rejumps_to_10(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    seen: list[Stage] = []
+    invalid_once = True
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        seen.append(stage)
+        _touch_stage_dir(run_dir, stage)
+        nonlocal invalid_once
+        if stage == Stage.MANIFEST_VALIDATE_AND_PREPARE and invalid_once:
+            invalid_once = False
+            return StageResult(
+                stage=stage,
+                status=StageStatus.FAILED,
+                artifacts=("manifest_validation.json",),
+                decision="fix_code",
+                error="invalid manifest",
+            )
+        if stage == Stage.EXPERIMENT_ROUTE_DECISION:
+            return _route_result(stage, "continue")
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-stage11-fix",
+        config=rc_config,
+        adapters=adapters,
+    )
+    start = seen.index(Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR)
+    assert seen[start : start + 6] == [
+        Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
+        Stage.MANIFEST_VALIDATE_AND_PREPARE,
+        Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
+        Stage.MANIFEST_VALIDATE_AND_PREPARE,
+        Stage.HARNESS_SUBMIT_AND_COLLECT,
+        Stage.EXPERIMENT_ROUTE_DECISION,
+    ]
+    assert (run_dir / "stage-10_v1").is_dir()
+
+
+def test_experiment_loop_route_fix_code_rejumps_to_10(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    seen: list[Stage] = []
+    routes = iter(["fix_code", "continue"])
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        seen.append(stage)
+        _touch_stage_dir(run_dir, stage)
+        if stage == Stage.EXPERIMENT_ROUTE_DECISION:
+            return _route_result(stage, next(routes))
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-fix-code",
+        config=rc_config,
+        adapters=adapters,
+    )
+    assert seen.count(Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR) == 2
+    assert (run_dir / "stage-10_v1").is_dir()
+
+
+def test_experiment_loop_route_rerun_rejumps_to_12(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    seen: list[Stage] = []
+    routes = iter(["rerun", "continue"])
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        seen.append(stage)
+        _touch_stage_dir(run_dir, stage)
+        if stage == Stage.EXPERIMENT_ROUTE_DECISION:
+            return _route_result(stage, next(routes))
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-rerun",
+        config=rc_config,
+        adapters=adapters,
+    )
+    assert seen.count(Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR) == 1
+    assert seen.count(Stage.HARNESS_SUBMIT_AND_COLLECT) == 2
+    assert (run_dir / "stage-12_v1").is_dir()
+
+
+def test_experiment_loop_revise_task_spec_recurses_from_stage9(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    seen: list[Stage] = []
+    routes = iter(["revise_task_spec", "continue"])
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        seen.append(stage)
+        _touch_stage_dir(run_dir, stage)
+        if stage == Stage.EXPERIMENT_ROUTE_DECISION:
+            return _route_result(stage, next(routes))
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-revise-task",
+        config=rc_config,
+        adapters=adapters,
+    )
+    assert seen.count(Stage.EXPERIMENT_TASK_SPEC) >= 2
+
+
+def test_experiment_loop_max_iterations_forces_continue(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    from researchclaw.pipeline.stages import MAX_EXPERIMENT_ITERATIONS
+
+    seen: list[Stage] = []
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        seen.append(stage)
+        _touch_stage_dir(run_dir, stage)
+        if stage == Stage.EXPERIMENT_ROUTE_DECISION:
+            return _route_result(stage, "fix_code")
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-max-experiment",
+        config=rc_config,
+        adapters=adapters,
+    )
+    assert seen.count(Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR) == MAX_EXPERIMENT_ITERATIONS + 1
+    assert Stage.RESULT_ANALYSIS in seen
+
+
+def test_experiment_loop_abort_stops(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    seen: list[Stage] = []
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        seen.append(stage)
+        _touch_stage_dir(run_dir, stage)
+        if stage == Stage.EXPERIMENT_ROUTE_DECISION:
+            return _route_result(stage, "abort")
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-abort",
+        config=rc_config,
+        adapters=adapters,
+    )
+    assert Stage.RESULT_ANALYSIS not in seen
+
+
+def test_experiment_loop_history_persisted(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    routes = iter(["fix_code", "continue"])
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        _touch_stage_dir(run_dir, stage)
+        if stage == Stage.EXPERIMENT_ROUTE_DECISION:
+            return _route_result(stage, next(routes))
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-history",
+        config=rc_config,
+        adapters=adapters,
+    )
+    history = json.loads((run_dir / "experiment_loop_history.json").read_text())
+    assert len(history["iterations"]) == 1
+    assert history["iterations"][0]["route"] == "fix_code"
 
 
 def test_extend_decision_triggers_rollback_to_hypothesis_gen(
@@ -705,37 +966,6 @@ def test_pivot_cleans_old_extension_context(
     assert not (run_dir / "hypothesis_extension_context.md").exists()
 
 
-def test_refine_cleans_old_extension_context(
-    monkeypatch: pytest.MonkeyPatch,
-    run_dir: Path,
-    rc_config: RCConfig,
-    adapters: AdapterBundle,
-) -> None:
-    (run_dir / "hypothesis_extension_context.md").write_text(
-        "stale extension context",
-        encoding="utf-8",
-    )
-    refine_count = 0
-
-    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
-        _ = kwargs
-        nonlocal refine_count
-        if stage == Stage.RESEARCH_DECISION and refine_count == 0:
-            refine_count += 1
-            return _refine_result(stage)
-        return _done(stage)
-
-    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
-    rc_runner.execute_pipeline(
-        run_dir=run_dir,
-        run_id="run-refine-clean-context",
-        config=rc_config,
-        adapters=adapters,
-    )
-
-    assert not (run_dir / "hypothesis_extension_context.md").exists()
-
-
 def test_max_pivot_count_prevents_infinite_loop(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,
@@ -796,11 +1026,11 @@ def test_read_pivot_count_returns_zero_for_no_history(run_dir: Path) -> None:
 
 def test_record_decision_history_appends(run_dir: Path) -> None:
     rc_runner._record_decision_history(run_dir, "pivot", Stage.HYPOTHESIS_GEN, 1)
-    rc_runner._record_decision_history(run_dir, "refine", Stage.ITERATIVE_REFINE, 2)
+    rc_runner._record_decision_history(run_dir, "extend", Stage.HYPOTHESIS_GEN, 2)
     history = json.loads((run_dir / "decision_history.json").read_text())
     assert len(history) == 2
     assert history[0]["decision"] == "pivot"
-    assert history[1]["decision"] == "refine"
+    assert history[1]["decision"] == "extend"
 
 
 def test_decision_history_records_extend(

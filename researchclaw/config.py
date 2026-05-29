@@ -6,12 +6,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-import sys
 import yaml
-
-DEFAULT_PYTHON_PATH = (
-    ".venv/Scripts/python.exe" if sys.platform == "win32" else ".venv/bin/python3"
-)
 
 CONFIG_SEARCH_ORDER: tuple[str, ...] = ("config.arc.yaml", "config.yaml")
 
@@ -34,24 +29,6 @@ def _safe_float(val: Any, default: float) -> float:
         return float(val)
     except (ValueError, TypeError):
         return default
-
-
-_VALID_NETWORK_POLICIES = {"none", "setup_only", "pip_only", "full"}
-
-
-def _validate_network_policy(val: object, default: str = "setup_only") -> str:
-    """Validate network_policy, falling back to *default* on bad values."""
-    s = str(val).strip().lower() if val else default
-    if s not in _VALID_NETWORK_POLICIES:
-        import logging as _cfg_log
-
-        _cfg_log.getLogger(__name__).warning(
-            "Invalid network_policy %r, using %r",
-            val,
-            default,
-        )
-        return default
-    return s
 
 
 def _safe_float(val: Any, default: float) -> float:
@@ -105,18 +82,7 @@ KB_SUBDIRS = (
 )
 PROJECT_MODES = {"docs-first", "semi-auto", "full-auto"}
 KB_BACKENDS = {"markdown", "obsidian"}
-EXPERIMENT_MODES = {
-    "simulated",
-    "sandbox",
-    "docker",
-    "ssh_remote",
-    "colab_drive",
-    "agentic",
-    "collider_agent",  # Physics: ColliderAgent via Claude Code + Magnus
-    "biology_agent",   # Biology: Biology-Agent (FBA / pFBA / FVA via COBRApy + BIGG) via Claude Code
-    "stat_agent",      # Statistics: stat_research_agent (sim studies, CI/coverage) via Claude Code
-}
-CLI_AGENT_PROVIDERS = {"llm", "claude_code", "codex"}
+SUBMITTER_TYPES = {"local", "slurm", "ssh_slurm", "manual", "custom_python"}
 
 
 def _get_by_path(data: dict[str, Any], dotted_key: str) -> Any:
@@ -141,14 +107,14 @@ class ValidationResult:
 
 @dataclass(frozen=True)
 class ProjectConfig:
-    name: str
+    name: str = "researchclaw"
     mode: str = "docs-first"
     profile: str = ""  # empty = auto-detect; non-empty forces domain profile by id
 
 
 @dataclass(frozen=True)
 class ResearchConfig:
-    topic: str
+    topic: str = ""
     domains: tuple[str, ...] = ()
     daily_paper_count: int = 0
     quality_threshold: float = 0.0
@@ -158,7 +124,7 @@ class ResearchConfig:
 
 @dataclass(frozen=True)
 class RuntimeConfig:
-    timezone: str
+    timezone: str = "UTC"
     max_parallel_tasks: int = 1
     approval_timeout_hours: int = 12
     retry_limit: int = 0
@@ -201,7 +167,7 @@ class LarkNotifyConfig:
 
 @dataclass(frozen=True)
 class NotificationsConfig:
-    channel: str
+    channel: str = "none"
     target: str = ""
     on_stage_start: bool = False
     on_stage_fail: bool = False
@@ -211,8 +177,8 @@ class NotificationsConfig:
 
 @dataclass(frozen=True)
 class KnowledgeBaseConfig:
-    backend: str
-    root: str
+    backend: str = "markdown"
+    root: str = "knowledge"
     obsidian_vault: str = ""
 
 
@@ -244,7 +210,7 @@ class AcpConfig:
 
 @dataclass(frozen=True)
 class LlmConfig:
-    provider: str
+    provider: str = "openai-compatible"
     base_url: str = ""
     wire_api: str = "chat_completions"
     api_key_env: str = ""
@@ -262,248 +228,6 @@ class SecurityConfig:
     hitl_required_stages: tuple[int, ...] = (5, 9, 20)
     allow_publish_without_approval: bool = False
     redact_sensitive_logs: bool = True
-
-
-@dataclass(frozen=True)
-class SandboxConfig:
-    python_path: str = DEFAULT_PYTHON_PATH
-    gpu_required: bool = False
-    allowed_imports: tuple[str, ...] = (
-        "math",
-        "random",
-        "json",
-        "csv",
-        "numpy",
-        "torch",
-        "sklearn",
-    )
-    max_memory_mb: int = 4096
-
-
-@dataclass(frozen=True)
-class SshRemoteConfig:
-    host: str = ""
-    user: str = ""
-    port: int = 22
-    key_path: str = ""
-    gpu_ids: tuple[int, ...] = ()
-    remote_workdir: str = "/tmp/researchclaw_experiments"
-    remote_python: str = "python3"
-    setup_commands: tuple[str, ...] = ()
-    use_docker: bool = False
-    docker_image: str = "researchclaw/experiment:latest"
-    docker_network_policy: str = "none"
-    docker_memory_limit_mb: int = 8192
-    docker_shm_size_mb: int = 2048
-    timeout_sec: int = 600  # default 10 min for experiment execution
-    scp_timeout_sec: int = 300  # default 5 min for file uploads
-    setup_timeout_sec: int = 300  # default 5 min for setup commands
-
-
-@dataclass(frozen=True)
-class ColabDriveConfig:
-    """Configuration for Google Drive-based async Colab execution."""
-
-    drive_root: str = ""  # local mount path, e.g. ~/Google Drive/MyDrive/researchclaw
-    poll_interval_sec: int = 30
-    timeout_sec: int = 3600
-    setup_script: str = ""  # commands to run before experiment, written to setup.sh
-
-
-@dataclass(frozen=True)
-class DockerSandboxConfig:
-    """Configuration for Docker-based experiment sandbox."""
-
-    image: str = "researchclaw/experiment:latest"
-    gpu_enabled: bool = True
-    gpu_device_ids: tuple[int, ...] = ()
-    memory_limit_mb: int = 8192
-    network_policy: str = "setup_only"  # none | setup_only | pip_only | full
-    pip_pre_install: tuple[str, ...] = ()
-    auto_install_deps: bool = True
-    shm_size_mb: int = 2048
-    container_python: str = "/usr/bin/python3"
-    keep_containers: bool = False
-
-
-@dataclass(frozen=True)
-class AgenticConfig:
-    """Configuration for the agentic experiment mode.
-
-    Launches a coding agent (e.g. Claude Code) inside a Docker container
-    with full shell access so it can run arbitrary CLI commands, write code,
-    and iteratively complete the experiment.
-    """
-
-    image: str = "researchclaw/experiment:latest"
-    agent_cli: str = "claude"
-    agent_install_cmd: str = "npm install -g @anthropic-ai/claude-code"
-    network_policy: str = "full"  # Agent needs network access
-    timeout_sec: int = 1800  # 30 min per session
-    memory_limit_mb: int = 8192
-    gpu_enabled: bool = False
-    mount_skills: bool = True
-    allow_shell_commands: bool = True
-    max_turns: int = 50
-
-
-@dataclass(frozen=True)
-class ColliderAgentConfig:
-    """Configuration for ColliderAgent physics experiment mode.
-
-    Uses Claude Code CLI together with ColliderAgent skills (FeynRules,
-    MadGraph5, MadAnalysis5 via Magnus cloud) to run end-to-end collider
-    physics simulations from a natural-language Lagrangian description.
-
-    Workflow:
-    1. Stage 10 generates a detailed physics prompt (collider_plan.md)
-    2. Stage 12 invokes ``claude -p`` with ColliderAgent skills mounted
-    3. Claude Code orchestrates the pheno-pipeline (model → events → analysis)
-    4. Figures and data files are collected as experiment artifacts
-    """
-
-    # Path to ColliderAgent repository (for skills/agents directories).
-    # Default points at the symlink under external/agents/ (see
-    # external/agents/README.md).  Upstream:
-    # https://github.com/HET-AGI/ColliderAgent
-    collider_agent_dir: str = "external/agents/ColliderAgent"
-    # Working directory for the physics simulation workspace
-    working_dir: str = "collider_workspace"
-    # Timeout for the full Claude Code session (seconds)
-    timeout_sec: int = 7200  # 2 hours — HEP sims can take a while
-    # Claude Code binary (empty = auto-detect via PATH)
-    claude_binary: str = ""
-    # Extra CLI arguments passed to ``claude`` (e.g. permissions bypass)
-    extra_args: tuple[str, ...] = ("--dangerously-skip-permissions",)
-    # Whether to install skills/agents to ~/.claude before running
-    install_skills: bool = True
-    # Max conversation turns for the Claude Code session
-    max_turns: int = 150
-    # Magnus cloud credentials (empty = use ~/.magnus/config.json)
-    magnus_address: str = ""
-    magnus_token: str = ""
-    # Incremental re-entry: when True, Stage 12 preserves the existing
-    # collider workspace, snapshots it under stage-12_v{N}/, and assembles
-    # a delta prompt so ColliderAgent ADDS new artifacts rather than
-    # regenerating prior ones. See
-    # docs/superpowers/specs/2026-04-24-hep-ph-hitl-incremental-design.md
-    incremental: bool = False
-
-
-@dataclass(frozen=True)
-class BiologyAgentConfig:
-    """Configuration for Biology-Agent (constraint-based metabolic modelling).
-
-    Uses Claude Code CLI together with Biology-Agent skills (gsmm-builder,
-    fba-simulator, flux-analyzer, etc.) to run end-to-end FBA / pFBA / FVA /
-    knockout pipelines from a natural-language biology prompt. Mirrors the
-    ColliderAgent integration but targets COBRApy + BIGG genome-scale
-    metabolic modelling instead of HEP Monte-Carlo simulation.
-
-    Workflow:
-    1. Stage 10 generates a biology execution prompt (biology_plan.md).
-    2. Stage 12 invokes ``claude -p`` with Biology-Agent skills mounted.
-    3. Claude Code orchestrates the metabolic pipeline (model -> medium ->
-       FBA -> pFBA -> FVA -> knockout screen -> figures).
-    4. Figures, CSV flux tables, and JSON results are collected as
-       experiment artifacts.
-    """
-
-    # Path to Biology-Agent repository (for skills/agents directories,
-    # which live at the repo ROOT — NOT under src/ — for this project).
-    # Default points at the symlink under external/agents/ (see
-    # external/agents/README.md for attribution).
-    biology_agent_dir: str = "external/agents/Biology-Agent"
-    # Working directory for the metabolic-modelling workspace.
-    working_dir: str = "biology_workspace"
-    # Timeout for the full Claude Code session (seconds).
-    timeout_sec: int = 3600  # 1 hour — typical FBA / scan runs are minutes
-    # Claude Code binary (empty = auto-detect via PATH).
-    claude_binary: str = ""
-    # Extra CLI arguments passed to ``claude`` (e.g. permissions bypass).
-    extra_args: tuple[str, ...] = ("--dangerously-skip-permissions",)
-    # Whether to install skills/agents to ~/.claude before running.
-    install_skills: bool = True
-    # Max conversation turns for the Claude Code session.
-    max_turns: int = 100
-    # Magnus cloud credentials (empty = use ~/.magnus/config.json if present;
-    # Biology-Agent runs locally in the default install but Magnus support
-    # is plumbed through here for future cloud-FBA backends).
-    magnus_address: str = ""
-    magnus_token: str = ""
-
-
-@dataclass(frozen=True)
-class StatAgentConfig:
-    """Configuration for stat_research_agent (statistical research domain).
-
-    Mirrors :class:`BiologyAgentConfig` / :class:`ColliderAgentConfig` but
-    targets simulation-study / inference research via Claude Code +
-    stat_research_agent skills (stat-problem-formulator,
-    stat-method-proposer, stat-experiment-designer, ...).
-
-    The agent is plain CPU Python (numpy/scipy/pandas/sklearn/statsmodels)
-    so there is no Magnus dependency — fields are kept for symmetry.
-    """
-
-    # Path to stat_research_agent repository (skills/agents live at the
-    # repo ROOT, mirroring Biology-Agent's layout).
-    stat_agent_dir: str = "external/agents/stat_research_agent"
-    # Working directory for the statistics experiment workspace.
-    working_dir: str = "stat_workspace"
-    # Timeout for the full Claude Code session (seconds).
-    timeout_sec: int = 1800  # 30 min — sim studies are usually fast
-    # Claude Code binary (empty = auto-detect via PATH).
-    claude_binary: str = ""
-    # Extra CLI arguments passed to ``claude``.
-    extra_args: tuple[str, ...] = ("--dangerously-skip-permissions",)
-    # Whether to install skills/agents to ~/.claude before running.
-    install_skills: bool = True
-    # Max conversation turns for the Claude Code session.
-    max_turns: int = 100
-    # Magnus credentials kept for symmetry; unused by statistics today.
-    magnus_address: str = ""
-    magnus_token: str = ""
-
-
-@dataclass(frozen=True)
-class CodeAgentConfig:
-    """Configuration for the advanced multi-phase code generation agent."""
-
-    enabled: bool = True
-    # Phase 1: Blueprint planning (deep implementation blueprint)
-    architecture_planning: bool = True
-    # Phase 2: Sequential file generation (one-by-one following blueprint)
-    sequential_generation: bool = True
-    # Phase 2.5: Hard validation gates (AST-based)
-    hard_validation: bool = True
-    hard_validation_max_repairs: int = 4
-    # Phase 3: Execution-in-the-loop (run → parse error → fix)
-    exec_fix_max_iterations: int = 3
-    exec_fix_timeout_sec: int = 60
-    # Phase 4: Solution tree search (off by default — higher cost)
-    tree_search_enabled: bool = False
-    tree_search_candidates: int = 3
-    tree_search_max_depth: int = 2
-    tree_search_eval_timeout_sec: int = 120
-    # Phase 5: Multi-agent review dialog
-    review_max_rounds: int = 2
-
-
-@dataclass(frozen=True)
-class OpenCodeConfig:
-    """OpenCode 'Beast Mode' — external AI coding agent for complex experiments.
-
-    Requires: npm i -g opencode-ai@latest
-    """
-
-    enabled: bool = True
-    auto: bool = True  # Auto-trigger without user confirmation
-    complexity_threshold: float = 0.2  # 0.0-1.0
-    model: str = ""  # Empty = use llm.primary_model
-    timeout_sec: int = 600  # Max seconds for opencode run
-    max_retries: int = 1
-    workspace_cleanup: bool = True
 
 
 @dataclass(frozen=True)
@@ -569,57 +293,59 @@ class ExperimentRepairConfig:
     max_cycles: int = 3
     min_completion_rate: float = 0.5  # At least 50% conditions must complete
     min_conditions: int = 2  # At least 2 conditions for a valid experiment
-    use_opencode: bool = True  # Use OpenCode agent for repairs (vs LLM prompt)
     timeout_sec_per_cycle: int = 600  # Max time per repair cycle
 
 
 @dataclass(frozen=True)
-class CliAgentConfig:
-    """CLI-based code generation backend for Stages 10 & 13.
+class WorkspaceAgentConfig:
+    """Existing-workspace mode for ACP coding agents.
 
-    provider: "llm"          — use existing LLM chat API (default, backward-compatible)
-              "claude_code"  — Claude Code CLI (``claude -p``)
-              "codex"        — OpenAI Codex CLI (``codex exec``)
-
-    base_url config maps to ANTHROPIC_BASE_URL for claude_code and
-    OPENAI_BASE_URL for codex.
-    api_key_env names the env var containing the key. Its value maps to
-    ANTHROPIC_AUTH_TOKEN for claude_code and OPENAI_API_KEY for codex.
+    When enabled, ResearchClaw invokes a code agent directly in
+    ``workspace_path`` and uses git commits plus an agent run manifest for
+    provenance instead of parsing generated code blocks.
     """
 
-    provider: str = "llm"
-    binary_path: str = ""  # auto-detected via PATH if empty
-    base_url: str = ""
-    api_key_env: str = ""
-    model: str = ""  # model override for the CLI agent
-    max_budget_usd: float = 5.0
-    timeout_sec: int = 600
-    extra_args: tuple[str, ...] = ()
+    enabled: bool = False
+    transport: str = "acp"
+    workspace_path: str = "."
+    session_name: str = ""
+    agent: str = "claude"
+    acpx_command: str = ""
+    manifest_filename: str = "run_manifest.json"
+    timeout_sec: int = 1800
+    max_turns: int = 50
+    close_policy: str = "keep"
+
+
+@dataclass(frozen=True)
+class SubmitterConfig:
+    """Training job submitter for workspace-native agent runs."""
+
+    type: str = "local"
+    custom_callable: str = ""
+    ssh_host: str = ""
+    ssh_user: str = ""
+    ssh_port: int = 22
+    ssh_key_path: str = ""
+    wait_for_completion: bool = True
+    poll_interval_sec: int = 15
+    wait_timeout_sec: int = 0
 
 
 @dataclass(frozen=True)
 class ExperimentConfig:
-    mode: str = "simulated"
+    mode: str = "workspace"
     time_budget_sec: int = 300
     max_iterations: int = 10
     max_refine_duration_sec: int = 0  # 0 = auto (3× time_budget_sec)
     metric_key: str = "primary_metric"
     metric_direction: str = "minimize"
     keep_threshold: float = 0.0
-    sandbox: SandboxConfig = field(default_factory=SandboxConfig)
-    docker: DockerSandboxConfig = field(default_factory=DockerSandboxConfig)
-    agentic: AgenticConfig = field(default_factory=AgenticConfig)
-    collider_agent: ColliderAgentConfig = field(default_factory=ColliderAgentConfig)
-    biology_agent: BiologyAgentConfig = field(default_factory=BiologyAgentConfig)
-    stat_agent: StatAgentConfig = field(default_factory=StatAgentConfig)
-    ssh_remote: SshRemoteConfig = field(default_factory=SshRemoteConfig)
-    colab_drive: ColabDriveConfig = field(default_factory=ColabDriveConfig)
-    code_agent: CodeAgentConfig = field(default_factory=CodeAgentConfig)
-    opencode: OpenCodeConfig = field(default_factory=OpenCodeConfig)
     benchmark_agent: BenchmarkAgentConfig = field(default_factory=BenchmarkAgentConfig)
     figure_agent: FigureAgentConfig = field(default_factory=FigureAgentConfig)
     repair: ExperimentRepairConfig = field(default_factory=ExperimentRepairConfig)
-    cli_agent: CliAgentConfig = field(default_factory=CliAgentConfig)
+    workspace_agent: WorkspaceAgentConfig = field(default_factory=WorkspaceAgentConfig)
+    submitter: SubmitterConfig = field(default_factory=SubmitterConfig)
 
 
 @dataclass(frozen=True)
@@ -884,13 +610,13 @@ class CalendarConfig:
 
 @dataclass(frozen=True)
 class RCConfig:
-    project: ProjectConfig
-    research: ResearchConfig
-    runtime: RuntimeConfig
-    notifications: NotificationsConfig
-    knowledge_base: KnowledgeBaseConfig
-    openclaw_bridge: OpenClawBridgeConfig
-    llm: LlmConfig
+    project: ProjectConfig = field(default_factory=ProjectConfig)
+    research: ResearchConfig = field(default_factory=ResearchConfig)
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
+    knowledge_base: KnowledgeBaseConfig = field(default_factory=KnowledgeBaseConfig)
+    openclaw_bridge: OpenClawBridgeConfig = field(default_factory=OpenClawBridgeConfig)
+    llm: LlmConfig = field(default_factory=LlmConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     experiment: ExperimentConfig = field(default_factory=ExperimentConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
@@ -1159,20 +885,13 @@ def validate_config(
                         f"Invalid security.hitl_required_stages entry: {stage}"
                     )
 
-    exp_mode = _get_by_path(data, "experiment.mode")
-    if not _is_blank(exp_mode) and exp_mode not in EXPERIMENT_MODES:
-        errors.append(f"Invalid experiment.mode: {exp_mode}")
-
     exp_direction = _get_by_path(data, "experiment.metric_direction")
     if not _is_blank(exp_direction) and exp_direction not in ("minimize", "maximize"):
         errors.append(f"Invalid experiment.metric_direction: {exp_direction}")
 
-    cli_agent_provider = _get_by_path(data, "experiment.cli_agent.provider")
-    if (
-        not _is_blank(cli_agent_provider)
-        and cli_agent_provider not in CLI_AGENT_PROVIDERS
-    ):
-        errors.append(f"Invalid experiment.cli_agent.provider: {cli_agent_provider}")
+    submitter_type = _get_by_path(data, "experiment.submitter.type")
+    if not _is_blank(submitter_type) and submitter_type not in SUBMITTER_TYPES:
+        errors.append(f"Invalid experiment.submitter.type: {submitter_type}")
 
     kb_root_raw = _get_by_path(data, "knowledge_base.root")
     if check_paths and not _is_blank(kb_root_raw) and project_root is not None:
@@ -1220,159 +939,24 @@ def _parse_llm_config(data: dict[str, Any]) -> LlmConfig:
     )
 
 
-def _parse_agentic_config(data: dict[str, Any]) -> AgenticConfig:
-    if not data:
-        return AgenticConfig()
-    return AgenticConfig(
-        image=data.get("image", "researchclaw/experiment:latest"),
-        agent_cli=data.get("agent_cli", "claude"),
-        agent_install_cmd=data.get(
-            "agent_install_cmd", "npm install -g @anthropic-ai/claude-code"
-        ),
-        network_policy=data.get("network_policy", "full"),
-        timeout_sec=int(data.get("timeout_sec", 1800)),
-        memory_limit_mb=int(data.get("memory_limit_mb", 8192)),
-        gpu_enabled=bool(data.get("gpu_enabled", False)),
-        mount_skills=bool(data.get("mount_skills", True)),
-        allow_shell_commands=bool(data.get("allow_shell_commands", True)),
-        max_turns=int(data.get("max_turns", 50)),
-    )
-
-
-def _parse_collider_agent_config(data: dict[str, Any]) -> ColliderAgentConfig:
-    if not data:
-        return ColliderAgentConfig()
-    extra_raw = data.get("extra_args", ("--dangerously-bypass-permissions",))
-    if isinstance(extra_raw, str):
-        extra_raw = [extra_raw]
-    return ColliderAgentConfig(
-        collider_agent_dir=data.get("collider_agent_dir", "external/agents/ColliderAgent"),
-        working_dir=data.get("working_dir", "collider_workspace"),
-        timeout_sec=_safe_int(data.get("timeout_sec"), 7200),
-        claude_binary=data.get("claude_binary", ""),
-        extra_args=tuple(extra_raw),
-        install_skills=bool(data.get("install_skills", True)),
-        max_turns=_safe_int(data.get("max_turns"), 150),
-        magnus_address=data.get("magnus_address", ""),
-        magnus_token=data.get("magnus_token", ""),
-    )
-
-
-def _parse_biology_agent_config(data: dict[str, Any]) -> BiologyAgentConfig:
-    if not data:
-        return BiologyAgentConfig()
-    extra_raw = data.get("extra_args", ("--dangerously-skip-permissions",))
-    if isinstance(extra_raw, str):
-        extra_raw = [extra_raw]
-    return BiologyAgentConfig(
-        biology_agent_dir=data.get("biology_agent_dir", "external/agents/Biology-Agent"),
-        working_dir=data.get("working_dir", "biology_workspace"),
-        timeout_sec=_safe_int(data.get("timeout_sec"), 3600),
-        claude_binary=data.get("claude_binary", ""),
-        extra_args=tuple(extra_raw),
-        install_skills=bool(data.get("install_skills", True)),
-        max_turns=_safe_int(data.get("max_turns"), 100),
-        magnus_address=data.get("magnus_address", ""),
-        magnus_token=data.get("magnus_token", ""),
-    )
-
-
-def _parse_stat_agent_config(data: dict[str, Any]) -> StatAgentConfig:
-    if not data:
-        return StatAgentConfig()
-    extra_raw = data.get("extra_args", ("--dangerously-skip-permissions",))
-    if isinstance(extra_raw, str):
-        extra_raw = [extra_raw]
-    return StatAgentConfig(
-        stat_agent_dir=data.get("stat_agent_dir", "external/agents/stat_research_agent"),
-        working_dir=data.get("working_dir", "stat_workspace"),
-        timeout_sec=_safe_int(data.get("timeout_sec"), 1800),
-        claude_binary=data.get("claude_binary", ""),
-        extra_args=tuple(extra_raw),
-        install_skills=bool(data.get("install_skills", True)),
-        max_turns=_safe_int(data.get("max_turns"), 100),
-        magnus_address=data.get("magnus_address", ""),
-        magnus_token=data.get("magnus_token", ""),
-    )
-
-
 def _parse_experiment_config(data: dict[str, Any]) -> ExperimentConfig:
-    sandbox_data = data.get("sandbox") or {}
-    docker_data = data.get("docker") or {}
-    ssh_data = data.get("ssh_remote") or {}
-    colab_data = data.get("colab_drive") or {}
     return ExperimentConfig(
-        mode=data.get("mode", "simulated"),
+        mode=data.get("mode", "workspace"),
         time_budget_sec=_safe_int(data.get("time_budget_sec"), 300),
         max_iterations=_safe_int(data.get("max_iterations"), 10),
         max_refine_duration_sec=_safe_int(data.get("max_refine_duration_sec"), 0),
         metric_key=data.get("metric_key", "primary_metric"),
         metric_direction=data.get("metric_direction", "minimize"),
         keep_threshold=_safe_float(data.get("keep_threshold"), 0.0),
-        sandbox=SandboxConfig(
-            python_path=sandbox_data.get("python_path", DEFAULT_PYTHON_PATH),
-            gpu_required=bool(sandbox_data.get("gpu_required", False)),
-            allowed_imports=tuple(
-                sandbox_data.get("allowed_imports", SandboxConfig.allowed_imports)
-            ),
-            max_memory_mb=_safe_int(sandbox_data.get("max_memory_mb"), 4096),
-        ),
-        docker=DockerSandboxConfig(
-            image=docker_data.get("image", "researchclaw/experiment:latest"),
-            gpu_enabled=bool(docker_data.get("gpu_enabled", True)),
-            gpu_device_ids=tuple(int(g) for g in docker_data.get("gpu_device_ids", ())),
-            memory_limit_mb=_safe_int(docker_data.get("memory_limit_mb"), 8192),
-            network_policy=_validate_network_policy(
-                docker_data.get("network_policy", "setup_only"),
-            ),
-            pip_pre_install=tuple(docker_data.get("pip_pre_install", ())),
-            auto_install_deps=bool(docker_data.get("auto_install_deps", True)),
-            shm_size_mb=_safe_int(docker_data.get("shm_size_mb"), 2048),
-            container_python=docker_data.get("container_python", "/usr/bin/python3"),
-            keep_containers=bool(docker_data.get("keep_containers", False)),
-        ),
-        ssh_remote=SshRemoteConfig(
-            host=ssh_data.get("host", ""),
-            user=ssh_data.get("user", ""),
-            port=_safe_int(ssh_data.get("port"), 22),
-            key_path=ssh_data.get("key_path", ""),
-            gpu_ids=tuple(int(g) for g in ssh_data.get("gpu_ids", ())),
-            remote_workdir=ssh_data.get(
-                "remote_workdir", "/tmp/researchclaw_experiments"
-            ),
-            remote_python=ssh_data.get("remote_python", "python3"),
-            setup_commands=tuple(ssh_data.get("setup_commands") or ()),
-            use_docker=bool(ssh_data.get("use_docker", False)),
-            docker_image=ssh_data.get("docker_image", "researchclaw/experiment:latest"),
-            docker_network_policy=_validate_network_policy(
-                ssh_data.get("docker_network_policy", "none"),
-            ),
-            docker_memory_limit_mb=_safe_int(
-                ssh_data.get("docker_memory_limit_mb"), 8192
-            ),
-            docker_shm_size_mb=_safe_int(ssh_data.get("docker_shm_size_mb"), 2048),
-            timeout_sec=_safe_int(ssh_data.get("timeout_sec"), 600),
-            scp_timeout_sec=_safe_int(ssh_data.get("scp_timeout_sec"), 300),
-            setup_timeout_sec=_safe_int(ssh_data.get("setup_timeout_sec"), 300),
-        ),
-        colab_drive=ColabDriveConfig(
-            drive_root=colab_data.get("drive_root", ""),
-            poll_interval_sec=_safe_int(colab_data.get("poll_interval_sec"), 30),
-            timeout_sec=_safe_int(colab_data.get("timeout_sec"), 3600),
-            setup_script=colab_data.get("setup_script", ""),
-        ),
-        agentic=_parse_agentic_config(data.get("agentic") or {}),
-        collider_agent=_parse_collider_agent_config(data.get("collider_agent") or {}),
-        biology_agent=_parse_biology_agent_config(data.get("biology_agent") or {}),
-        stat_agent=_parse_stat_agent_config(data.get("stat_agent") or {}),
-        code_agent=_parse_code_agent_config(data.get("code_agent") or {}),
-        opencode=_parse_opencode_config(data.get("opencode") or {}),
         benchmark_agent=_parse_benchmark_agent_config(
             data.get("benchmark_agent") or {}
         ),
         figure_agent=_parse_figure_agent_config(data.get("figure_agent") or {}),
         repair=_parse_experiment_repair_config(data.get("repair") or {}),
-        cli_agent=_parse_cli_agent_config(data.get("cli_agent") or {}),
+        workspace_agent=_parse_workspace_agent_config(
+            data.get("workspace_agent") or {}
+        ),
+        submitter=_parse_submitter_config(data.get("submitter") or {}),
     )
 
 
@@ -1423,60 +1007,40 @@ def _parse_experiment_repair_config(data: dict[str, Any]) -> ExperimentRepairCon
         max_cycles=_safe_int(data.get("max_cycles"), 3),
         min_completion_rate=_safe_float(data.get("min_completion_rate"), 0.5),
         min_conditions=_safe_int(data.get("min_conditions"), 2),
-        use_opencode=bool(data.get("use_opencode", True)),
         timeout_sec_per_cycle=_safe_int(data.get("timeout_sec_per_cycle"), 600),
     )
 
 
-def _parse_cli_agent_config(data: dict[str, Any]) -> CliAgentConfig:
+def _parse_workspace_agent_config(data: dict[str, Any]) -> WorkspaceAgentConfig:
     if not data:
-        return CliAgentConfig()
-    return CliAgentConfig(
-        provider=data.get("provider", "llm"),
-        binary_path=data.get("binary_path", ""),
-        base_url=data.get("base_url", ""),
-        api_key_env=data.get("api_key_env", ""),
-        model=data.get("model", ""),
-        max_budget_usd=_safe_float(data.get("max_budget_usd"), 5.0),
-        timeout_sec=_safe_int(data.get("timeout_sec"), 600),
-        extra_args=tuple(data.get("extra_args") or ()),
+        return WorkspaceAgentConfig()
+    return WorkspaceAgentConfig(
+        enabled=bool(data.get("enabled", False)),
+        transport=data.get("transport", "acp"),
+        workspace_path=data.get("workspace_path", "."),
+        session_name=data.get("session_name", ""),
+        agent=data.get("agent", "claude"),
+        acpx_command=data.get("acpx_command", ""),
+        manifest_filename=data.get("manifest_filename", "run_manifest.json"),
+        timeout_sec=_safe_int(data.get("timeout_sec"), 1800),
+        max_turns=_safe_int(data.get("max_turns"), 50),
+        close_policy=data.get("close_policy", "keep"),
     )
 
 
-def _parse_code_agent_config(data: dict[str, Any]) -> CodeAgentConfig:
+def _parse_submitter_config(data: dict[str, Any]) -> SubmitterConfig:
     if not data:
-        return CodeAgentConfig()
-    return CodeAgentConfig(
-        enabled=bool(data.get("enabled", True)),
-        architecture_planning=bool(data.get("architecture_planning", True)),
-        sequential_generation=bool(data.get("sequential_generation", True)),
-        hard_validation=bool(data.get("hard_validation", True)),
-        hard_validation_max_repairs=_safe_int(
-            data.get("hard_validation_max_repairs"), 4
-        ),
-        exec_fix_max_iterations=_safe_int(data.get("exec_fix_max_iterations"), 3),
-        exec_fix_timeout_sec=_safe_int(data.get("exec_fix_timeout_sec"), 60),
-        tree_search_enabled=bool(data.get("tree_search_enabled", False)),
-        tree_search_candidates=_safe_int(data.get("tree_search_candidates"), 3),
-        tree_search_max_depth=_safe_int(data.get("tree_search_max_depth"), 2),
-        tree_search_eval_timeout_sec=_safe_int(
-            data.get("tree_search_eval_timeout_sec"), 120
-        ),
-        review_max_rounds=_safe_int(data.get("review_max_rounds"), 2),
-    )
-
-
-def _parse_opencode_config(data: dict[str, Any]) -> OpenCodeConfig:
-    if not data:
-        return OpenCodeConfig()
-    return OpenCodeConfig(
-        enabled=bool(data.get("enabled", True)),
-        auto=bool(data.get("auto", True)),
-        complexity_threshold=_safe_float(data.get("complexity_threshold"), 0.2),
-        model=str(data.get("model", "")),
-        timeout_sec=_safe_int(data.get("timeout_sec"), 600),
-        max_retries=_safe_int(data.get("max_retries"), 1),
-        workspace_cleanup=bool(data.get("workspace_cleanup", True)),
+        return SubmitterConfig()
+    return SubmitterConfig(
+        type=data.get("type", "local"),
+        custom_callable=data.get("custom_callable", ""),
+        ssh_host=data.get("ssh_host", ""),
+        ssh_user=data.get("ssh_user", ""),
+        ssh_port=_safe_int(data.get("ssh_port"), 22),
+        ssh_key_path=data.get("ssh_key_path", ""),
+        wait_for_completion=bool(data.get("wait_for_completion", True)),
+        poll_interval_sec=_safe_int(data.get("poll_interval_sec"), 15),
+        wait_timeout_sec=_safe_int(data.get("wait_timeout_sec"), 0),
     )
 
 

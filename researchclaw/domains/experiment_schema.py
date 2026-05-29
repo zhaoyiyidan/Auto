@@ -180,8 +180,8 @@ def from_legacy_exp_plan(
     plan_yaml: str | dict[str, Any],
     domain_id: str = "",
 ) -> UniversalExperimentPlan:
-    """Convert a legacy exp_plan.yaml (baselines/proposed/ablations) to
-    the universal format.
+    """Convert a legacy plan payload (baselines/proposed/ablations) to the
+    universal format.
 
     This allows existing ML experiment plans to work with the new system.
     """

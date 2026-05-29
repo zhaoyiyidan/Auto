@@ -5,8 +5,8 @@ Parse priority:
   2. ``results.csv`` — tabular output
   3. stdout regex — backward-compatible with existing ``metric: value`` format
 
-This module extends (not replaces) the existing ``sandbox.parse_metrics``
-function. The existing stdout parser remains the fallback.
+The stdout fallback is implemented locally so metrics parsing does not depend
+on any experiment execution backend.
 """
 
 from __future__ import annotations
@@ -15,11 +15,14 @@ import csv
 import json
 import logging
 import math
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from io import StringIO
 from pathlib import Path
 from typing import Any
+
+from researchclaw.hardware import is_metric_name
 
 logger = logging.getLogger(__name__)
 
@@ -251,14 +254,54 @@ class UniversalMetricParser:
         return result
 
     def _parse_stdout(self, stdout: str) -> ExperimentResults:
-        """Parse stdout using the existing regex-based parser.
-
-        Delegates to ``sandbox.parse_metrics`` for backward compatibility.
-        """
-        from researchclaw.experiment.sandbox import parse_metrics
-
-        metrics = parse_metrics(stdout)
-        return ExperimentResults(
-            scalars={k: float(v) for k, v in metrics.items() if isinstance(v, (int, float))},
-            source="stdout",
+        """Parse scalar metric lines from stdout."""
+        condition_value_re = re.compile(
+            r"^condition=(\S+)\s+metric=([0-9eE.+-]+)\s*$"
         )
+        condition_named_re = re.compile(
+            r"^condition=(\S+)\s+(.+?):\s*([0-9eE.+-]+)\s*$"
+        )
+        metrics: dict[str, float] = {}
+
+        for raw_line in stdout.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            match = condition_value_re.match(line)
+            if match:
+                value = _finite_float(match.group(2))
+                if value is not None:
+                    metrics[match.group(1)] = value
+                continue
+
+            match = condition_named_re.match(line)
+            if match:
+                condition = match.group(1)
+                metric_name = match.group(2).strip()
+                value = _finite_float(match.group(3))
+                if value is not None and is_metric_name(metric_name):
+                    metrics[f"{condition}/{metric_name}"] = value
+                continue
+
+            if ":" not in line:
+                continue
+            name_part, value_part = line.rsplit(":", 1)
+            metric_name = name_part.strip()
+            if not is_metric_name(metric_name):
+                continue
+            value = _finite_float(value_part.strip())
+            if value is not None:
+                metrics[metric_name] = value
+
+        return ExperimentResults(scalars=metrics, source="stdout")
+
+
+def _finite_float(value: object) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed

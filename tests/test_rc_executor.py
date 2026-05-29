@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -433,6 +434,115 @@ class TestWorkspaceAgentStageWiring:
         assert result.status is StageStatus.FAILED
         assert not (stage_dir / "run_manifest.json").exists()
 
+    def test_stage11_validates_manifest_and_copies_it(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        from researchclaw.experiment.workspace import LaunchCommand, RunManifest
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        workspace = Path(cfg.experiment.workspace_agent.workspace_path)
+        head = _init_workspace_git(workspace)
+        manifest = RunManifest(
+            code_commit=head,
+            launch=LaunchCommand(command="python train.py"),
+            result_paths=["outputs/metrics.json"],
+        )
+        _write_prior_artifact(run_dir, 10, "run_manifest.json", manifest.to_json())
+        stage_dir = run_dir / "stage-11"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_resource_planning(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.DONE
+        validation = json.loads(
+            (stage_dir / "manifest_validation.json").read_text(encoding="utf-8")
+        )
+        assert validation["ok"] is True
+        assert json.loads((stage_dir / "run_manifest.json").read_text(encoding="utf-8"))[
+            "code_commit"
+        ] == head
+
+    def test_stage11_invalid_manifest_prompts_agent_to_fix(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from researchclaw.experiment.workspace import LaunchCommand, RunManifest
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        workspace = Path(cfg.experiment.workspace_agent.workspace_path)
+        head = _init_workspace_git(workspace)
+        bad_manifest = RunManifest(
+            code_commit=head,
+            launch=LaunchCommand(command="python train.py"),
+            result_paths=[],
+        )
+        _write_prior_artifact(run_dir, 10, "run_manifest.json", bad_manifest.to_json())
+        agent = object()
+        prompts_seen: list[str] = []
+
+        monkeypatch.setattr(
+            "researchclaw.experiment.workspace_agent.create_workspace_agent",
+            lambda *args, **kwargs: agent,
+        )
+
+        def fake_implement(**kwargs: Any):
+            from researchclaw.experiment.workspace import WorkspaceAgentResult
+
+            prompts_seen.append(kwargs["prompt"])
+            fixed = RunManifest(
+                code_commit=head,
+                launch=LaunchCommand(command="python train.py"),
+                result_paths=["outputs/metrics.json"],
+            )
+            (workspace / "run_manifest.json").write_text(
+                fixed.to_json(),
+                encoding="utf-8",
+            )
+            return WorkspaceAgentResult(
+                base_sha=head,
+                agent_commit_sha=head,
+                manifest_path="run_manifest.json",
+                diff_stat="",
+                raw_log="fixed manifest",
+                provider_name="acp",
+                elapsed_sec=0.1,
+            )
+
+        monkeypatch.setattr(
+            "researchclaw.pipeline.workspace_orchestrator.run_workspace_agent_implement",
+            fake_implement,
+        )
+        stage_dir = run_dir / "stage-11"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_resource_planning(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.DONE
+        assert prompts_seen
+        assert "result_paths" in prompts_seen[0]
+        validation = json.loads(
+            (stage_dir / "manifest_validation.json").read_text(encoding="utf-8")
+        )
+        assert validation["ok"] is True
+
     def test_stage13_calls_workspace_agent_task(
         self,
         tmp_path: Path,
@@ -501,6 +611,37 @@ def _workspace_agent_rc_config(tmp_path: Path) -> RCConfig:
         },
     }
     return RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+
+def _init_workspace_git(workspace: Path) -> str:
+    workspace.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=workspace,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"],
+        cwd=workspace,
+        check=True,
+    )
+    (workspace / "README.md").write_text("# workspace\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+    )
+    proc = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return proc.stdout.strip()
 
 
 def _patch_workspace_runner(

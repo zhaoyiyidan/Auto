@@ -18,52 +18,6 @@ from researchclaw.pipeline.stages import Stage, StageStatus
 from researchclaw.prompts import PromptManager
 
 
-def _workspace_refine_prompt(
-    *,
-    topic: str,
-    metric_key: str,
-    metric_direction: str,
-    exp_plan: str,
-    project_files: list[str],
-    run_summaries: list[str],
-    manifest_filename: str,
-    execution_record: str = "",
-    result_artifacts: str = "",
-) -> str:
-    summaries = "\n".join(run_summaries[:20]) if run_summaries else "(no prior runs)"
-    results_section = ""
-    if execution_record or result_artifacts:
-        results_section = (
-            f"\n\nEXECUTION RECORD:\n{execution_record or '{}'}\n\n"
-            f"RESULT ARTIFACTS:\n{result_artifacts or '{}'}\n"
-        )
-    return (
-        "You are a workspace-native code agent working inside an existing git "
-        "repository. Improve the experiment in place. Do not emit code blocks "
-        "for ResearchClaw to parse.\n\n"
-        f"TOPIC:\n{topic}\n\n"
-        f"TARGET: {metric_direction} {metric_key}\n\n"
-        f"ORIGINAL EXPERIMENT PLAN:\n{exp_plan}\n\n"
-        f"KNOWN PROJECT FILES FROM PRIOR STAGES:\n{project_files}\n\n"
-        f"PRIOR RUN SUMMARIES:\n{summaries}\n\n"
-        f"{results_section}"
-        "Completion contract (MUST):\n"
-        "1. MUST inspect the existing workspace before editing.\n"
-        "2. MUST improve the existing repository in place, using its structure.\n"
-        "3. MUST prepare a launch command or script for the improved run.\n"
-        "4. MUST git add and git commit the code changes you made.\n"
-        f"5. MUST write {manifest_filename} in the workspace root or .researchclaw/.\n"
-        "6. MUST include code_commit, launch.command, launch.cwd, launch.env, "
-        "launch.resources, and result_paths in the manifest.\n\n"
-        "Boundaries (MUST NOT):\n"
-        "1. MUST NOT submit the job yourself. Do not submit the job yourself; "
-        "ResearchClaw's submitter will run the manifest command.\n"
-        "2. MUST NOT fabricate a job_id or final result registry entry.\n"
-        "3. MUST NOT assume a fixed entrypoint, file layout, or script name.\n"
-        "4. MUST NOT emit code blocks for ResearchClaw to parse as the output.\n"
-    )
-
-
 def _execute_resource_planning(
     stage_dir: Path,
     run_dir: Path,

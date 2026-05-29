@@ -89,6 +89,71 @@ def wait_for_completion(
             time.sleep(min(poll_interval_sec, max(deadline - time.monotonic(), 0)))
 
 
+def run_workspace_agent_implement(
+    workspace_path: Path,
+    run_dir: Path,
+    stage: int,
+    agent: WorkspaceAgentProvider,
+    prompt: str,
+    timeout_sec: int,
+    *,
+    iteration: int | None = None,
+    ledger: WorkspaceAgentLedger | None = None,
+    close_policy: str = "keep",
+) -> WorkspaceAgentResult:
+    """Run a workspace code agent and record implementation provenance."""
+    workspace = workspace_path.resolve()
+    run_dir.mkdir(parents=True, exist_ok=True)
+    ledger = ledger or WorkspaceAgentLedger(run_dir)
+    stage_ledger_dir = ledger.stage_dir(stage, iteration=iteration)
+    base_sha = record_base_sha(workspace)
+    ledger.write_prompt(stage_ledger_dir, prompt)
+    ledger.write_base_sha(stage_ledger_dir, base_sha)
+    ledger.save_session_meta(
+        {
+            "provider": getattr(agent, "name", ""),
+            "session_name": _agent_session_name(agent),
+            "workspace": str(workspace),
+        }
+    )
+    result = invoke_workspace_agent(
+        agent=agent,
+        workspace_path=workspace,
+        workdir=workspace,
+        prompt=prompt,
+        timeout_sec=timeout_sec,
+    )
+    ledger.write_agent_result(stage_ledger_dir, result)
+    _write_workspace_agent_result(run_dir, stage, result)
+    if not result.ok or not verify_agent_commit(result, base_sha):
+        _export_session_snapshot(agent, ledger, stage_ledger_dir)
+        _close_session_if_requested(agent, close_policy)
+        return result
+
+    manifest = _manifest_from_result(workspace, result) or read_agent_manifest(workspace)
+    if manifest is None:
+        failed = WorkspaceAgentResult(
+            base_sha=result.base_sha,
+            agent_commit_sha=result.agent_commit_sha,
+            manifest_path=result.manifest_path,
+            diff_stat=result.diff_stat,
+            raw_log=result.raw_log,
+            provider_name=result.provider_name,
+            elapsed_sec=result.elapsed_sec,
+            error="Agent manifest could not be read",
+        )
+        _write_workspace_agent_result(run_dir, stage, failed)
+        ledger.write_agent_result(stage_ledger_dir, failed)
+        _export_session_snapshot(agent, ledger, stage_ledger_dir)
+        _close_session_if_requested(agent, close_policy)
+        return failed
+    if result.manifest_path:
+        ledger.copy_manifest(stage_ledger_dir, workspace / result.manifest_path)
+    _export_session_snapshot(agent, ledger, stage_ledger_dir)
+    _close_session_if_requested(agent, close_policy)
+    return result
+
+
 def run_workspace_agent_task(
     workspace_path: Path,
     run_dir: Path,
@@ -195,6 +260,17 @@ def run_workspace_agent_task(
     _export_session_snapshot(agent, ledger, stage_ledger_dir)
     _close_session_if_requested(agent, close_policy)
     return result
+
+
+def _write_workspace_agent_result(
+    run_dir: Path,
+    stage: int,
+    result: WorkspaceAgentResult,
+) -> None:
+    (run_dir / f"stage-{stage:02d}-workspace-agent-result.json").write_text(
+        json.dumps(asdict(result), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def _manifest_from_result(

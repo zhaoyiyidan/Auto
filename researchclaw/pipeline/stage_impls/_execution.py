@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -52,26 +51,30 @@ def _execute_manifest_validate_and_prepare(
 
     workspace = Path(config.experiment.workspace_agent.workspace_path).resolve()
     validation = validate_manifest(manifest, workspace, allow_dirty=False)
-    if not validation.ok:
-        manifest = _ask_agent_to_fix_manifest(
-            config=config,
-            stage_dir=stage_dir,
-            workspace=workspace,
-            errors=validation.errors,
-            manifest=manifest,
-        ) or manifest
-        validation = validate_manifest(manifest, workspace, allow_dirty=False)
-
     (stage_dir / "manifest_validation.json").write_text(
         json.dumps(validation.to_dict(), indent=2, sort_keys=True),
         encoding="utf-8",
     )
     if not validation.ok:
+        _write_repair_request(
+            run_dir,
+            origin_stage=11,
+            reason="manifest_invalid",
+            errors=validation.errors,
+            iteration=_read_experiment_iteration_count(run_dir),
+            generated=_utcnow_iso(),
+            diagnosis_ref=(
+                "experiment_diagnosis.json"
+                if (run_dir / "experiment_diagnosis.json").is_file()
+                else ""
+            ),
+        )
         return StageResult(
             stage=Stage.MANIFEST_VALIDATE_AND_PREPARE,
             status=StageStatus.FAILED,
             artifacts=("manifest_validation.json",),
             error="E11_MANIFEST_INVALID: " + "; ".join(validation.errors),
+            decision="fix_code",
         )
 
     (stage_dir / "run_manifest.json").write_text(manifest.to_json(), encoding="utf-8")
@@ -232,6 +235,7 @@ def _execute_experiment_route_decision(
     if route == "fix_code":
         _write_repair_request(
             run_dir,
+            origin_stage=13,
             reason=reason,
             errors=details,
             iteration=iteration,
@@ -409,6 +413,7 @@ def _experiment_decision_evidence(
 def _write_repair_request(
     run_dir: Path,
     *,
+    origin_stage: int,
     reason: str,
     errors: list[str],
     iteration: int,
@@ -417,7 +422,7 @@ def _write_repair_request(
 ) -> None:
     payload = {
         "schema_version": "researchclaw.repair_request.v1",
-        "origin_stage": 13,
+        "origin_stage": origin_stage,
         "reason": reason,
         "errors": errors or [reason],
         "diagnosis_ref": diagnosis_ref,
@@ -470,63 +475,6 @@ def _read_experiment_iteration_count(run_dir: Path) -> int:
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
-def _ask_agent_to_fix_manifest(
-    *,
-    config: RCConfig,
-    stage_dir: Path,
-    workspace: Path,
-    errors: list[str],
-    manifest: RunManifest,
-) -> RunManifest | None:
-    from researchclaw.experiment import workspace_agent as workspace_agent_factory
-    from researchclaw.pipeline import workspace_orchestrator
-
-    prompt = (
-        "The current run_manifest.json failed ResearchClaw validation.\n"
-        "Fix only the manifest and any minimal supporting files required for it. "
-        "Do not submit the job.\n\n"
-        "Validation errors:\n"
-        + "\n".join(f"- {error}" for error in errors)
-        + "\n\nCurrent manifest:\n"
-        + manifest.to_json()
-    )
-    agent = workspace_agent_factory.create_workspace_agent(config)
-    result = workspace_orchestrator.run_workspace_agent_implement(
-        workspace_path=workspace,
-        run_dir=stage_dir,
-        stage=11,
-        agent=agent,
-        prompt=prompt,
-        timeout_sec=int(getattr(config.experiment.workspace_agent, "timeout_sec", 600)),
-        close_policy="keep",
-    )
-    manifest_path = _manifest_source(
-        workspace,
-        result.manifest_path,
-        str(getattr(config.experiment.workspace_agent, "manifest_filename", "run_manifest.json")),
-    )
-    if manifest_path is None:
-        return None
-    shutil.copy2(manifest_path, stage_dir / "run_manifest.json")
-    return RunManifest.from_path(manifest_path)
-
-
-def _manifest_source(
-    workspace: Path,
-    manifest_path: str | None,
-    manifest_filename: str,
-) -> Path | None:
-    candidates: list[Path] = []
-    if manifest_path:
-        path = Path(manifest_path)
-        candidates.append(path if path.is_absolute() else workspace / path)
-    candidates.extend([workspace / manifest_filename, workspace / ".researchclaw" / manifest_filename])
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    return None
 
 
 def _latest_agent_result(run_dir: Path) -> dict[str, Any]:

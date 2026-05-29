@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+from pathlib import Path
 
 
 def test_legacy_execution_backend_modules_are_removed() -> None:
@@ -43,3 +44,15 @@ def test_workspace_stage_execution_has_no_legacy_backend_references() -> None:
         "ssh_sandbox",
     ]
     assert [token for token in forbidden if token in source] == []
+
+
+def test_legacy_code_agent_script_tests_are_removed() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    removed_scripts = [
+        "scripts/test_beast_mode_e2e.py",
+        "scripts/test_code_agent_live.py",
+        "scripts/test_code_agent_sandbox.py",
+        "scripts/test_codegen_v2.py",
+    ]
+
+    assert [name for name in removed_scripts if (repo_root / name).exists()] == []

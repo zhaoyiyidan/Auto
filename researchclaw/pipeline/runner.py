@@ -229,7 +229,7 @@ def _run_experiment_diagnosis(run_dir: Path, config: RCConfig, run_id: str) -> N
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
 
         # Collect stdout/stderr from experiment runs
-        # Look in stage-12 (EXPERIMENT_RUN) and stage-13 (ITERATIVE_REFINE), not stage-14
+        # Look in stage-12 (HARNESS_SUBMIT_AND_COLLECT) and stage-13 (CODE_AGENT_REFINE), not stage-14
         stdout, stderr = "", ""
         runs_dir = None
         for _candidate_runs in sorted(run_dir.glob("stage-1[23]*/runs"), reverse=True):
@@ -549,7 +549,7 @@ def execute_pipeline(
                 pass
 
         # ── ExperimentSpec: generate after design, validate after analysis ──
-        if stage == Stage.EXPERIMENT_DESIGN and result.status == StageStatus.DONE:
+        if stage == Stage.EXPERIMENT_TASK_SPEC and result.status == StageStatus.DONE:
             try:
                 from researchclaw.pipeline.experiment_spec import ExperimentSpec, MetricDef, generate_spec
                 spec_text = generate_spec(config.research.topic, "")
@@ -579,7 +579,7 @@ def execute_pipeline(
                 logger.debug("Experiment spec validation skipped")
 
         # ── Pitfall detection after code generation / experiment run ──
-        if stage in (Stage.CODE_GENERATION, Stage.EXPERIMENT_RUN) and result.status == StageStatus.DONE:
+        if stage in (Stage.CODE_AGENT_IMPLEMENT, Stage.HARNESS_SUBMIT_AND_COLLECT) and result.status == StageStatus.DONE:
             try:
                 from researchclaw.pipeline.pitfall_detector import PitfallDetector
                 detector = PitfallDetector()
@@ -599,7 +599,7 @@ def execute_pipeline(
                 logger.debug("Pitfall detection skipped")
 
         # ── Experiment memory: record outcome after experiment stages ──
-        if stage in (Stage.EXPERIMENT_RUN, Stage.ITERATIVE_REFINE) and result.status == StageStatus.DONE and exp_memory:
+        if stage in (Stage.HARNESS_SUBMIT_AND_COLLECT, Stage.CODE_AGENT_REFINE) and result.status == StageStatus.DONE and exp_memory:
             try:
                 from researchclaw.memory.experiment_memory import ExperimentOutcome
                 import time as _time_mod
@@ -717,17 +717,17 @@ def execute_pipeline(
             elif pivot_count < MAX_DECISION_PIVOTS:
                 rollback_target = DECISION_ROLLBACK[result.decision]
                 # Agent-based modes: REFINE means re-run the agent atomically.
-                # Stage 13 ITERATIVE_REFINE is a no-op for these modes (it
+                # Stage 13 CODE_AGENT_REFINE is a no-op for these modes (it
                 # would refine python files the agent never executed), so
                 # routing REFINE there wastes a pipeline cycle.  Send REFINE
-                # straight back to EXPERIMENT_RUN so the sandbox re-spawns
+                # straight back to HARNESS_SUBMIT_AND_COLLECT so the sandbox re-spawns
                 # claude with the REPAIR_PROMPT.md the requirements gate
                 # just wrote.
                 if (
                     config.experiment.mode in ("collider_agent", "biology_agent", "stat_agent")
                     and result.decision == "refine"
                 ):
-                    rollback_target = Stage.EXPERIMENT_RUN
+                    rollback_target = Stage.HARNESS_SUBMIT_AND_COLLECT
                 _record_decision_history(
                     run_dir, result.decision, rollback_target, pivot_count + 1
                 )
@@ -1244,16 +1244,16 @@ def _version_rollback_stages(
     Default behavior renames ``stage-NN/`` to ``stage-NN_v{attempt}/`` so the
     next run starts from a clean slate.
 
-    When ``incremental=True``, directories whose number is >= EXPERIMENT_RUN (12)
+    When ``incremental=True``, directories whose number is >= HARNESS_SUBMIT_AND_COLLECT (12)
     are *copied* via ``shutil.copytree`` instead of renamed, so the live
-    stage-12 workspace persists across re-entries. Stages before EXPERIMENT_RUN
+    stage-12 workspace persists across re-entries. Stages before HARNESS_SUBMIT_AND_COLLECT
     in the rollback range are still renamed.
     """
     import shutil
 
     rollback_num = int(rollback_target)
     decision_num = int(Stage.RESEARCH_DECISION)
-    exp_run_num = int(Stage.EXPERIMENT_RUN)
+    exp_run_num = int(Stage.HARNESS_SUBMIT_AND_COLLECT)
 
     for stage_num in range(rollback_num, decision_num + 1):
         stage_dir = run_dir / f"stage-{stage_num:02d}"

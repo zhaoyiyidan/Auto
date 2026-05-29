@@ -229,7 +229,7 @@ def _execute_result_analysis(
     if runs_dir:
         context = _collect_json_context(Path(runs_dir), max_files=30)
 
-    # --- R13-1: Merge Stage 13 (ITERATIVE_REFINE) results if available ---
+    # --- R13-1: Merge Stage 13 (CODE_AGENT_REFINE) results if available ---
     # Stage 13 stores richer per-condition metrics in refinement_log.json
     # that _collect_experiment_results() misses (it only scans runs/ dirs).
     _refine_log_text = _read_prior_artifact(run_dir, "refinement_log.json")
@@ -994,7 +994,7 @@ def _parse_decision(text: str) -> str:
 # the LLM judge, persists the verdict, and either:
 #   * verdict=reject AND retry budget remains → write REPAIR_PROMPT.md and
 #     decide REFINE (the runner-side rollback override sends us back to
-#     EXPERIMENT_RUN, where the sandbox consumes the repair prompt).
+#     HARNESS_SUBMIT_AND_COLLECT, where the sandbox consumes the repair prompt).
 #   * otherwise → decide PROCEED (with a `requirements_unmet` flag if any
 #     must_pass remains failing after the retry budget is exhausted).
 # ---------------------------------------------------------------------------
@@ -1202,7 +1202,7 @@ def _format_agent_decision_md(
     if rerun_triggered:
         lines += [
             "Requirements unmet — REPAIR_PROMPT.md written to stage-12 sandbox "
-            "workspace; pipeline rolls back to EXPERIMENT_RUN to give the agent "
+            "workspace; pipeline rolls back to HARNESS_SUBMIT_AND_COLLECT to give the agent "
             "a final chance to satisfy must_pass items.",
             "",
         ]

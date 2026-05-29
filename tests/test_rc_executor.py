@@ -1497,8 +1497,8 @@ def test_execute_stage_executor_exception_returns_failed(
         Stage.KNOWLEDGE_EXTRACT,
         Stage.SYNTHESIS,
         Stage.HYPOTHESIS_GEN,
-        Stage.EXPERIMENT_DESIGN,
-        Stage.CODE_GENERATION,
+        Stage.EXPERIMENT_TASK_SPEC,
+        Stage.CODE_AGENT_IMPLEMENT,
     ],
 )
 def test_stage_executor_mapping_values_are_callable(stage: Stage) -> None:
@@ -2087,7 +2087,7 @@ class TestExportPublishCodePackage:
 
 
 def test_contracts_stage13_includes_experiment_final() -> None:
-    assert "experiment_final/" in CONTRACTS[Stage.ITERATIVE_REFINE].output_files
+    assert "experiment_final/" in CONTRACTS[Stage.CODE_AGENT_REFINE].output_files
 
 
 def test_contracts_stage22_includes_code_dir() -> None:

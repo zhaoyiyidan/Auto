@@ -85,7 +85,7 @@ def _execute_code_agent_implement(
     task_spec_text = _read_prior_artifact(run_dir, "task_spec.yaml")
     if not task_spec_text:
         return StageResult(
-            stage=Stage.CODE_GENERATION,
+            stage=Stage.CODE_AGENT_IMPLEMENT,
             status=StageStatus.FAILED,
             artifacts=(),
             error="E10_CODE_AGENT_FAIL: missing task_spec.yaml",
@@ -94,7 +94,7 @@ def _execute_code_agent_implement(
         task_spec = TaskSpec.from_yaml(task_spec_text)
     except Exception as exc:  # noqa: BLE001
         return StageResult(
-            stage=Stage.CODE_GENERATION,
+            stage=Stage.CODE_AGENT_IMPLEMENT,
             status=StageStatus.FAILED,
             artifacts=(),
             error=f"E10_CODE_AGENT_FAIL: invalid task_spec.yaml: {exc}",
@@ -135,7 +135,7 @@ def _execute_code_agent_implement(
         or result.agent_commit_sha == result.base_sha
     ):
         return StageResult(
-            stage=Stage.CODE_GENERATION,
+            stage=Stage.CODE_AGENT_IMPLEMENT,
             status=StageStatus.FAILED,
             artifacts=("stage-10-workspace-agent-result.json",),
             error=f"E10_CODE_AGENT_FAIL: {result.error or 'agent did not commit'}",
@@ -144,14 +144,14 @@ def _execute_code_agent_implement(
     manifest_source = _manifest_source(workspace, result.manifest_path, manifest_filename)
     if manifest_source is None:
         return StageResult(
-            stage=Stage.CODE_GENERATION,
+            stage=Stage.CODE_AGENT_IMPLEMENT,
             status=StageStatus.FAILED,
             artifacts=("stage-10-workspace-agent-result.json",),
             error="E10_CODE_AGENT_FAIL: missing run_manifest.json",
         )
     shutil.copy2(manifest_source, stage_dir / "run_manifest.json")
     return StageResult(
-        stage=Stage.CODE_GENERATION,
+        stage=Stage.CODE_AGENT_IMPLEMENT,
         status=StageStatus.DONE,
         artifacts=("stage-10-workspace-agent-result.json", "run_manifest.json"),
         evidence_refs=(

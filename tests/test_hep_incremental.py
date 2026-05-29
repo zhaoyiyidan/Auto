@@ -49,15 +49,15 @@ def test_run_subparser_incremental_experiment_default_false():
 def test_gate_required_returns_true_for_code_generation_when_profile_is_hep_ph():
     from researchclaw.pipeline.stages import Stage, gate_required
 
-    assert gate_required(Stage.CODE_GENERATION, profile="hep_ph") is True
+    assert gate_required(Stage.CODE_AGENT_IMPLEMENT, profile="hep_ph") is True
 
 
 def test_gate_required_returns_false_for_code_generation_without_profile():
     from researchclaw.pipeline.stages import Stage, gate_required
 
-    assert gate_required(Stage.CODE_GENERATION) is False
-    assert gate_required(Stage.CODE_GENERATION, profile=None) is False
-    assert gate_required(Stage.CODE_GENERATION, profile="ml_tabular") is False
+    assert gate_required(Stage.CODE_AGENT_IMPLEMENT) is False
+    assert gate_required(Stage.CODE_AGENT_IMPLEMENT, profile=None) is False
+    assert gate_required(Stage.CODE_AGENT_IMPLEMENT, profile="ml_tabular") is False
 
 
 def test_gate_required_unaffected_for_existing_gates_when_profile_is_passed():
@@ -65,13 +65,13 @@ def test_gate_required_unaffected_for_existing_gates_when_profile_is_passed():
 
     assert gate_required(Stage.LITERATURE_SCREEN, profile="hep_ph") is True
     assert gate_required(Stage.LITERATURE_SCREEN, profile="ml_tabular") is True
-    assert gate_required(Stage.EXPERIMENT_DESIGN, profile=None) is True
+    assert gate_required(Stage.EXPERIMENT_TASK_SPEC, profile=None) is True
 
 
 def test_default_rollback_for_code_generation_is_experiment_design():
     from researchclaw.pipeline.stages import Stage, default_rollback_stage
 
-    assert default_rollback_stage(Stage.CODE_GENERATION) is Stage.EXPERIMENT_DESIGN
+    assert default_rollback_stage(Stage.CODE_AGENT_IMPLEMENT) is Stage.EXPERIMENT_TASK_SPEC
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +83,7 @@ def test_code_generation_contract_has_collider_alternate_output():
     from researchclaw.pipeline.contracts import CONTRACTS
     from researchclaw.pipeline.stages import Stage
 
-    contract = CONTRACTS[Stage.CODE_GENERATION]
+    contract = CONTRACTS[Stage.CODE_AGENT_IMPLEMENT]
     # Default ML output unchanged
     assert "experiment/" in contract.output_files
     # New: collider-mode alternate
@@ -137,7 +137,7 @@ def test_select_output_files_picks_collider_mode_alternate(tmp_path):
     from researchclaw.pipeline.stages import Stage
 
     cfg = _make_rc_config(tmp_path, mode="collider_agent")
-    contract = CONTRACTS[Stage.CODE_GENERATION]
+    contract = CONTRACTS[Stage.CODE_AGENT_IMPLEMENT]
     files = _select_output_files(contract, cfg)
     assert files == ("collider_plan.md",)
 
@@ -148,7 +148,7 @@ def test_select_output_files_keeps_default_for_non_collider_mode(tmp_path):
     from researchclaw.pipeline.stages import Stage
 
     cfg = _make_rc_config(tmp_path, mode="sandbox")
-    contract = CONTRACTS[Stage.CODE_GENERATION]
+    contract = CONTRACTS[Stage.CODE_AGENT_IMPLEMENT]
     files = _select_output_files(contract, cfg)
     assert "experiment/" in files
     assert "collider_plan.md" not in files
@@ -180,17 +180,17 @@ def test_executor_treats_code_generation_as_gate_for_hep_ph(tmp_path, monkeypatc
         # Stub creates the contract's collider output so validation passes
         (stage_dir / "collider_plan.md").write_text("# stub plan\n", encoding="utf-8")
         return StageResult(
-            stage=Stage.CODE_GENERATION,
+            stage=Stage.CODE_AGENT_IMPLEMENT,
             status=StageStatus.DONE,
             artifacts=("collider_plan.md",),
             evidence_refs=("stage-10/collider_plan.md",),
         )
 
-    monkeypatch.setitem(exec_mod._STAGE_EXECUTORS, Stage.CODE_GENERATION, _stub_codegen)
+    monkeypatch.setitem(exec_mod._STAGE_EXECUTORS, Stage.CODE_AGENT_IMPLEMENT, _stub_codegen)
 
     adapters = AdapterBundle()
     result = exec_mod.execute_stage(
-        Stage.CODE_GENERATION,
+        Stage.CODE_AGENT_IMPLEMENT,
         run_dir=run_dir,
         run_id="test-run",
         config=cfg,
@@ -605,7 +605,7 @@ def test_version_rollback_stages_uses_copytree_when_incremental(tmp_path):
 
     _version_rollback_stages(
         tmp_path,
-        rollback_target=Stage.EXPERIMENT_RUN,
+        rollback_target=Stage.HARNESS_SUBMIT_AND_COLLECT,
         attempt=1,
         incremental=True,
     )
@@ -624,7 +624,7 @@ def test_version_rollback_stages_default_still_renames(tmp_path):
     s13.mkdir()
     (s13 / "data.txt").write_text("hi", encoding="utf-8")
 
-    _version_rollback_stages(tmp_path, rollback_target=Stage.ITERATIVE_REFINE, attempt=1)
+    _version_rollback_stages(tmp_path, rollback_target=Stage.CODE_AGENT_REFINE, attempt=1)
 
     assert not (tmp_path / "stage-13").exists()
     assert (tmp_path / "stage-13_v1" / "data.txt").read_text(encoding="utf-8") == "hi"
@@ -650,16 +650,16 @@ def test_executor_does_not_gate_code_generation_for_non_hep_ph(tmp_path, monkeyp
         (stage_dir / "experiment" / "main.py").write_text("# stub\n", encoding="utf-8")
         (stage_dir / "experiment_spec.md").write_text("# spec\n", encoding="utf-8")
         return StageResult(
-            stage=Stage.CODE_GENERATION,
+            stage=Stage.CODE_AGENT_IMPLEMENT,
             status=StageStatus.DONE,
             artifacts=("experiment_spec.md",),
         )
 
-    monkeypatch.setitem(exec_mod._STAGE_EXECUTORS, Stage.CODE_GENERATION, _stub_codegen)
+    monkeypatch.setitem(exec_mod._STAGE_EXECUTORS, Stage.CODE_AGENT_IMPLEMENT, _stub_codegen)
 
     adapters = AdapterBundle()
     result = exec_mod.execute_stage(
-        Stage.CODE_GENERATION,
+        Stage.CODE_AGENT_IMPLEMENT,
         run_dir=run_dir,
         run_id="test-run-2",
         config=cfg,

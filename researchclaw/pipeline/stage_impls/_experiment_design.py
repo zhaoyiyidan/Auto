@@ -38,7 +38,7 @@ def _execute_experiment_task_spec(
 
     (stage_dir / "task_spec.yaml").write_text(spec.to_yaml(), encoding="utf-8")
     return StageResult(
-        stage=Stage.EXPERIMENT_DESIGN,
+        stage=Stage.EXPERIMENT_TASK_SPEC,
         status=StageStatus.DONE,
         artifacts=("task_spec.yaml",),
         evidence_refs=("stage-09/task_spec.yaml",),

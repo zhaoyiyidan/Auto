@@ -1156,7 +1156,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--from-stage", help="Start from a specific stage (e.g. PAPER_OUTLINE)"
     )
     _ = run_p.add_argument(
-        "--to-stage", help="Stop after this stage completes (e.g. EXPERIMENT_DESIGN)"
+        "--to-stage", help="Stop after this stage completes (e.g. EXPERIMENT_TASK_SPEC)"
     )
     _ = run_p.add_argument(
         "--auto-approve", action="store_true", help="Auto-approve gate stages"
@@ -1168,8 +1168,8 @@ def build_parser() -> argparse.ArgumentParser:
             "Enable non-destructive Stage 12 re-entry for hep-ph collider runs: "
             "snapshot the existing collider_workspace, treat the new "
             "collider_plan.md as a delta, and merge new results.json into "
-            "the prior one. Use with --from-stage CODE_GENERATION or "
-            "--from-stage EXPERIMENT_RUN."
+            "the prior one. Use with --from-stage CODE_AGENT_IMPLEMENT or "
+            "--from-stage HARNESS_SUBMIT_AND_COLLECT."
         ),
     )
     _ = run_p.add_argument(

@@ -1,7 +1,7 @@
 """Real-time experiment monitoring for terminal display.
 
 Shows live training metrics, resource usage, and pipeline progress
-during Stage 12 (EXPERIMENT_RUN) and Stage 13 (ITERATIVE_REFINE).
+during Stage 12 (HARNESS_SUBMIT_AND_COLLECT) and Stage 13 (CODE_AGENT_REFINE).
 
 Uses the ``rich`` library for formatted output.
 """

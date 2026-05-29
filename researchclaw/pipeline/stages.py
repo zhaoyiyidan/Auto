@@ -5,8 +5,8 @@ Migrated from arc/state_machine.py (19 stages) with the following changes:
   - SEARCH_PLAN + SOURCE_CONNECT → SEARCH_STRATEGY
   - RELEVANCE_SCREEN + QUALITY_SCREEN → LITERATURE_SCREEN
   - CLUSTER_TOPICS + GAP_ANALYSIS → SYNTHESIS
-  - EXPERIMENT_DESIGN split → EXPERIMENT_DESIGN + CODE_GENERATION
-  - EXECUTE split → EXPERIMENT_RUN + ITERATIVE_REFINE
+  - EXPERIMENT_TASK_SPEC + CODE_AGENT_IMPLEMENT + MANIFEST_VALIDATE_AND_PREPARE
+  - HARNESS_SUBMIT_AND_COLLECT + CODE_AGENT_REFINE
   - WRITE_DRAFT split → PAPER_OUTLINE + PAPER_DRAFT
   - Added PAPER_REVISION, QUALITY_GATE, EXPORT_PUBLISH
   - RETROSPECTIVE_ARCHIVE split → KNOWLEDGE_ARCHIVE (+ QUALITY_GATE + EXPORT_PUBLISH)
@@ -36,14 +36,14 @@ class Stage(IntEnum):
     SYNTHESIS = 7
     HYPOTHESIS_GEN = 8
 
-    # Phase D: Experiment Design
-    EXPERIMENT_DESIGN = 9  # GATE
-    CODE_GENERATION = 10  # NEW
-    RESOURCE_PLANNING = 11
+    # Phase D: Workspace-native experiment preparation
+    EXPERIMENT_TASK_SPEC = 9  # GATE
+    CODE_AGENT_IMPLEMENT = 10
+    MANIFEST_VALIDATE_AND_PREPARE = 11
 
-    # Phase E: Experiment Execution
-    EXPERIMENT_RUN = 12
-    ITERATIVE_REFINE = 13  # NEW
+    # Phase E: Harness execution and code-agent refinement
+    HARNESS_SUBMIT_AND_COLLECT = 12
+    CODE_AGENT_REFINE = 13
 
     # Phase F: Analysis & Decision
     RESULT_ANALYSIS = 14
@@ -109,7 +109,7 @@ PREVIOUS_STAGE: dict[Stage, Stage | None] = {
 GATE_STAGES: frozenset[Stage] = frozenset(
     {
         Stage.LITERATURE_SCREEN,
-        Stage.EXPERIMENT_DESIGN,
+        Stage.EXPERIMENT_TASK_SPEC,
         Stage.QUALITY_GATE,
     }
 )
@@ -117,8 +117,7 @@ GATE_STAGES: frozenset[Stage] = frozenset(
 # Gate rollback targets: when a gate rejects, where to roll back
 GATE_ROLLBACK: dict[Stage, Stage] = {
     Stage.LITERATURE_SCREEN: Stage.LITERATURE_COLLECT,  # reject → re-collect
-    Stage.EXPERIMENT_DESIGN: Stage.HYPOTHESIS_GEN,  # reject → re-hypothesize
-    Stage.CODE_GENERATION: Stage.EXPERIMENT_DESIGN,  # hep_ph profile only; see gate_required
+    Stage.EXPERIMENT_TASK_SPEC: Stage.HYPOTHESIS_GEN,  # reject → re-hypothesize
     Stage.QUALITY_GATE: Stage.PAPER_OUTLINE,  # reject → rewrite paper
 }
 
@@ -128,7 +127,7 @@ GATE_ROLLBACK: dict[Stage, Stage] = {
 
 DECISION_ROLLBACK: dict[str, Stage] = {
     "pivot": Stage.HYPOTHESIS_GEN,       # Discard hypotheses, re-generate
-    "refine": Stage.ITERATIVE_REFINE,    # Keep hypotheses, re-run experiments
+    "refine": Stage.CODE_AGENT_REFINE,    # Keep hypotheses, re-run experiments
 }
 
 MAX_DECISION_PIVOTS: int = 2  # Prevent infinite loops
@@ -159,11 +158,14 @@ PHASE_MAP: dict[str, tuple[Stage, ...]] = {
     ),
     "C: Knowledge Synthesis": (Stage.SYNTHESIS, Stage.HYPOTHESIS_GEN),
     "D: Experiment Design": (
-        Stage.EXPERIMENT_DESIGN,
-        Stage.CODE_GENERATION,
-        Stage.RESOURCE_PLANNING,
+        Stage.EXPERIMENT_TASK_SPEC,
+        Stage.CODE_AGENT_IMPLEMENT,
+        Stage.MANIFEST_VALIDATE_AND_PREPARE,
     ),
-    "E: Experiment Execution": (Stage.EXPERIMENT_RUN, Stage.ITERATIVE_REFINE),
+    "E: Experiment Execution": (
+        Stage.HARNESS_SUBMIT_AND_COLLECT,
+        Stage.CODE_AGENT_REFINE,
+    ),
     "F: Analysis & Decision": (Stage.RESULT_ANALYSIS, Stage.RESEARCH_DECISION),
     "G: Paper Writing": (
         Stage.PAPER_OUTLINE,
@@ -219,24 +221,11 @@ def gate_required(
 ) -> bool:
     """Check whether a stage requires human-in-the-loop approval.
 
-    The CODE_GENERATION stage becomes a gate when ``profile == "hep_ph"``
-    so reviewers can inspect/edit ``collider_plan.md`` before ColliderAgent
-    runs the expensive physics pipeline. Other profiles see no change.
-
-    The hep_ph CODE_GENERATION gate is treated as mandatory regardless of
-    ``hitl_required_stages`` filtering — it's a profile-level invariant,
-    not an opt-in policy.
+    Gate stages are controlled by ``GATE_STAGES`` and optional user stage filters.
     """
     is_gate = stage in GATE_STAGES
-    is_hep_ph_codegen_gate = (
-        stage is Stage.CODE_GENERATION and profile == "hep_ph"
-    )
-    if not is_gate and is_hep_ph_codegen_gate:
-        is_gate = True
     if not is_gate:
         return False
-    if is_hep_ph_codegen_gate:
-        return True
     if hitl_required_stages is not None:
         return int(stage) in frozenset(hitl_required_stages)
     return True  # Default: all gate stages require approval

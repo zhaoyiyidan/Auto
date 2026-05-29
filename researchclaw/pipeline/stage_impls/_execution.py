@@ -104,7 +104,7 @@ def _execute_resource_planning(
     manifest_text = _read_prior_artifact(run_dir, "run_manifest.json")
     if not manifest_text:
         return StageResult(
-            stage=Stage.RESOURCE_PLANNING,
+            stage=Stage.MANIFEST_VALIDATE_AND_PREPARE,
             status=StageStatus.FAILED,
             artifacts=(),
             error="E11_MANIFEST_INVALID: missing run_manifest.json",
@@ -113,7 +113,7 @@ def _execute_resource_planning(
         manifest = RunManifest.from_json(manifest_text)
     except Exception as exc:  # noqa: BLE001
         return StageResult(
-            stage=Stage.RESOURCE_PLANNING,
+            stage=Stage.MANIFEST_VALIDATE_AND_PREPARE,
             status=StageStatus.FAILED,
             artifacts=(),
             error=f"E11_MANIFEST_INVALID: invalid run_manifest.json: {exc}",
@@ -142,7 +142,7 @@ def _execute_resource_planning(
             encoding="utf-8",
         )
         return StageResult(
-            stage=Stage.RESOURCE_PLANNING,
+            stage=Stage.MANIFEST_VALIDATE_AND_PREPARE,
             status=StageStatus.DONE,
             artifacts=("manifest_validation.json", "run_manifest.json"),
             evidence_refs=(
@@ -151,7 +151,7 @@ def _execute_resource_planning(
             ),
         )
     return StageResult(
-        stage=Stage.RESOURCE_PLANNING,
+        stage=Stage.MANIFEST_VALIDATE_AND_PREPARE,
         status=StageStatus.FAILED,
         artifacts=("manifest_validation.json",),
         error="E11_MANIFEST_INVALID: " + "; ".join(validation.errors),
@@ -293,7 +293,7 @@ def _execute_experiment_run(
     manifest_text = _read_prior_artifact(run_dir, "run_manifest.json")
     if not validation_text or not manifest_text:
         return StageResult(
-            stage=Stage.EXPERIMENT_RUN,
+            stage=Stage.HARNESS_SUBMIT_AND_COLLECT,
             status=StageStatus.FAILED,
             artifacts=(),
             error="E12_HARNESS_FAIL: missing validated run manifest",
@@ -303,14 +303,14 @@ def _execute_experiment_run(
         manifest = RunManifest.from_json(manifest_text)
     except Exception as exc:  # noqa: BLE001
         return StageResult(
-            stage=Stage.EXPERIMENT_RUN,
+            stage=Stage.HARNESS_SUBMIT_AND_COLLECT,
             status=StageStatus.FAILED,
             artifacts=(),
             error=f"E12_HARNESS_FAIL: invalid manifest inputs: {exc}",
         )
     if not bool(validation_payload.get("ok", False)):
         return StageResult(
-            stage=Stage.EXPERIMENT_RUN,
+            stage=Stage.HARNESS_SUBMIT_AND_COLLECT,
             status=StageStatus.FAILED,
             artifacts=(),
             error="E12_HARNESS_FAIL: manifest validation is not ok",
@@ -346,7 +346,7 @@ def _execute_experiment_run(
         )
     except Exception as exc:  # noqa: BLE001
         return StageResult(
-            stage=Stage.EXPERIMENT_RUN,
+            stage=Stage.HARNESS_SUBMIT_AND_COLLECT,
             status=StageStatus.FAILED,
             artifacts=(),
             error=f"E12_HARNESS_FAIL: {exc}",
@@ -360,13 +360,13 @@ def _execute_experiment_run(
     )
     if artifacts and not any(bool(item.get("exists")) for item in artifacts):
         return StageResult(
-            stage=Stage.EXPERIMENT_RUN,
+            stage=Stage.HARNESS_SUBMIT_AND_COLLECT,
             status=StageStatus.FAILED,
             artifacts=output_artifacts,
             error="E12_HARNESS_FAIL: all declared result_paths are missing",
         )
     return StageResult(
-        stage=Stage.EXPERIMENT_RUN,
+        stage=Stage.HARNESS_SUBMIT_AND_COLLECT,
         status=StageStatus.DONE,
         artifacts=output_artifacts,
         evidence_refs=(
@@ -530,7 +530,7 @@ def _execute_experiment_run(
         )
 
         return StageResult(
-            stage=Stage.EXPERIMENT_RUN,
+            stage=Stage.HARNESS_SUBMIT_AND_COLLECT,
             status=StageStatus.DONE,
             artifacts=("runs/",),
             evidence_refs=("stage-12/runs/",),
@@ -733,7 +733,7 @@ def _execute_experiment_run(
                 json.dumps(payload, indent=2), encoding="utf-8"
             )
     return StageResult(
-        stage=Stage.EXPERIMENT_RUN,
+        stage=Stage.HARNESS_SUBMIT_AND_COLLECT,
         status=StageStatus.DONE,
         artifacts=("runs/",),
         evidence_refs=("stage-12/runs/",),
@@ -754,7 +754,7 @@ def _execute_iterative_refine(
     artifacts_text = _read_prior_artifact(run_dir, "result_artifacts.json") or "{}"
     if not execution_text:
         return StageResult(
-            stage=Stage.ITERATIVE_REFINE,
+            stage=Stage.CODE_AGENT_REFINE,
             status=StageStatus.FAILED,
             artifacts=(),
             error="E13_REFINE_FAIL: missing execution_record.json",
@@ -803,7 +803,7 @@ def _execute_iterative_refine(
         or result.agent_commit_sha == result.base_sha
     ):
         return StageResult(
-            stage=Stage.ITERATIVE_REFINE,
+            stage=Stage.CODE_AGENT_REFINE,
             status=StageStatus.FAILED,
             artifacts=("stage-13-workspace-agent-result.json",),
             error=f"E13_REFINE_FAIL: {result.error or 'agent did not commit'}",
@@ -811,7 +811,7 @@ def _execute_iterative_refine(
     manifest_source = _manifest_source(workspace, result.manifest_path, manifest_filename)
     if manifest_source is None:
         return StageResult(
-            stage=Stage.ITERATIVE_REFINE,
+            stage=Stage.CODE_AGENT_REFINE,
             status=StageStatus.FAILED,
             artifacts=("stage-13-workspace-agent-result.json",),
             error="E13_REFINE_FAIL: missing run_manifest.json",
@@ -825,7 +825,7 @@ def _execute_iterative_refine(
         encoding="utf-8",
     )
     return StageResult(
-        stage=Stage.ITERATIVE_REFINE,
+        stage=Stage.CODE_AGENT_REFINE,
         status=StageStatus.DONE,
         artifacts=("refine_record.json", "run_manifest.json"),
         evidence_refs=("stage-13/refine_record.json", "stage-13/run_manifest.json"),
@@ -905,7 +905,7 @@ def _execute_iterative_refine(
             json.dumps(log, indent=2), encoding="utf-8"
         )
         return StageResult(
-            stage=Stage.ITERATIVE_REFINE,
+            stage=Stage.CODE_AGENT_REFINE,
             status=StageStatus.DONE,
             artifacts=("refinement_log.json", "experiment_final/"),
             evidence_refs=("stage-13/refinement_log.json",),
@@ -950,7 +950,7 @@ def _execute_iterative_refine(
             json.dumps(log, indent=2), encoding="utf-8"
         )
         return StageResult(
-            stage=Stage.ITERATIVE_REFINE,
+            stage=Stage.CODE_AGENT_REFINE,
             status=StageStatus.DONE,
             artifacts=("refinement_log.json",),
             evidence_refs=(),
@@ -1233,7 +1233,7 @@ def _execute_iterative_refine(
         _write_refinement_log()
         artifacts = ("refinement_log.json",)
         return StageResult(
-            stage=Stage.ITERATIVE_REFINE,
+            stage=Stage.CODE_AGENT_REFINE,
             status=StageStatus.PAUSED,
             artifacts=artifacts,
             error=reason,
@@ -1292,7 +1292,7 @@ def _execute_iterative_refine(
             artifacts.append("stage-13-submit-result.json")
         existing = tuple(a for a in artifacts if (stage_dir / a).exists())
         return StageResult(
-            stage=Stage.ITERATIVE_REFINE,
+            stage=Stage.CODE_AGENT_REFINE,
             status=StageStatus.DONE if result.ok else StageStatus.FAILED,
             artifacts=existing,
             error=result.error,
@@ -1327,7 +1327,7 @@ def _execute_iterative_refine(
         _write_refinement_log()
         artifacts = ("refinement_log.json", "experiment_final/")
         return StageResult(
-            stage=Stage.ITERATIVE_REFINE,
+            stage=Stage.CODE_AGENT_REFINE,
             status=StageStatus.DONE,
             artifacts=artifacts,
             evidence_refs=tuple(f"stage-13/{a}" for a in artifacts),
@@ -1760,7 +1760,7 @@ def _execute_iterative_refine(
         if isinstance(entry, dict) and isinstance(entry.get("version_dir"), str)
     )
     return StageResult(
-        stage=Stage.ITERATIVE_REFINE,
+        stage=Stage.CODE_AGENT_REFINE,
         status=StageStatus.DONE,
         artifacts=tuple(artifacts),
         evidence_refs=tuple(f"stage-13/{a}" for a in artifacts),

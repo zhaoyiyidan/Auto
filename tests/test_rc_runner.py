@@ -129,7 +129,7 @@ def test_execute_pipeline_stops_on_paused_stage(
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
-    pause_stage = Stage.ITERATIVE_REFINE
+    pause_stage = Stage.CODE_AGENT_REFINE
 
     def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
         _ = kwargs
@@ -148,7 +148,7 @@ def test_execute_pipeline_stops_on_paused_stage(
     assert results[-1].status == StageStatus.PAUSED
     assert len(results) == int(pause_stage)
     checkpoint = json.loads((run_dir / "checkpoint.json").read_text(encoding="utf-8"))
-    assert checkpoint["last_completed_stage"] == int(Stage.EXPERIMENT_RUN)
+    assert checkpoint["last_completed_stage"] == int(Stage.HARNESS_SUBMIT_AND_COLLECT)
     summary = json.loads((run_dir / "pipeline_summary.json").read_text(encoding="utf-8"))
     assert summary["stages_paused"] == 1
     assert summary["final_status"] == "paused"
@@ -571,7 +571,7 @@ def test_refine_decision_triggers_rollback_to_iterative_refine(
         adapters=adapters,
     )
     # Should have seen ITERATIVE_REFINE at least twice
-    refine_stage_count = sum(1 for s in seen if s == Stage.ITERATIVE_REFINE)
+    refine_stage_count = sum(1 for s in seen if s == Stage.CODE_AGENT_REFINE)
     assert refine_stage_count >= 2
 
 
@@ -635,7 +635,7 @@ def test_read_pivot_count_returns_zero_for_no_history(run_dir: Path) -> None:
 
 def test_record_decision_history_appends(run_dir: Path) -> None:
     rc_runner._record_decision_history(run_dir, "pivot", Stage.HYPOTHESIS_GEN, 1)
-    rc_runner._record_decision_history(run_dir, "refine", Stage.ITERATIVE_REFINE, 2)
+    rc_runner._record_decision_history(run_dir, "refine", Stage.CODE_AGENT_REFINE, 2)
     history = json.loads((run_dir / "decision_history.json").read_text())
     assert len(history) == 2
     assert history[0]["decision"] == "pivot"

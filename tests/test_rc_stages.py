@@ -340,17 +340,23 @@ def test_transition_map_covers_all_stage_status_values():
 # ── DECISION_ROLLBACK tests ──
 
 
-def test_decision_rollback_has_pivot_and_refine():
-    assert "pivot" in DECISION_ROLLBACK
-    assert "refine" in DECISION_ROLLBACK
-
-
-def test_decision_rollback_pivot_targets_hypothesis_gen():
+def test_decision_rollback_has_only_pivot():
+    assert set(DECISION_ROLLBACK) == {"pivot"}
     assert DECISION_ROLLBACK["pivot"] is Stage.HYPOTHESIS_GEN
 
 
-def test_decision_rollback_refine_targets_iterative_refine():
-    assert DECISION_ROLLBACK["refine"] is Stage.EXPERIMENT_ROUTE_DECISION
+def test_max_experiment_iterations_is_three():
+    from researchclaw.pipeline.stages import MAX_EXPERIMENT_ITERATIONS
+
+    assert MAX_EXPERIMENT_ITERATIONS == 3
+
+
+def test_experiment_route_map_targets():
+    from researchclaw.pipeline.stages import EXPERIMENT_ROUTE_TARGETS
+
+    assert EXPERIMENT_ROUTE_TARGETS["fix_code"] is Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR
+    assert EXPERIMENT_ROUTE_TARGETS["revise_task_spec"] is Stage.EXPERIMENT_TASK_SPEC
+    assert EXPERIMENT_ROUTE_TARGETS["rerun"] is Stage.HARNESS_SUBMIT_AND_COLLECT
 
 
 def test_max_decision_pivots_is_positive():

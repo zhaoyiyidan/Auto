@@ -755,19 +755,92 @@ class TestWorkspaceAgentStageWiring:
         )
         assert artifacts["artifacts"][0]["exists"] is False
 
-    def test_stage13_calls_workspace_agent_task(
+    def test_stage13_refines_from_real_results_and_writes_manifest(
         self,
         tmp_path: Path,
         run_dir: Path,
         adapters: AdapterBundle,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        from researchclaw.experiment.workspace import (
+            ExecutionRecord,
+            LaunchCommand,
+            ResultArtifact,
+            ResultArtifacts,
+            RunManifest,
+        )
+
         cfg = _workspace_agent_rc_config(tmp_path)
+        workspace = Path(cfg.experiment.workspace_agent.workspace_path)
+        head = _init_workspace_git(workspace)
         calls: list[dict[str, Any]] = []
         agent = object()
-        submitter = object()
 
-        _patch_workspace_runner(monkeypatch, calls, agent, submitter)
+        execution = ExecutionRecord(
+            stage=12,
+            code_commit=head,
+            submitter="local",
+            job_id="job-1",
+            submit_status="submitted",
+            final_status="completed",
+            log_path="logs/run.log",
+            result_paths=["outputs/metrics.json"],
+            result_hashes={"outputs/metrics.json": "sha"},
+            metrics={"accuracy": 0.9},
+            elapsed_sec=1.2,
+            waited=True,
+            recorded_at="2026-05-29T00:00:00Z",
+        )
+        artifacts = ResultArtifacts(
+            code_commit=head,
+            artifacts=[
+                ResultArtifact(
+                    path="outputs/metrics.json",
+                    sha256="sha",
+                    size_bytes=12,
+                    exists=True,
+                )
+            ],
+            collected_at="2026-05-29T00:00:00Z",
+        )
+        _write_prior_artifact(
+            run_dir, 12, "execution_record.json", json.dumps(execution.to_dict())
+        )
+        _write_prior_artifact(
+            run_dir, 12, "result_artifacts.json", json.dumps(artifacts.to_dict())
+        )
+        monkeypatch.setattr(
+            "researchclaw.experiment.workspace_agent.create_workspace_agent",
+            lambda *args, **kwargs: agent,
+        )
+
+        def fake_implement(**kwargs: Any):
+            from researchclaw.experiment.workspace import WorkspaceAgentResult
+
+            calls.append(kwargs)
+            manifest = RunManifest(
+                code_commit="refined",
+                launch=LaunchCommand(command="python train.py --refined"),
+                result_paths=["outputs/metrics.json"],
+            )
+            (workspace / "run_manifest.json").write_text(
+                manifest.to_json(),
+                encoding="utf-8",
+            )
+            return WorkspaceAgentResult(
+                base_sha=head,
+                agent_commit_sha="refined",
+                manifest_path="run_manifest.json",
+                diff_stat=" train.py | 2 +",
+                raw_log="refined",
+                provider_name="acp",
+                elapsed_sec=0.2,
+            )
+
+        monkeypatch.setattr(
+            "researchclaw.pipeline.workspace_orchestrator.run_workspace_agent_implement",
+            fake_implement,
+        )
         stage_dir = run_dir / "stage-13"
         stage_dir.mkdir()
 
@@ -782,8 +855,14 @@ class TestWorkspaceAgentStageWiring:
         assert result.status is StageStatus.DONE
         assert calls[0]["stage"] == 13
         assert calls[0]["agent"] is agent
-        assert calls[0]["submitter"] is submitter
-        assert calls[0]["close_policy"] == "close"
+        assert calls[0]["close_policy"] == "keep"
+        assert "submitter" not in calls[0]
+        assert "accuracy" in calls[0]["prompt"]
+        assert "RESULT ARTIFACTS" in calls[0]["prompt"]
+        assert (stage_dir / "refine_record.json").is_file()
+        assert json.loads((stage_dir / "run_manifest.json").read_text(encoding="utf-8"))[
+            "code_commit"
+        ] == "refined"
 
 
 def _workspace_agent_rc_config(tmp_path: Path) -> RCConfig:

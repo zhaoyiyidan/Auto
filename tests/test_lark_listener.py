@@ -15,15 +15,27 @@ from researchclaw.notify.lark_listener import LarkHITLListener, PollResult
 @dataclass(frozen=True)
 class _FakeNotifyResult:
     ok: bool = True
+    targets: tuple[object, ...] = ()
+
+
+@dataclass(frozen=True)
+class _FakeTargetResult:
+    status: str = "ok"
+    create_time_ms: int = 1000
 
 
 class _FakeNotifier:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
+        self.next_create_time_ms = 1000
 
     def send(self, title: str, body: str) -> _FakeNotifyResult:
         self.calls.append((title, body))
-        return _FakeNotifyResult()
+        result = _FakeNotifyResult(
+            targets=(_FakeTargetResult(create_time_ms=self.next_create_time_ms),)
+        )
+        self.next_create_time_ms += 1000
+        return result
 
 
 class _FakeReader:
@@ -85,6 +97,7 @@ def _message(
     *,
     message_id: str = "om_1",
     sender_id: str = "ou_1",
+    create_time_ms: int = 10_000,
 ) -> LarkMessage:
     return LarkMessage(
         message_id=message_id,
@@ -92,7 +105,7 @@ def _message(
         text=text,
         sender_id=sender_id,
         sender_type="user",
-        create_time_ms=0,
+        create_time_ms=create_time_ms,
         chat_id="oc_abc123",
     )
 
@@ -185,6 +198,51 @@ def test_valid_approve_writes_response(tmp_path: Path):
 
     assert listener.poll_once() is PollResult.RESPONDED
     assert _response_data(tmp_path)["action"] == "approve"
+
+
+def test_reply_before_notification_is_ignored(tmp_path: Path):
+    _write_waiting(tmp_path)
+    reader = _FakeReader([[_message("approve", create_time_ms=999)]])
+    listener = LarkHITLListener(
+        reader=reader,
+        notifier=_FakeNotifier(),
+        run_dir=tmp_path,
+        config=_config(),
+        run_id="run-1",
+    )
+
+    assert listener.poll_once() is PollResult.NOTIFIED_ONLY
+    assert not (tmp_path / "hitl" / "response.json").exists()
+
+
+def test_old_reply_not_reused_for_next_pause(tmp_path: Path):
+    _write_waiting(tmp_path)
+    reader = _FakeReader(
+        [
+            [_message("approve", message_id="om_old", create_time_ms=1500)],
+            [_message("approve", message_id="om_old", create_time_ms=1500)],
+        ]
+    )
+    listener = LarkHITLListener(
+        reader=reader,
+        notifier=_FakeNotifier(),
+        run_dir=tmp_path,
+        config=_config(),
+        run_id="run-1",
+    )
+
+    assert listener.poll_once() is PollResult.RESPONDED
+    clear_waiting(tmp_path / "hitl")
+    (tmp_path / "hitl" / "response.json").unlink()
+    _write_waiting(
+        tmp_path,
+        since="2026-05-29T12:01:00+00:00",
+        stage=6,
+        stage_name="Next Review",
+    )
+
+    assert listener.poll_once() is PollResult.NOTIFIED_ONLY
+    assert not (tmp_path / "hitl" / "response.json").exists()
 
 
 def test_reject_with_reason_written(tmp_path: Path):

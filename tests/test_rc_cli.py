@@ -151,6 +151,82 @@ def test_cmd_run_reports_paused_pipeline(
     assert "1 paused" in captured.out
 
 
+def test_cmd_run_lark_hitl_uses_file_polling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+project:
+  name: demo
+  mode: semi-auto
+research:
+  topic: Synthetic benchmark research
+runtime:
+  timezone: UTC
+notifications:
+  channel: lark
+  lark:
+    enabled: true
+    targets:
+      review_group:
+        kind: chat
+        receive_id_type: chat_id
+        receive_id: oc_test
+    hitl:
+      enabled: true
+      chat_id: oc_test
+knowledge_base:
+  backend: markdown
+  root: kb
+openclaw_bridge: {}
+llm:
+  provider: acp
+  acp:
+    agent: codex
+hitl:
+  enabled: true
+  mode: step-by-step
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "artifacts" / "lark-hitl-run"
+
+    from researchclaw.pipeline import runner as rc_runner
+
+    captured: dict[str, object] = {}
+
+    def fake_execute_pipeline(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(rc_runner, "execute_pipeline", fake_execute_pipeline)
+    monkeypatch.setattr(rc_runner, "read_checkpoint", lambda run_dir: None)
+
+    args = argparse.Namespace(
+        config=str(config_path),
+        topic=None,
+        output=str(output_dir),
+        from_stage=None,
+        auto_approve=False,
+        skip_preflight=True,
+        resume=False,
+        skip_noncritical_stage=False,
+        no_graceful_degradation=False,
+    )
+
+    code = rc_cli.cmd_run(args)
+
+    assert code == 0
+    adapters = captured["adapters"]
+    assert adapters.hitl is not None
+    assert getattr(adapters.hitl, "_input_callback") is None
+    assert "file polling (Lark listener)" in capsys.readouterr().out
+
+
 def test_main_dispatches_run_command(monkeypatch: pytest.MonkeyPatch) -> None:
     captured = {}
 

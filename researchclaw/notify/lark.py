@@ -20,6 +20,8 @@ class LarkTargetResult:
     status: str
     detail: str = ""
     command: tuple[str, ...] = ()
+    message_id: str = ""
+    create_time_ms: int = 0
 
 
 @dataclass(frozen=True)
@@ -430,6 +432,8 @@ def _redact_result(
         status=result.status,
         detail=detail,
         command=result.command,
+        message_id=result.message_id,
+        create_time_ms=result.create_time_ms,
     )
 
 
@@ -482,7 +486,31 @@ def _result_from_completed(
             command=command,
         )
 
-    return LarkTargetResult(name=name, status="ok", command=command)
+    message_id, create_time_ms = _send_metadata_from_stdout(completed.stdout)
+    return LarkTargetResult(
+        name=name,
+        status="ok",
+        command=command,
+        message_id=message_id,
+        create_time_ms=create_time_ms,
+    )
+
+
+def _send_metadata_from_stdout(stdout: str) -> tuple[str, int]:
+    try:
+        payload = json.loads(stdout)
+    except (TypeError, ValueError):
+        return "", 0
+
+    if not isinstance(payload, dict):
+        return "", 0
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return "", 0
+    return (
+        str(data.get("message_id", "") or ""),
+        _safe_int_value(data.get("create_time"), 0),
+    )
 
 
 def _api_error_detail(stdout: str) -> str:

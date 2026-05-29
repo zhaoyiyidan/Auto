@@ -122,6 +122,26 @@ def test_send_success_invokes_subprocess_once():
     assert result.targets[0].status == "ok"
 
 
+def test_send_success_captures_message_metadata():
+    stdout = json.dumps(
+        {
+            "code": 0,
+            "data": {
+                "message_id": "om_123",
+                "create_time": "1780055989352",
+            },
+            "msg": "success",
+        }
+    )
+    with patch("researchclaw.notify.lark.subprocess.run") as mock_run:
+        mock_run.return_value = _completed(stdout=stdout)
+
+        result = LarkNotifier(_config()).send("Title", "Body")
+
+    assert result.targets[0].message_id == "om_123"
+    assert result.targets[0].create_time_ms == 1780055989352
+
+
 def test_send_builds_exact_argv():
     target = _target(receive_id_type="chat_id", receive_id="oc_xxx")
     with patch("researchclaw.notify.lark.subprocess.run") as mock_run:

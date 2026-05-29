@@ -153,6 +153,12 @@ def _generate_run_id(topic: str) -> str:
     return f"rc-{ts}-{topic_hash}"
 
 
+def _lark_hitl_file_polling_enabled(config: RCConfig) -> bool:
+    lark_config = getattr(getattr(config, "notifications", None), "lark", None)
+    hitl_config = getattr(lark_config, "hitl", None)
+    return bool(getattr(hitl_config, "enabled", False))
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     resolved = _resolve_config_or_exit(args)
     if resolved is None:
@@ -386,6 +392,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 scripted = ScriptedHITLAdapter.from_file(interventions_file)
                 hitl_session.set_input_callback(scripted.collect_input)
                 print(f"  HITL:    scripted ({len(scripted.pending_stages)} interventions)")
+            elif _lark_hitl_file_polling_enabled(config):
+                print("  HITL:    file polling (Lark listener)")
             else:
                 # Wire CLI adapter for interactive input
                 from researchclaw.hitl.adapters.cli_adapter import CLIAdapter

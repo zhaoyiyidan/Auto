@@ -45,6 +45,7 @@ class LarkHITLListener:
         self.store = HITLStore(self.run_dir)
         self._handled_keys: set[tuple[str, int]] = set()
         self._notified_keys: set[tuple[str, int]] = set()
+        self._reply_after_ms: dict[tuple[str, int], int] = {}
         self._active_key: tuple[str, int] | None = None
         self._feedback_sent: set[str] = set()
 
@@ -90,14 +91,24 @@ class LarkHITLListener:
             )
             if not getattr(result, "ok", True):
                 logger.warning("Lark HITL notification failed")
+            cutoff_ms = _notification_cutoff_ms(result)
+            if cutoff_ms > 0:
+                self._reply_after_ms[key] = cutoff_ms
+            elif getattr(result, "ok", True):
+                logger.warning("Lark HITL notification has no message timestamp")
             self._notified_keys.add(key)
             notified_this_tick = True
+
+        if self.config.notify and key not in self._reply_after_ms:
+            return PollResult.NOTIFIED_ONLY if notified_this_tick else PollResult.NO_REPLY
 
         messages = self.reader.list_messages(
             chat_id=self.config.chat_id,
             since_iso=waiting.since,
         )
         for message in messages:
+            if not _message_is_after_notification(message, key, self._reply_after_ms):
+                continue
             sender_id = str(getattr(message, "sender_id", "") or "")
             if self.config.allowed_senders and sender_id not in self.config.allowed_senders:
                 continue
@@ -166,3 +177,24 @@ def _action_allowed(
     config: LarkHITLConfig,
 ) -> bool:
     return action in _allowed_actions(waiting, config)
+
+
+def _notification_cutoff_ms(result: object) -> int:
+    targets = getattr(result, "targets", ()) or ()
+    cutoffs = [
+        int(getattr(target, "create_time_ms", 0) or 0)
+        for target in targets
+        if getattr(target, "status", "") == "ok"
+    ]
+    return max(cutoffs, default=0)
+
+
+def _message_is_after_notification(
+    message: object,
+    key: tuple[str, int],
+    reply_after_ms: dict[tuple[str, int], int],
+) -> bool:
+    cutoff_ms = reply_after_ms.get(key, 0)
+    if cutoff_ms <= 0:
+        return True
+    return int(getattr(message, "create_time_ms", 0) or 0) > cutoff_ms

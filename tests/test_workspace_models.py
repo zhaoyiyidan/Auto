@@ -9,6 +9,7 @@ import pytest
 from researchclaw.experiment.workspace import (
     ExperimentRecord,
     LaunchCommand,
+    ManifestValidation,
     MetricsSpec,
     ResourceSpec,
     RunManifest,
@@ -288,3 +289,24 @@ class TestExperimentRecord:
         )
 
         assert record.result_hashes == {}
+
+
+class TestManifestValidation:
+    def test_dict_roundtrip(self) -> None:
+        validation = ManifestValidation(
+            ok=False,
+            schema_version="researchclaw.run_manifest.v1",
+            code_commit="abc123",
+            commit_exists=True,
+            workspace_dirty=True,
+            launch_command="python train.py",
+            launch_cwd=".",
+            result_paths=["outputs/metrics.json"],
+            errors=["workspace has uncommitted changes"],
+            checked_at="2026-05-29T00:00:00Z",
+        )
+
+        loaded = ManifestValidation.from_dict(validation.to_dict())
+
+        assert loaded == validation
+        assert loaded.errors == ["workspace has uncommitted changes"]

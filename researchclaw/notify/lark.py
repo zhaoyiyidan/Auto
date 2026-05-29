@@ -218,11 +218,6 @@ class LarkMessageReader:
     ) -> list[LarkMessage]:
         start_time = _iso_to_unix_seconds(since_iso)
         since_ms = start_time * 1000
-        command = _build_list_command(
-            self.config,
-            chat_id=chat_id,
-            start_time=start_time,
-        )
         kwargs = {
             "capture_output": True,
             "text": True,
@@ -235,8 +230,23 @@ class LarkMessageReader:
         if env is not None:
             kwargs["env"] = env
 
-        completed = subprocess.run(command, **kwargs)
-        return _messages_from_stdout(completed.stdout, since_ms=since_ms)
+        messages: list[LarkMessage] = []
+        page_token = ""
+        for _ in range(max(0, max_pages)):
+            command = _build_list_command(
+                self.config,
+                chat_id=chat_id,
+                start_time=start_time,
+                page_token=page_token,
+            )
+            completed = subprocess.run(command, **kwargs)
+            messages.extend(_messages_from_stdout(completed.stdout, since_ms=since_ms))
+
+            has_more, page_token = _page_state_from_stdout(completed.stdout)
+            if not has_more or not page_token:
+                break
+
+        return messages
 
 
 def _iso_to_unix_seconds(value: str) -> int:
@@ -270,6 +280,20 @@ def _messages_from_stdout(stdout: str, *, since_ms: int) -> list[LarkMessage]:
             continue
         messages.append(message)
     return messages
+
+
+def _page_state_from_stdout(stdout: str) -> tuple[bool, str]:
+    try:
+        payload = json.loads(stdout)
+    except (TypeError, ValueError):
+        return False, ""
+
+    if not isinstance(payload, dict):
+        return False, ""
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return False, ""
+    return bool(data.get("has_more", False)), str(data.get("page_token", "") or "")
 
 
 def _message_from_item(item: object) -> LarkMessage | None:

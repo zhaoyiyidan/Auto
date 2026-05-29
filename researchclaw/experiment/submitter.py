@@ -28,6 +28,9 @@ class LocalSubmitter:
 
     name = "local"
 
+    def __init__(self) -> None:
+        self._procs: dict[str, subprocess.Popen[bytes]] = {}
+
     def submit(self, request: SubmitRequest) -> SubmitResult:
         run_dir = request.run_dir
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -51,8 +54,10 @@ class LocalSubmitter:
             )
         finally:
             log_handle.close()
+        job_id = f"local_{proc.pid}_{int(time.time())}"
+        self._procs[job_id] = proc
         return SubmitResult(
-            job_id=f"local_{proc.pid}_{int(time.time())}",
+            job_id=job_id,
             submitter_name=self.name,
             status="submitted",
             metadata={
@@ -62,6 +67,17 @@ class LocalSubmitter:
                 "log_path": str(log_path),
             },
         )
+
+    def poll(self, result: SubmitResult) -> str:
+        proc = self._procs.get(result.job_id)
+        if proc is None:
+            return "unknown"
+        returncode = proc.poll()
+        if returncode is None:
+            return "running"
+        if returncode == 0:
+            return "completed"
+        return "failed"
 
 
 class SlurmSubmitter:
@@ -114,6 +130,31 @@ class SlurmSubmitter:
             },
         )
 
+    def poll(self, result: SubmitResult) -> str:
+        try:
+            proc = subprocess.run(
+                ["sacct", "-j", result.job_id, "-n", "-o", "State"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            proc = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
+        if proc.returncode == 0 and proc.stdout.strip():
+            return _map_slurm_state(proc.stdout)
+        try:
+            queue_proc = subprocess.run(
+                ["squeue", "-j", result.job_id, "-h", "-o", "%T"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return "unknown"
+        if queue_proc.returncode == 0 and queue_proc.stdout.strip():
+            return _map_slurm_state(queue_proc.stdout)
+        return "unknown"
+
 
 class SshSlurmSubmitter:
     """Submit a Slurm job through SSH."""
@@ -164,6 +205,29 @@ class SshSlurmSubmitter:
             metadata={"stdout": proc.stdout, "stderr": proc.stderr},
         )
 
+    def poll(self, result: SubmitResult) -> str:
+        target = f"{self.user}@{self.host}" if self.user else self.host
+        remote = (
+            f"sacct -j {shlex.quote(result.job_id)} -n -o State || "
+            f"squeue -j {shlex.quote(result.job_id)} -h -o %T"
+        )
+        cmd = ["ssh", "-p", str(self.port)]
+        if self.key_path:
+            cmd.extend(["-i", self.key_path])
+        cmd.extend([target, "bash -lc", shlex.quote(remote)])
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return "unknown"
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return "unknown"
+        return _map_slurm_state(proc.stdout)
+
 
 class ManualSubmitter:
     """Write a runnable script and print instructions without submitting it."""
@@ -188,6 +252,9 @@ class ManualSubmitter:
             metadata={"script_path": str(script_path), "command": command},
         )
 
+    def poll(self, result: SubmitResult) -> str:
+        return "unknown"
+
 
 class CustomPythonSubmitter:
     """Submitter backed by a user-provided Python callable."""
@@ -203,6 +270,12 @@ class CustomPythonSubmitter:
 
     def submit(self, request: SubmitRequest) -> SubmitResult:
         return self._callable(request)
+
+    def poll(self, result: SubmitResult) -> str:
+        poll = getattr(self._callable, "poll", None)
+        if callable(poll):
+            return str(poll(result))
+        return "unknown"
 
 
 def create_submitter(config: Any) -> TrainingSubmitter:
@@ -235,6 +308,41 @@ def _parse_slurm_job_id(output: str) -> str:
     if parts and parts[-1].isdigit():
         return parts[-1]
     raise RuntimeError(f"Could not parse sbatch output: {output.strip()}")
+
+
+def _map_slurm_state(output: str) -> str:
+    states = {
+        line.strip().split()[0].upper()
+        for line in output.splitlines()
+        if line.strip()
+    }
+    if not states:
+        return "unknown"
+    if states & {"COMPLETED"}:
+        return "completed"
+    if states & {
+        "BOOT_FAIL",
+        "CANCELLED",
+        "DEADLINE",
+        "FAILED",
+        "NODE_FAIL",
+        "OUT_OF_MEMORY",
+        "PREEMPTED",
+        "REVOKED",
+        "SPECIAL_EXIT",
+        "TIMEOUT",
+    }:
+        return "failed"
+    if states & {
+        "CONFIGURING",
+        "COMPLETING",
+        "PENDING",
+        "RESIZING",
+        "RUNNING",
+        "SUSPENDED",
+    }:
+        return "running"
+    return "unknown"
 
 
 def _load_callable(path: str) -> Callable[[SubmitRequest], SubmitResult]:

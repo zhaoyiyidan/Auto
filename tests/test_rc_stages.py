@@ -40,11 +40,21 @@ def test_stage_sequence_contains_all_23_stages_in_order():
 
 def test_workspace_native_stage_names_keep_numeric_values():
     assert int(Stage.EXPERIMENT_TASK_SPEC) == 9
-    assert int(Stage.CODE_AGENT_IMPLEMENT) == 10
+    assert int(Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR) == 10
     assert int(Stage.MANIFEST_VALIDATE_AND_PREPARE) == 11
     assert int(Stage.HARNESS_SUBMIT_AND_COLLECT) == 12
-    assert int(Stage.CODE_AGENT_REFINE) == 13
+    assert int(Stage.EXPERIMENT_ROUTE_DECISION) == 13
     assert int(Stage.RESULT_ANALYSIS) == 14
+
+
+def test_stage10_renamed_to_implement_or_repair():
+    assert Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR.value == 10
+    assert not hasattr(Stage, "CODE_AGENT_IMPLEMENT")
+
+
+def test_stage13_renamed_to_experiment_route_decision():
+    assert Stage.EXPERIMENT_ROUTE_DECISION.value == 13
+    assert not hasattr(Stage, "CODE_AGENT_REFINE")
 
 
 def test_next_stage_boundary_values():
@@ -89,12 +99,12 @@ def test_phase_map_has_8_phases_with_expected_membership():
     )
     assert PHASE_MAP["D: Experiment Design"] == (
         Stage.EXPERIMENT_TASK_SPEC,
-        Stage.CODE_AGENT_IMPLEMENT,
+        Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
         Stage.MANIFEST_VALIDATE_AND_PREPARE,
     )
     assert PHASE_MAP["E: Experiment Execution"] == (
         Stage.HARNESS_SUBMIT_AND_COLLECT,
-        Stage.CODE_AGENT_REFINE,
+        Stage.EXPERIMENT_ROUTE_DECISION,
     )
     assert PHASE_MAP["F: Analysis & Decision"] == (
         Stage.RESULT_ANALYSIS,

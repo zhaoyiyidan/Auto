@@ -39,12 +39,28 @@ class LaunchCommand:
 
 
 @dataclass(frozen=True)
+class MetricsSpec:
+    """Primary metric metadata declared by a workspace agent manifest."""
+
+    primary: str = "primary_metric"
+    direction: str = "maximize"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.primary, str) or not self.primary.strip():
+            raise TypeError("MetricsSpec.primary must be a non-empty string")
+        if self.direction not in {"maximize", "minimize"}:
+            raise ValueError("MetricsSpec.direction must be 'maximize' or 'minimize'")
+
+
+@dataclass(frozen=True)
 class RunManifest:
     """Agent-authored manifest describing how to launch and collect a run."""
 
     code_commit: str
     launch: LaunchCommand
     result_paths: list[str]
+    schema_version: str = "researchclaw.run_manifest.v1"
+    metrics: MetricsSpec = field(default_factory=MetricsSpec)
 
     def __post_init__(self) -> None:
         if not isinstance(self.code_commit, str) or not self.code_commit.strip():
@@ -55,6 +71,10 @@ class RunManifest:
             isinstance(path, str) for path in self.result_paths
         ):
             raise TypeError("RunManifest.result_paths must be a list[str]")
+        if not isinstance(self.schema_version, str) or not self.schema_version.strip():
+            raise TypeError("RunManifest.schema_version must be a non-empty string")
+        if not isinstance(self.metrics, MetricsSpec):
+            raise TypeError("RunManifest.metrics must be a MetricsSpec")
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
@@ -79,10 +99,20 @@ class RunManifest:
                 mem_gb=int(resources_data.get("mem_gb", 16)),
             ),
         )
+        metrics_data = data.get("metrics") or {}
+        if not isinstance(metrics_data, dict):
+            raise TypeError("RunManifest.metrics must be an object")
         return cls(
             code_commit=str(data.get("code_commit", "")),
             launch=launch,
             result_paths=list(data.get("result_paths") or []),
+            schema_version=str(
+                data.get("schema_version") or "researchclaw.run_manifest.v1"
+            ),
+            metrics=MetricsSpec(
+                primary=str(metrics_data.get("primary") or "primary_metric"),
+                direction=str(metrics_data.get("direction") or "maximize"),
+            ),
         )
 
     @classmethod

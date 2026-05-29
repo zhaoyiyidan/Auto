@@ -678,6 +678,30 @@ def execute_pipeline(
                         "Hypothesis tree finalize failed (non-blocking)",
                         exc_info=True,
                     )
+                try:
+                    from researchclaw.pipeline.hypothesis_node_tree import (
+                        rebuild_node_tree,
+                    )
+
+                    rebuild_node_tree(run_dir)
+                except Exception:
+                    logger.warning(
+                        "Hypothesis node_tree rebuild failed (non-blocking)",
+                        exc_info=True,
+                    )
+
+        if stage == Stage.RESEARCH_DECISION and result.status == StageStatus.DONE:
+            try:
+                from researchclaw.pipeline.hypothesis_cycle_archive import (
+                    archive_current_hypothesis_cycle,
+                )
+
+                archive_current_hypothesis_cycle(run_dir, decision=result.decision)
+            except Exception:
+                logger.warning(
+                    "Hypothesis cycle archive failed (non-blocking)",
+                    exc_info=True,
+                )
 
         # ── Stop after to_stage if specified ──
         if to_stage is not None and stage == to_stage:

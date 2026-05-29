@@ -6,8 +6,9 @@ import json
 import logging
 import math
 import re
-import shutil
+import shutil as _shutil_file
 import time as _time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -53,8 +54,16 @@ def _workspace_refine_prompt(
     project_files: list[str],
     run_summaries: list[str],
     manifest_filename: str,
+    execution_record: str = "",
+    result_artifacts: str = "",
 ) -> str:
     summaries = "\n".join(run_summaries[:20]) if run_summaries else "(no prior runs)"
+    results_section = ""
+    if execution_record or result_artifacts:
+        results_section = (
+            f"\n\nEXECUTION RECORD:\n{execution_record or '{}'}\n\n"
+            f"RESULT ARTIFACTS:\n{result_artifacts or '{}'}\n"
+        )
     return (
         "You are a workspace-native code agent working inside an existing git "
         "repository. Improve the experiment in place. Do not emit code blocks "
@@ -64,6 +73,7 @@ def _workspace_refine_prompt(
         f"ORIGINAL EXPERIMENT PLAN:\n{exp_plan}\n\n"
         f"KNOWN PROJECT FILES FROM PRIOR STAGES:\n{project_files}\n\n"
         f"PRIOR RUN SUMMARIES:\n{summaries}\n\n"
+        f"{results_section}"
         "Completion contract (MUST):\n"
         "1. MUST inspect the existing workspace before editing.\n"
         "2. MUST improve the existing repository in place, using its structure.\n"
@@ -186,7 +196,7 @@ def _ask_agent_to_fix_manifest(
     )
     if manifest_path is None:
         return None
-    shutil.copy2(manifest_path, stage_dir / "run_manifest.json")
+    _shutil_file.copy2(manifest_path, stage_dir / "run_manifest.json")
     return RunManifest.from_path(manifest_path)
 
 
@@ -234,6 +244,24 @@ def _read_result_artifacts(stage_dir: Path) -> list[dict[str, Any]]:
         return []
     artifacts = payload.get("artifacts") if isinstance(payload, dict) else None
     return artifacts if isinstance(artifacts, list) else []
+
+
+def _result_summary(execution_text: str) -> str:
+    try:
+        payload = json.loads(execution_text)
+    except json.JSONDecodeError:
+        return execution_text[:1000]
+    if not isinstance(payload, dict):
+        return execution_text[:1000]
+    return json.dumps(
+        {
+            "final_status": payload.get("final_status"),
+            "metrics": payload.get("metrics", {}),
+            "result_paths": payload.get("result_paths", []),
+            "result_hashes": payload.get("result_hashes", {}),
+        },
+        sort_keys=True,
+    )
 
 
 def _estimate_stage12_footprint_bytes(run_dir: Path) -> int:
@@ -721,6 +749,88 @@ def _execute_iterative_refine(
     llm: LLMClient | None = None,
     prompts: PromptManager | None = None,
 ) -> StageResult:
+    _ = adapters
+    execution_text = _read_prior_artifact(run_dir, "execution_record.json")
+    artifacts_text = _read_prior_artifact(run_dir, "result_artifacts.json") or "{}"
+    if not execution_text:
+        return StageResult(
+            stage=Stage.ITERATIVE_REFINE,
+            status=StageStatus.FAILED,
+            artifacts=(),
+            error="E13_REFINE_FAIL: missing execution_record.json",
+        )
+
+    from researchclaw.experiment import workspace_agent as workspace_agent_factory
+    from researchclaw.pipeline import workspace_orchestrator
+
+    workspace = Path(config.experiment.workspace_agent.workspace_path).resolve()
+    manifest_filename = str(
+        getattr(config.experiment.workspace_agent, "manifest_filename", "run_manifest.json")
+        or "run_manifest.json"
+    )
+    prompt = _workspace_refine_prompt(
+        topic=config.research.topic,
+        metric_key=config.experiment.metric_key,
+        metric_direction=config.experiment.metric_direction,
+        exp_plan=_read_prior_artifact(run_dir, "task_spec.yaml") or "",
+        project_files=[],
+        run_summaries=[_result_summary(execution_text)],
+        manifest_filename=manifest_filename,
+        execution_record=execution_text,
+        result_artifacts=artifacts_text,
+    )
+    agent = workspace_agent_factory.create_workspace_agent(
+        config,
+        llm=llm,
+        prompts=prompts,
+    )
+    result = workspace_orchestrator.run_workspace_agent_implement(
+        workspace_path=workspace,
+        run_dir=stage_dir,
+        stage=13,
+        agent=agent,
+        prompt=prompt,
+        timeout_sec=int(getattr(config.experiment.workspace_agent, "timeout_sec", 600)),
+        close_policy="keep",
+    )
+    (stage_dir / "stage-13-workspace-agent-result.json").write_text(
+        json.dumps(asdict(result), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    if (
+        not result.ok
+        or result.agent_commit_sha is None
+        or result.agent_commit_sha == result.base_sha
+    ):
+        return StageResult(
+            stage=Stage.ITERATIVE_REFINE,
+            status=StageStatus.FAILED,
+            artifacts=("stage-13-workspace-agent-result.json",),
+            error=f"E13_REFINE_FAIL: {result.error or 'agent did not commit'}",
+        )
+    manifest_source = _manifest_source(workspace, result.manifest_path, manifest_filename)
+    if manifest_source is None:
+        return StageResult(
+            stage=Stage.ITERATIVE_REFINE,
+            status=StageStatus.FAILED,
+            artifacts=("stage-13-workspace-agent-result.json",),
+            error="E13_REFINE_FAIL: missing run_manifest.json",
+        )
+    _shutil_file.copy2(manifest_source, stage_dir / "run_manifest.json")
+    refine_record = asdict(result)
+    refine_record["source_execution_record"] = "execution_record.json"
+    refine_record["source_result_artifacts"] = "result_artifacts.json"
+    (stage_dir / "refine_record.json").write_text(
+        json.dumps(refine_record, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return StageResult(
+        stage=Stage.ITERATIVE_REFINE,
+        status=StageStatus.DONE,
+        artifacts=("refine_record.json", "run_manifest.json"),
+        evidence_refs=("stage-13/refine_record.json", "stage-13/run_manifest.json"),
+    )
+
     from researchclaw.experiment.factory import create_sandbox
     from researchclaw.experiment.validator import format_issues_for_llm, validate_code
 

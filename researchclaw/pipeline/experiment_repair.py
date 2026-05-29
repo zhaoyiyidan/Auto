@@ -290,9 +290,9 @@ def run_repair_loop(
         )
 
     # Initial quality assessment — pass user-configured thresholds
-    ref_log = _load_refinement_log(run_dir)
     _min_cond = getattr(repair_cfg, "min_conditions", 3)
-    qa = assess_experiment_quality(summary, ref_log, min_conditions=_min_cond)
+    plan = _load_experiment_plan(run_dir)
+    qa = assess_experiment_quality(summary, experiment_plan=plan, min_conditions=_min_cond)
     if qa.sufficient:
         logger.info("[%s] Repair loop: experiment already sufficient (%s)", run_id, qa.mode.value)
         return ExperimentRepairResult(
@@ -306,7 +306,7 @@ def run_repair_loop(
         False,
     )
 
-    # Load legacy code snapshot only as extra context for the repair prompt.
+    # Load manifest snapshots only as extra context for the repair prompt.
     code = _load_experiment_code(run_dir)
     if not code and not workspace_enabled:
         logger.warning("[%s] Repair loop: no experiment code found", run_id)
@@ -316,9 +316,6 @@ def run_repair_loop(
 
     # Collect stdout/stderr for diagnosis
     stdout, stderr = _collect_experiment_output(run_dir)
-
-    # Load experiment plan
-    plan = _load_experiment_plan(run_dir)
 
     cycle_history: list[RepairCycleResult] = []
     best_summary = summary
@@ -335,7 +332,6 @@ def run_repair_loop(
         diag = diagnose_experiment(
             experiment_summary=summary,
             experiment_plan=plan,
-            refinement_log=ref_log,
             stdout=stdout,
             stderr=stderr,
             prior_diagnoses=prior_diagnoses or None,
@@ -408,67 +404,23 @@ def _load_experiment_summary(run_dir: Path) -> dict | None:
     return None
 
 
-def _load_refinement_log(run_dir: Path) -> dict | None:
-    """Load the most recent refinement_log.json."""
-    for candidate in sorted(run_dir.glob("stage-13*/refinement_log.json"), reverse=True):
-        try:
-            return json.loads(candidate.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-    return None
-
-
 def _load_experiment_code(run_dir: Path) -> dict[str, str]:
-    """Load experiment code from the most recent stage directory.
-
-    Prefers: stage-13/experiment_final/ → stage-10/experiment/ → stage-10/*.py
-    """
+    """Load workspace manifest context from the most recent stage directory."""
     code: dict[str, str] = {}
 
-    # Try refined code first
-    for refine_dir in sorted(run_dir.glob("stage-13*/experiment_final"), reverse=True):
-        if refine_dir.is_dir():
-            for py_file in sorted(refine_dir.glob("*.py")):
-                try:
-                    code[py_file.name] = py_file.read_text(encoding="utf-8")
-                except (OSError, UnicodeDecodeError):
-                    pass
-            # Also grab requirements.txt, setup.py
-            for extra in ("requirements.txt", "setup.py"):
-                extra_path = refine_dir / extra
-                if extra_path.exists():
-                    try:
-                        code[extra] = extra_path.read_text(encoding="utf-8")
-                    except (OSError, UnicodeDecodeError):
-                        pass
-            if code:
-                return code
+    for manifest in sorted(run_dir.glob("stage-1[03]*/run_manifest.json"), reverse=True):
+        try:
+            code[str(manifest.relative_to(run_dir))] = manifest.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            pass
+        if code:
+            return code
 
-    # Fall back to stage-10 experiment directory
-    for exp_dir in sorted(run_dir.glob("stage-10*/experiment"), reverse=True):
-        if exp_dir.is_dir():
-            for py_file in sorted(exp_dir.glob("*.py")):
-                try:
-                    code[py_file.name] = py_file.read_text(encoding="utf-8")
-                except (OSError, UnicodeDecodeError):
-                    pass
-            for extra in ("requirements.txt", "setup.py"):
-                extra_path = exp_dir / extra
-                if extra_path.exists():
-                    try:
-                        code[extra] = extra_path.read_text(encoding="utf-8")
-                    except (OSError, UnicodeDecodeError):
-                        pass
-            if code:
-                return code
-
-    # Last resort: any .py files in stage-10*
-    for stage_dir in sorted(run_dir.glob("stage-10*"), reverse=True):
-        for py_file in sorted(stage_dir.glob("*.py")):
-            try:
-                code[py_file.name] = py_file.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                pass
+    for task_spec in sorted(run_dir.glob("stage-09*/task_spec.yaml"), reverse=True):
+        try:
+            code[str(task_spec.relative_to(run_dir))] = task_spec.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            pass
         if code:
             return code
 
@@ -476,21 +428,33 @@ def _load_experiment_code(run_dir: Path) -> dict[str, str]:
 
 
 def _load_experiment_plan(run_dir: Path) -> dict | None:
-    """Load experiment plan from stage-09."""
-    for candidate in sorted(run_dir.glob("stage-09*/experiment_design.json"), reverse=True):
+    """Load experiment task spec from stage-09."""
+    for candidate in sorted(run_dir.glob("stage-09*/task_spec.yaml"), reverse=True):
         try:
-            return json.loads(candidate.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            import yaml as _yaml_repair
+
+            data = _yaml_repair.safe_load(candidate.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else None
+        except (OSError, UnicodeDecodeError):
             continue
     return None
 
 
 def _collect_experiment_output(run_dir: Path) -> tuple[str, str]:
-    """Collect stdout/stderr from experiment runs."""
+    """Collect stdout/stderr from execution records."""
     stdout_parts: list[str] = []
     stderr_parts: list[str] = []
 
-    for stage_dir in sorted(run_dir.glob("stage-14*")):
+    for record_path in sorted(run_dir.glob("stage-12*/execution_record.json"), reverse=True):
+        try:
+            data = json.loads(record_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                stdout_parts.append(str(data.get("stdout", "")))
+                stderr_parts.append(str(data.get("stderr", "")))
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    for stage_dir in sorted(run_dir.glob("stage-12*")):
         runs_dir = stage_dir / "runs"
         if not runs_dir.is_dir():
             continue
@@ -498,8 +462,8 @@ def _collect_experiment_output(run_dir: Path) -> tuple[str, str]:
             try:
                 data = json.loads(run_file.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    stdout_parts.append(data.get("stdout", ""))
-                    stderr_parts.append(data.get("stderr", ""))
+                    stdout_parts.append(str(data.get("stdout", "")))
+                    stderr_parts.append(str(data.get("stderr", "")))
             except (json.JSONDecodeError, OSError):
                 continue
 

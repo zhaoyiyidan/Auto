@@ -163,7 +163,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     from_stage_name = cast(str | None, args.from_stage)
     to_stage_name = cast(str | None, getattr(args, "to_stage", None))
     auto_approve = cast(bool, args.auto_approve)
-    incremental_experiment = cast(bool, getattr(args, "incremental_experiment", False))
     skip_preflight = cast(bool, args.skip_preflight)
     resume = cast(bool, args.resume)
     skip_noncritical = cast(bool, args.skip_noncritical_stage)
@@ -185,20 +184,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             set_forced_profile(config.project.profile)
         except Exception:  # noqa: BLE001
             pass
-
-    # Override incremental_experiment if CLI flag is set
-    if incremental_experiment:
-        import dataclasses
-
-        config = dataclasses.replace(
-            config,
-            experiment=dataclasses.replace(
-                config.experiment,
-                collider_agent=dataclasses.replace(
-                    config.experiment.collider_agent, incremental=True
-                ),
-            ),
-        )
 
     # Override graceful_degradation if CLI flag is set
     if no_graceful_degradation:
@@ -1162,17 +1147,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--auto-approve", action="store_true", help="Auto-approve gate stages"
     )
     _ = run_p.add_argument(
-        "--incremental-experiment",
-        action="store_true",
-        help=(
-            "Enable non-destructive Stage 12 re-entry for hep-ph collider runs: "
-            "snapshot the existing collider_workspace, treat the new "
-            "collider_plan.md as a delta, and merge new results.json into "
-            "the prior one. Use with --from-stage CODE_AGENT_IMPLEMENT or "
-            "--from-stage HARNESS_SUBMIT_AND_COLLECT."
-        ),
-    )
-    _ = run_p.add_argument(
         "--mode", "-m",
         choices=["full-auto", "gate-only", "checkpoint", "step-by-step",
                  "co-pilot", "express", "thorough", "learning"],
@@ -1645,7 +1619,7 @@ _PARENT_DEFAULT_HINTS: dict[str, dict[str, Any]] = {
         "gpu": True, "time_budget": 1800, "max_iter": 5,
     },
     "hep_ph": {
-        "mode": "collider_agent", "venue": "jhep",
+        "mode": "workspace", "venue": "jhep",
         "metric_key": "exclusion_95cl", "metric_dir": "maximize",
         "docker_image": "", "gpu": False,
         "time_budget": 7200, "max_iter": 5,

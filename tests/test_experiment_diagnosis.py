@@ -222,31 +222,28 @@ class TestRepairPrompt:
 
 
 class TestRealArtifacts:
-    def _load(self, run_id: str) -> tuple[dict, dict | None]:
+    def _load(self, run_id: str) -> dict:
         pattern = f"rc-*-{run_id}"
         matches = sorted(ARTIFACTS.glob(pattern))
         if not matches:
             pytest.skip(f"Artifact {run_id} not found")
         base = matches[0]
         summary_path = base / "stage-14" / "experiment_summary.json"
-        ref_path = base / "stage-13" / "refinement_log.json"
         if not summary_path.exists():
             pytest.skip(f"No experiment_summary for {run_id}")
-        summary = json.loads(summary_path.read_text())
-        ref_log = json.loads(ref_path.read_text()) if ref_path.exists() else None
-        return summary, ref_log
+        return json.loads(summary_path.read_text())
 
     def test_run_e57360_diagnosis(self):
         """Run 38 — 3/8 conditions completed, Box2D missing."""
-        summary, ref_log = self._load("e57360")
-        qa = assess_experiment_quality(summary, ref_log)
+        summary = self._load("e57360")
+        qa = assess_experiment_quality(summary)
         # Should identify issues and NOT rate as full_paper
         assert qa.mode != PaperMode.FULL_PAPER or len(qa.deficiencies) > 0
 
     def test_run_8b4a1b_diagnosis(self):
         """Run 8b4a1b — all NaN, permission errors."""
-        summary, ref_log = self._load("8b4a1b")
-        qa = assess_experiment_quality(summary, ref_log)
+        summary = self._load("8b4a1b")
+        qa = assess_experiment_quality(summary)
         # Should be technical_report or preliminary_study at best
         assert qa.mode in (PaperMode.TECHNICAL_REPORT, PaperMode.PRELIMINARY_STUDY)
 
@@ -329,10 +326,9 @@ class TestRealArtifactsContinued(TestRealArtifacts):
 
     def test_run_acbdfa_diagnosis(self):
         """Run acbdfa — 2 architectures, S4D nearly random."""
-        summary, ref_log = self._load("acbdfa")
+        summary = self._load("acbdfa")
         diag = diagnose_experiment(
             experiment_summary=summary,
-            refinement_log=ref_log,
             stdout=summary.get("best_run", {}).get("stdout", ""),
             stderr=summary.get("best_run", {}).get("stderr", ""),
         )

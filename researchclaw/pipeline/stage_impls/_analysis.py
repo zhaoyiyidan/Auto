@@ -230,9 +230,9 @@ def _execute_result_analysis(
         context = _collect_json_context(Path(runs_dir), max_files=30)
 
     # --- R13-1: Merge Stage 13 (CODE_AGENT_REFINE) results if available ---
-    # Stage 13 stores richer per-condition metrics in refinement_log.json
+    # Stage 13 stores richer per-condition metrics in its refine record
     # that _collect_experiment_results() misses (it only scans runs/ dirs).
-    _refine_log_text = _read_prior_artifact(run_dir, "refinement_log.json")
+    _refine_log_text = _read_prior_artifact(run_dir, "refine_record.json")
     if _refine_log_text:
         try:
             _refine_data = json.loads(_refine_log_text)
@@ -381,21 +381,19 @@ def _execute_result_analysis(
                             )
                         _bm_val = _refine_data.get("best_metric")
                         logger.info(
-                            "R13-1: Merged %d metrics from refinement_log (best_metric=%.4f)",
+                            "R13-1: Merged %d metrics from refine record (best_metric=%.4f)",
                             len(_refine_metrics),
                             float(_bm_val) if isinstance(_bm_val, (int, float)) else 0.0,
                         )
         except (json.JSONDecodeError, OSError, KeyError):
-            logger.warning("R13-1: Failed to parse refinement_log.json, using Stage 12 data")
+            logger.warning("R13-1: Failed to parse refine record, using Stage 12 data")
 
     # --- R19-2: Extract PAIRED comparisons from refinement stdout ---
-    from researchclaw.experiment.sandbox import extract_paired_comparisons as _extract_paired
-
     _all_paired: list[dict[str, object]] = []
     # First: from _collect_experiment_results (Stage 12 runs/)
     if exp_data.get("paired_comparisons"):
         _all_paired.extend(exp_data["paired_comparisons"])
-    # Second: from refinement_log iterations (Stage 13)
+    # Second: from code-agent refine records (Stage 13)
     if _refine_log_text:
         try:
             _rl = json.loads(_refine_log_text)
@@ -989,12 +987,11 @@ def _parse_decision(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Agent-mode requirements gate (used by stage 15 for collider_agent /
-# biology_agent).  Reads the manifest's optional `requirements:` list, calls
+# Requirements gate. Reads the manifest's optional `requirements:` list, calls
 # the LLM judge, persists the verdict, and either:
 #   * verdict=reject AND retry budget remains → write REPAIR_PROMPT.md and
 #     decide REFINE (the runner-side rollback override sends us back to
-#     HARNESS_SUBMIT_AND_COLLECT, where the sandbox consumes the repair prompt).
+#     HARNESS_SUBMIT_AND_COLLECT, where the harness consumes the repair prompt).
 #   * otherwise → decide PROCEED (with a `requirements_unmet` flag if any
 #     must_pass remains failing after the retry budget is exhausted).
 # ---------------------------------------------------------------------------
@@ -1057,19 +1054,18 @@ def _read_experiment_summary(run_dir: Path) -> dict[str, object]:
 
 
 def _read_agent_results_canonical(run_dir: Path) -> dict[str, object]:
-    """Read the agent-written results.json from the stage-12 sandbox workspace.
+    """Read canonical result payloads from stage-12 workspace artifacts.
 
-    Mirrors the sandbox's own ``_read_agent_results`` fallback chain: prefers
+    Prefers
     a true canonical file (one with ``metrics``/``primary_metric``/``hypotheses``
-    keys), but skips a sandbox-meta-only stub and falls back to
-    ``analysis/summary.json`` so older runs without the canonical-output
+    keys), but skips metadata-only stubs and falls back to
+    ``analysis/summary.json`` so runs without the canonical-output
     contract still surface scientific data to the requirements judge.
     """
     sandbox_meta_keys = {"source", "returncode", "elapsed_sec", "timed_out", "artifacts", "status"}
     workspace_roots = (
         run_dir / "stage-12" / "runs" / "workspace" / "sandbox",
         run_dir / "stage-12" / "runs",
-        run_dir / "stage-13" / "experiment_final",
     )
     for ws in workspace_roots:
         if not ws.is_dir():
@@ -1322,45 +1318,15 @@ def _execute_research_decision(
     llm: LLMClient | None = None,
     prompts: PromptManager | None = None,
 ) -> StageResult:
-    # ----------------------------------------------------------------------
-    # Agent-mode requirements gate (collider_agent / biology_agent / stat_agent).
-    # When the manifest declares a `requirements:` list, audit the run via
-    # an LLM judge and force-decide REFINE (rerun once) or PROCEED based on
-    # the verdict + per-run retry budget.  ML modes fall through to the
-    # existing decision logic below.
-    # ----------------------------------------------------------------------
-    if config.experiment.mode in ("collider_agent", "biology_agent", "stat_agent"):
-        agent_decision = _agent_requirements_decision(
-            stage_dir=stage_dir, run_dir=run_dir, config=config, llm=llm,
-        )
-        if agent_decision is not None:
-            return agent_decision
+    agent_decision = _agent_requirements_decision(
+        stage_dir=stage_dir, run_dir=run_dir, config=config, llm=llm,
+    )
+    if agent_decision is not None:
+        return agent_decision
 
     analysis = _read_prior_artifact(run_dir, "analysis.md") or ""
 
-    # P6: Detect degenerate REFINE cycles — inject warning if metrics stagnate
     _degenerate_hint = ""
-    _refine_log = _read_prior_artifact(run_dir, "refinement_log.json")
-    if _refine_log:
-        try:
-            _rl = json.loads(_refine_log)
-            _iters = _rl.get("iterations", [])
-            _metrics = [it.get("metric") for it in _iters if isinstance(it, dict)]
-            _valid = [m for m in _metrics if m is not None]
-            _all_saturated = _valid and all(m <= 0.001 or m >= 0.999 for m in _valid)
-            _all_identical = len(set(_valid)) <= 1 and len(_valid) >= 2
-            if _all_saturated or _all_identical:
-                _degenerate_hint = (
-                    "\n\nSYSTEM WARNING — DEGENERATE REFINE CYCLE DETECTED:\n"
-                    f"Metrics across {len(_valid)} iterations: {_valid}\n"
-                    "All iterations produce identical/saturated results. Further REFINE "
-                    "cycles CANNOT fix this — the underlying benchmark design is too "
-                    "easy/hard. You SHOULD choose PROCEED with a quality caveat rather "
-                    "than REFINE again.\n"
-                )
-                logger.warning("P6: Degenerate refine cycle detected, injecting PROCEED hint")
-        except (json.JSONDecodeError, OSError):
-            pass
 
     # Phase 2: Inject experiment diagnosis into decision prompt
     _diagnosis_hint = ""

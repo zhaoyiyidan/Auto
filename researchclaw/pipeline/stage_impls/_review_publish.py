@@ -65,55 +65,27 @@ def _collect_experiment_evidence(run_dir: Path) -> str:
     """Collect actual experiment parameters and results for peer review."""
     evidence_parts: list[str] = []
 
-    # 1. Read experiment code to find actual trial count, methods used
-    exp_dir = _read_prior_artifact(run_dir, "experiment/")
-    if exp_dir and Path(exp_dir).is_dir():
-        main_py = Path(exp_dir) / "main.py"
-        if main_py.exists():
-            code = main_py.read_text(encoding="utf-8")
-            evidence_parts.append(f"### Actual Experiment Code (main.py)\n```python\n{code[:3000]}\n```")
+    task_spec = _read_prior_artifact(run_dir, "task_spec.yaml")
+    if task_spec:
+        evidence_parts.append(f"### Experiment Task Spec\n```yaml\n{task_spec[:3000]}\n```")
 
-    # 2. Read sandbox run results (actual metrics, runtime, stderr)
-    runs_text = _read_prior_artifact(run_dir, "runs/")
-    if runs_text and Path(runs_text).is_dir():
-        for run_file in sorted(Path(runs_text).glob("*.json"))[:5]:
-            payload = _safe_json_loads(run_file.read_text(encoding="utf-8"), {})
-            if isinstance(payload, dict):
-                summary = {
-                    "metrics": payload.get("metrics"),
-                    "elapsed_sec": payload.get("elapsed_sec"),
-                    "timed_out": payload.get("timed_out"),
-                }
-                stderr = payload.get("stderr", "")
-                if stderr:
-                    summary["stderr_excerpt"] = stderr[:500]
-                evidence_parts.append(
-                    f"### Run Result: {run_file.name}\n```json\n{json.dumps(summary, indent=2)}\n```"
-                )
+    manifest = _read_prior_artifact(run_dir, "run_manifest.json")
+    if manifest:
+        evidence_parts.append(f"### Run Manifest\n```json\n{manifest[:3000]}\n```")
 
-    # 3. Read refinement log for actual iteration count
-    refine_log_text = _read_prior_artifact(run_dir, "refinement_log.json")
-    if refine_log_text:
-        try:
-            rlog = json.loads(refine_log_text)
-            summary = {
-                "iterations_executed": len(rlog.get("iterations", [])),
-                "converged": rlog.get("converged"),
-                "stop_reason": rlog.get("stop_reason"),
-                "best_metric": rlog.get("best_metric"),
-            }
-            evidence_parts.append(
-                f"### Refinement Summary\n```json\n{json.dumps(summary, indent=2)}\n```"
-            )
-        except (json.JSONDecodeError, TypeError):
-            pass
+    execution_record = _read_prior_artifact(run_dir, "execution_record.json")
+    if execution_record:
+        evidence_parts.append(f"### Execution Record\n```json\n{execution_record[:3000]}\n```")
 
-    # 4. Count actual number of experiment runs
+    result_artifacts = _read_prior_artifact(run_dir, "result_artifacts.json")
+    if result_artifacts:
+        evidence_parts.append(f"### Result Artifacts\n```json\n{result_artifacts[:3000]}\n```")
+
     actual_run_count = 0
-    for stage_subdir in sorted(run_dir.glob("stage-*/runs")):
-        for rf in stage_subdir.glob("*.json"):
-            if rf.name != "results.json":
-                actual_run_count += 1
+    for registry in sorted(run_dir.glob("stage-*/workspace_experiment_registry.jsonl")):
+        actual_run_count += len(
+            [line for line in registry.read_text(encoding="utf-8").splitlines() if line.strip()]
+        )
     if actual_run_count > 0:
         evidence_parts.append(
             f"### Actual Trial Count\n"
@@ -562,15 +534,6 @@ def _execute_quality_gate(
         _exp_failed and not _fabrication_info["has_real_data"]
     )
     # Phase 1: Enhanced fabrication detection via VerifiedRegistry
-    # BUG-108: Also pass refinement_log so NaN best_metric is properly handled
-    _rl20_candidates = sorted(run_dir.glob("stage-13*/refinement_log.json"), reverse=True)
-    _rl20_path = _rl20_candidates[0] if _rl20_candidates else None
-    _rl20: dict | None = None
-    if _rl20_path and _rl20_path.is_file():
-        try:
-            _rl20 = json.loads(_rl20_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass
     try:
         from researchclaw.pipeline.verified_registry import VerifiedRegistry as _VR20
         _vr20 = _VR20.from_run_dir(run_dir, metric_direction=config.experiment.metric_direction, best_only=True) if isinstance(_exp_summary, dict) else None
@@ -785,14 +748,6 @@ def _sanitize_fabricated_data(
         ):
             if key in exp_data:
                 _collect_numbers(exp_data[key])
-
-    # BUG-222: Removed BUG-206 refinement_log scanning.  The original BUG-206
-    # rationale was "Stage 17 injects sandbox metrics, so the sanitizer must
-    # recognise them".  But that created a loophole: after REFINE regression,
-    # the LLM would cite regressed iteration numbers and the sanitizer would
-    # pass them because they were in the refinement log.  Now that Stage 17
-    # also uses only the promoted best data (BUG-222), there is no need to
-    # whitelist all sandbox metrics here.
 
     if not verified_values:
         report: dict[str, Any] = {
@@ -2387,140 +2342,34 @@ def _execute_export_publish(
     # (Charts, BUG-99 path fix, and remove_missing_figures are now handled
     #  BEFORE compile_latex() — see "Pre-compilation" block above.)
 
-    # --- Code packaging: multi-file directory or single file ---
-    exp_final_dir_path = _read_prior_artifact(run_dir, "experiment_final/")
-    if exp_final_dir_path and Path(exp_final_dir_path).is_dir():
-        import ast
-
+    # --- Execution protocol package ---
+    package_files = {
+        "task_spec.yaml": _read_prior_artifact(run_dir, "task_spec.yaml"),
+        "run_manifest.json": _read_prior_artifact(run_dir, "run_manifest.json"),
+        "execution_record.json": _read_prior_artifact(run_dir, "execution_record.json"),
+        "result_artifacts.json": _read_prior_artifact(run_dir, "result_artifacts.json"),
+    }
+    present_files = {name: text for name, text in package_files.items() if text}
+    if present_files:
         code_dir = stage_dir / "code"
         code_dir.mkdir(parents=True, exist_ok=True)
-        all_code_combined = ""
-        code_file_names: list[str] = []
-        for src in sorted(Path(exp_final_dir_path).glob("*.py")):
-            (code_dir / src.name).write_bytes(src.read_bytes())
-            all_code_combined += src.read_text(encoding="utf-8") + "\n"
-            code_file_names.append(src.name)
-
-        # Detect dependencies from all files
-        detected: set[str] = set()
-        known_packages = {
-            "numpy": "numpy",
-            "torch": "torch",
-            "tensorflow": "tensorflow",
-            "sklearn": "scikit-learn",
-            "scikit-learn": "scikit-learn",
-            "scipy": "scipy",
-            "pandas": "pandas",
-            "matplotlib": "matplotlib",
-            "seaborn": "seaborn",
-            "transformers": "transformers",
-            "datasets": "datasets",
-            "jax": "jax",
-        }
-        try:
-            tree = ast.parse(all_code_combined)
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        top = alias.name.split(".")[0]
-                        if top in known_packages:
-                            detected.add(known_packages[top])
-                elif isinstance(node, ast.ImportFrom) and node.module:
-                    top = node.module.split(".")[0]
-                    if top in known_packages:
-                        detected.add(known_packages[top])
-        except SyntaxError:
-            pass
-
-        requirements = sorted(detected)
-        (code_dir / "requirements.txt").write_text(
-            "\n".join(requirements) + ("\n" if requirements else ""),
-            encoding="utf-8",
-        )
+        for name, text in present_files.items():
+            (code_dir / name).write_text(text, encoding="utf-8")
 
         paper_title = _extract_paper_title(final_paper)
-        file_list_md = "\n".join(f"- `{f}`" for f in code_file_names)
+        file_list_md = "\n".join(f"- `{name}`" for name in sorted(present_files))
         readme = (
-            f"# Code Package for {paper_title}\n\n"
+            f"# Execution Package for {paper_title}\n\n"
             "## Description\n"
-            "This directory contains the experiment project used for the paper.\n\n"
-            "## Project Files\n"
+            "This directory contains the workspace-native execution protocol artifacts.\n\n"
+            "## Files\n"
             f"{file_list_md}\n\n"
-            "## How to Run\n"
-            "`python main.py`\n\n"
-            "## Dependencies\n"
-            "Install dependencies with `pip install -r requirements.txt` if needed.\n"
+            "## Reproduction\n"
+            "Use `run_manifest.json` with the configured ResearchClaw submitter.\n"
         )
         (code_dir / "README.md").write_text(readme, encoding="utf-8")
         artifacts.append("code/")
-        logger.info(
-            "Stage 22: Packaged multi-file code release (%d files, %d deps)",
-            len(code_file_names),
-            len(requirements),
-        )
-    else:
-        # Backward compat: single-file packaging
-        code_payload = _read_prior_artifact(run_dir, "experiment_final.py")
-        if not code_payload:
-            code_payload = _read_prior_artifact(run_dir, "experiment.py")
-        if code_payload:
-            import ast
-
-            code_dir = stage_dir / "code"
-            code_dir.mkdir(parents=True, exist_ok=True)
-            (code_dir / "experiment.py").write_text(code_payload, encoding="utf-8")
-
-            detected_single: set[str] = set()
-            known_packages_single = {
-                "numpy": "numpy",
-                "torch": "torch",
-                "tensorflow": "tensorflow",
-                "sklearn": "scikit-learn",
-                "scikit-learn": "scikit-learn",
-                "scipy": "scipy",
-                "pandas": "pandas",
-                "matplotlib": "matplotlib",
-                "seaborn": "seaborn",
-                "transformers": "transformers",
-                "datasets": "datasets",
-                "jax": "jax",
-            }
-            try:
-                tree = ast.parse(code_payload)
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.Import):
-                        for alias in node.names:
-                            top = alias.name.split(".")[0]
-                            if top in known_packages_single:
-                                detected_single.add(known_packages_single[top])
-                    elif isinstance(node, ast.ImportFrom) and node.module:
-                        top = node.module.split(".")[0]
-                        if top in known_packages_single:
-                            detected_single.add(known_packages_single[top])
-            except SyntaxError:
-                pass
-
-            requirements = sorted(detected_single)
-            (code_dir / "requirements.txt").write_text(
-                "\n".join(requirements) + ("\n" if requirements else ""),
-                encoding="utf-8",
-            )
-            paper_title = _extract_paper_title(final_paper)
-            readme = (
-                f"# Code Package for {paper_title}\n\n"
-                "## Description\n"
-                "This directory contains the final experiment script used for the paper.\n\n"
-                "## How to Run\n"
-                "`python experiment.py`\n\n"
-                "## Dependencies\n"
-                "Install dependencies with `pip install -r requirements.txt` if needed.\n"
-            )
-            (code_dir / "README.md").write_text(readme, encoding="utf-8")
-            artifacts.append("code/")
-            logger.info(
-                "Stage 22: Packaged single-file code release with %d deps",
-                len(requirements),
-            )
+        logger.info("Stage 22: Packaged execution protocol artifacts")
     # WS-5.5: Generate framework diagram prompt for methodology section
     try:
         _framework_prompt = _generate_framework_diagram_prompt(

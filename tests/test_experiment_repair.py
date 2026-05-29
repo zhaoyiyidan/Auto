@@ -330,23 +330,29 @@ class TestBuildExperimentSummary:
 
 
 class TestLoadExperimentCode:
-    def test_loads_from_stage_13(self, tmp_path):
-        exp_dir = tmp_path / "stage-13" / "experiment_final"
-        exp_dir.mkdir(parents=True)
-        (exp_dir / "main.py").write_text("print('hello')")
-        (exp_dir / "requirements.txt").write_text("torch")
+    def test_loads_refined_manifest(self, tmp_path):
+        stage_dir = tmp_path / "stage-13"
+        stage_dir.mkdir(parents=True)
+        (stage_dir / "run_manifest.json").write_text(
+            json.dumps({"launch": {"command": "python train.py"}}),
+            encoding="utf-8",
+        )
 
         code = _load_experiment_code(tmp_path)
-        assert "main.py" in code
-        assert "requirements.txt" in code
+        assert "stage-13/run_manifest.json" in code
+        assert "python train.py" in code["stage-13/run_manifest.json"]
 
-    def test_loads_from_stage_10(self, tmp_path):
-        exp_dir = tmp_path / "stage-10" / "experiment"
-        exp_dir.mkdir(parents=True)
-        (exp_dir / "main.py").write_text("print('hello')")
+    def test_loads_task_spec_when_manifest_missing(self, tmp_path):
+        stage_dir = tmp_path / "stage-09"
+        stage_dir.mkdir(parents=True)
+        (stage_dir / "task_spec.yaml").write_text(
+            "objective: unlock files\n",
+            encoding="utf-8",
+        )
 
         code = _load_experiment_code(tmp_path)
-        assert "main.py" in code
+        assert "stage-09/task_spec.yaml" in code
+        assert "unlock files" in code["stage-09/task_spec.yaml"]
 
     def test_empty_when_no_code(self, tmp_path):
         code = _load_experiment_code(tmp_path)

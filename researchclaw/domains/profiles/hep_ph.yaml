@@ -12,20 +12,13 @@ parent_domain: hep_ph
 # Consumed by researchclaw.domains.deploy when this profile is selected via
 # --profile hep_ph or project.profile: hep_ph.  Every key here only applies
 # if the user's config.yaml leaves the matching slot blank.
-preferred_experiment_mode: collider_agent      # maps to experiment.mode
+preferred_experiment_mode: workspace           # maps to experiment.mode
 preferred_project_mode: full-auto              # maps to project.mode
 preferred_target_conference: jhep              # maps to export.target_conference
 default_time_budget_sec: 7200                  # 2 hours per collider sim
 default_max_iterations: 5
 default_metric_key: exclusion_95cl
 default_metric_direction: maximize
-
-collider_agent:
-  timeout_sec: 7200
-  max_turns: 150
-  install_skills: true
-  extra_args:
-    - "--dangerously-skip-permissions"
 
 experiment_paradigm: simulation
 

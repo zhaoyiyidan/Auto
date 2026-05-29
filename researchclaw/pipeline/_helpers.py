@@ -923,23 +923,12 @@ def _collect_experiment_results(
         latex_lines.append(r"\end{tabular}")
     latex_lines.append(r"\end{table}")
 
-    # R18-1: Extract paired statistical comparisons from stdout
-    from researchclaw.experiment.sandbox import extract_paired_comparisons
-
-    paired_comparisons: list[dict[str, object]] = []
-    for r in runs_data:
-        stdout = r.get("stdout", "")
-        if stdout:
-            paired_comparisons.extend(extract_paired_comparisons(stdout))
-
     collected: dict[str, Any] = {
         "runs": runs_data,
         "metrics_summary": metrics_summary,
         "best_run": best_run,
         "latex_table": "\n".join(latex_lines),
     }
-    if paired_comparisons:
-        collected["paired_comparisons"] = paired_comparisons
     if structured_results is not None:
         collected["structured_results"] = structured_results
     return collected
@@ -952,7 +941,7 @@ def _build_context_preamble(
     include_goal: bool = False,
     include_hypotheses: bool = False,
     include_synthesis: bool = False,
-    include_exp_plan: bool = False,
+    include_task_spec: bool = False,
     include_analysis: bool = False,
     include_decision: bool = False,
     include_experiment_data: bool = False,
@@ -974,10 +963,10 @@ def _build_context_preamble(
         synthesis = _read_prior_artifact(run_dir, "synthesis.md")
         if synthesis:
             parts.append(f"\n### Synthesis\n{synthesis[:2200]}")
-    if include_exp_plan:
-        plan = _read_prior_artifact(run_dir, "exp_plan.yaml")
-        if plan:
-            parts.append(f"\n### Experiment Plan\n{plan[:2000]}")
+    if include_task_spec:
+        task_spec = _read_prior_artifact(run_dir, "task_spec.yaml")
+        if task_spec:
+            parts.append(f"\n### Experiment Task Spec\n{task_spec[:2000]}")
     if include_analysis:
         analysis = _read_best_analysis(run_dir)
         if analysis:

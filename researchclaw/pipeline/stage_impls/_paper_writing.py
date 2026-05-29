@@ -205,84 +205,6 @@ def _collect_raw_experiment_metrics(run_dir: Path) -> tuple[str, bool]:
                         except (ValueError, TypeError, IndexError):
                             pass
 
-    # R19-4 + R23-1: Collect metrics from refinement_log.json (Stage 13).
-    # If refinement has richer data than Stage 12 runs/, REPLACE Stage 12 data
-    # to avoid confusing the paper writer with conflicting sources.
-    _refine_lines: list[str] = []
-    _refine_run_count = 0
-    # Scan ALL refinement logs across versions, pick by quality (primary
-    # metric) then richness (metric count).  BUG-207: Previous logic picked
-    # the sandbox entry with the most metric keys regardless of whether it
-    # represented a regression (e.g. sandbox_after_fix with 1.29% accuracy
-    # winning over sandbox with 78.93% because it had 6 more keys).
-    _best_refine_metrics: dict[str, Any] = {}
-    _best_refine_stdout = ""
-    _best_refine_primary: float | None = None
-    for _rl_path in sorted(run_dir.glob("stage-13*/refinement_log.json")):
-        try:
-            _rlog = json.loads(_rl_path.read_text(encoding="utf-8"))
-            for _it in _rlog.get("iterations", []):
-                for _sbx_key in ("sandbox", "sandbox_after_fix"):
-                    _sbx = _it.get(_sbx_key, {})
-                    if not isinstance(_sbx, dict):
-                        continue
-                    _sbx_metrics = _sbx.get("metrics", {})
-                    if not isinstance(_sbx_metrics, dict) or not _sbx_metrics:
-                        continue
-                    # Extract primary metric value for quality comparison
-                    _sbx_primary: float | None = None
-                    for _pm_key in ("primary_metric", "best_metric"):
-                        if _pm_key in _sbx_metrics:
-                            try:
-                                _sbx_primary = float(_sbx_metrics[_pm_key])
-                            except (ValueError, TypeError):
-                                pass
-                            break
-                    # Prefer higher primary metric; fall back to count
-                    _dominated = False
-                    if _best_refine_primary is not None and _sbx_primary is not None:
-                        if _sbx_primary > _best_refine_primary:
-                            _dominated = True  # new is better
-                        elif _sbx_primary < _best_refine_primary * 0.5:
-                            continue  # skip: regression (>50% worse)
-                    # Accept if quality-dominant or richer-with-no-regression
-                    if _dominated or len(_sbx_metrics) > len(_best_refine_metrics):
-                        _best_refine_metrics = _sbx_metrics
-                        _best_refine_stdout = _sbx.get("stdout", "")
-                        _best_refine_primary = _sbx_primary
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    if _best_refine_metrics and len(_best_refine_metrics) > len(metric_lines) // 2:
-        # Refinement has richer data — REPLACE Stage 12 data to avoid conflicts
-        metric_lines = []
-        run_count = 1
-        for k, v in _best_refine_metrics.items():
-            metric_lines.append(f"  {k}: {v}")
-        # Also extract PAIRED and metric lines from stdout
-        if _best_refine_stdout:
-            for _line in _best_refine_stdout.splitlines():
-                _line = _line.strip()
-                if _line.startswith("PAIRED:"):
-                    metric_lines.append(f"  {_line}")
-                elif ":" in _line:
-                    parts = _line.rsplit(":", 1)
-                    try:
-                        float(parts[1].strip())
-                        metric_lines.append(f"  {_line}")
-                    except (ValueError, TypeError, IndexError):
-                        pass
-    elif _best_refine_metrics:
-        # Refinement has some data but not richer — append to existing
-        run_count += 1
-        for k, v in _best_refine_metrics.items():
-            metric_lines.append(f"  {k}: {v}")
-        if _best_refine_stdout:
-            for _line in _best_refine_stdout.splitlines():
-                _line = _line.strip()
-                if _line.startswith("PAIRED:"):
-                    metric_lines.append(f"  {_line}")
-
     if not metric_lines:
         return "", has_parsed_metrics
 
@@ -1393,15 +1315,6 @@ def _execute_paper_draft(
     exp_metrics_instruction = ""
     has_real_metrics = False
     _verified_registry = None  # Phase 1: anti-fabrication verified data registry
-    # BUG-108: Load refinement_log so VerifiedRegistry has per-iteration metrics
-    _refinement_log_for_vr: dict | None = None
-    _rl_candidates = sorted(run_dir.glob("stage-13*/refinement_log.json"), reverse=True)
-    _rl_path = _rl_candidates[0] if _rl_candidates else None
-    if _rl_path and _rl_path.is_file():
-        try:
-            _refinement_log_for_vr = json.loads(_rl_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass
     if exp_summary_text:
         exp_summary = _safe_json_loads(exp_summary_text, {})
         # Phase 1: Build VerifiedRegistry from experiment data

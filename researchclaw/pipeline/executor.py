@@ -210,7 +210,7 @@ def _run_hitl_pre_stage(
 
     from researchclaw.hitl.intervention import HumanAction, PauseReason
 
-    # Collect output file names from contract (mode-aware: collider_agent → collider_plan.md)
+    # Collect output file names from the stage contract.
     contract = CONTRACTS.get(stage)
     output_files = _select_output_files(contract, config)
 

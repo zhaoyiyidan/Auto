@@ -1,7 +1,7 @@
 """Verified Value Registry — ground truth for all experiment-sourced numbers.
 
 Builds a whitelist of numeric values, condition names, and training config
-from ``experiment_summary.json`` and ``refinement_log.json``.  Used by
+from ``experiment_summary.json``.  Used by
 ``paper_verifier.py`` and ``results_table_builder.py`` to ensure that
 generated papers contain ONLY numbers grounded in real experiment data.
 """
@@ -136,7 +136,6 @@ class VerifiedRegistry:
     def from_experiment(
         cls,
         experiment_summary: dict,
-        refinement_log: dict | None = None,
         *,
         metric_direction: str = "maximize",
     ) -> VerifiedRegistry:
@@ -146,8 +145,6 @@ class VerifiedRegistry:
         ----------
         experiment_summary:
             Parsed ``experiment_summary.json``.
-        refinement_log:
-            Parsed ``refinement_log.json`` (optional, provides richer per-seed data).
         metric_direction:
             ``"maximize"`` or ``"minimize"`` — used for best-result detection.
         """
@@ -229,10 +226,6 @@ class VerifiedRegistry:
                         reg.add_value(rel, f"rel_improve({c1.name} vs {c2.name})")
                         reg.add_value(abs(rel), f"|rel_improve({c1.name},{c2.name})|")
 
-        # --- 7. Enrich from refinement_log (best iteration only) ---
-        if refinement_log:
-            _enrich_from_refinement_log(reg, refinement_log)
-
         logger.info(
             "VerifiedRegistry: %d values, %d conditions (%s), primary_metric=%s",
             len(reg.values),
@@ -265,7 +258,6 @@ class VerifiedRegistry:
         Scans (when ``best_only=False``):
         1. All ``stage-14*/experiment_summary.json`` (sorted, every version)
         2. ``experiment_summary_best.json`` at run root (repair cycle output)
-        3. All ``stage-13*/refinement_log.json`` for enrichment
         """
         import json as _json_rd
 
@@ -319,16 +311,6 @@ class VerifiedRegistry:
                 except (OSError, _json_rd.JSONDecodeError, Exception):  # noqa: BLE001
                     logger.debug("from_run_dir: skipping experiment_summary_best.json", exc_info=True)
 
-            # --- 3. All refinement logs (enrichment) ---
-            for rl_path in sorted(run_dir.glob("stage-13*/refinement_log.json")):
-                try:
-                    rl_data = _json_rd.loads(rl_path.read_text(encoding="utf-8"))
-                    if isinstance(rl_data, dict):
-                        _enrich_from_refinement_log(target, rl_data)
-                        logger.debug("from_run_dir: enriched from %s", rl_path.name)
-                except (OSError, _json_rd.JSONDecodeError, Exception):  # noqa: BLE001
-                    logger.debug("from_run_dir: skipping %s", rl_path, exc_info=True)
-
         # Recompute per-condition stats after merging
         for cond in target.conditions.values():
             cond.compute_stats()
@@ -350,7 +332,6 @@ class VerifiedRegistry:
     def from_files(
         cls,
         experiment_summary_path: Path,
-        refinement_log_path: Path | None = None,
         *,
         metric_direction: str = "maximize",
     ) -> VerifiedRegistry:
@@ -358,10 +339,7 @@ class VerifiedRegistry:
         import json
 
         exp_data = json.loads(experiment_summary_path.read_text(encoding="utf-8"))
-        ref_data = None
-        if refinement_log_path and refinement_log_path.exists():
-            ref_data = json.loads(refinement_log_path.read_text(encoding="utf-8"))
-        return cls.from_experiment(exp_data, ref_data, metric_direction=metric_direction)
+        return cls.from_experiment(exp_data, metric_direction=metric_direction)
 
 
 def _merge_into(target: VerifiedRegistry, source: VerifiedRegistry) -> None:
@@ -391,45 +369,6 @@ def _merge_into(target: VerifiedRegistry, source: VerifiedRegistry) -> None:
         if target.primary_metric == source.primary_metric:
             target.primary_metric_std = source.primary_metric_std
     target.training_config.update(source.training_config)
-
-
-def _enrich_from_refinement_log(reg: VerifiedRegistry, refinement_log: dict) -> None:
-    """Add values from the best refinement iteration."""
-    best_metric = refinement_log.get("best_metric")
-    if isinstance(best_metric, (int, float)) and _is_finite(best_metric):
-        reg.add_value(best_metric, "refinement_log.best_metric")
-
-    best_version = refinement_log.get("best_version", "")
-    iterations = refinement_log.get("iterations", [])
-
-    for it in iterations:
-        ver = it.get("version_dir", "")
-        metric = it.get("metric")
-        if isinstance(metric, (int, float)) and _is_finite(metric):
-            reg.add_value(metric, f"refinement_log.iteration.{ver}")
-
-        # Extract per-seed values from sandbox stdout if available
-        for sandbox_key in ("sandbox", "sandbox_after_fix"):
-            sandbox = it.get(sandbox_key, {})
-            if not isinstance(sandbox, dict):
-                continue
-            sb_metrics = sandbox.get("metrics", {})
-            if isinstance(sb_metrics, dict):
-                for mk, mv in sb_metrics.items():
-                    if isinstance(mv, (int, float)) and _is_finite(mv) and mk not in _INFRA_KEYS:
-                        reg.add_value(mv, f"refinement.{ver}.{sandbox_key}.{mk}")
-
-                        # Parse per-seed keys here too
-                        m = _PER_SEED_PATTERN.match(mk)
-                        if m:
-                            cond_name = m.group(1)
-                            seed_idx = int(m.group(2))
-                            reg.condition_names.add(cond_name)
-                            if cond_name not in reg.conditions:
-                                reg.conditions[cond_name] = ConditionResult(name=cond_name)
-                            # Only update per_seed if this is the best version
-                            if ver == best_version or best_version in ver:
-                                reg.conditions[cond_name].per_seed_values[seed_idx] = mv
 
 
 def _extract_primary_metric(metrics: dict) -> float | None:

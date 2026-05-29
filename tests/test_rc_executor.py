@@ -1192,10 +1192,10 @@ def test_write_stage_meta_keeps_paused_stage_as_next_stage(run_dir: Path) -> Non
     result = rc_executor.StageResult(
         stage=Stage.PROBLEM_DECOMPOSE,
         status=StageStatus.PAUSED,
-        artifacts=("refinement_log.json",),
+        artifacts=("resume_state.json",),
         decision="resume",
         error="ACP prompt timed out after 1800s",
-        evidence_refs=("stage-02/refinement_log.json",),
+        evidence_refs=("stage-02/resume_state.json",),
     )
     rc_executor._write_stage_meta(
         stage_dir, Stage.PROBLEM_DECOMPOSE, "run-paused", result
@@ -2244,63 +2244,65 @@ class TestCollectExperimentEvidence:
         run_dir.mkdir()
         assert rc_executor._collect_experiment_evidence(run_dir) == ""
 
-    def test_includes_main_py_code(self, run_dir: Path) -> None:
-        exp_dir = run_dir / "stage-10" / "experiment"
-        exp_dir.mkdir(parents=True, exist_ok=True)
-        (exp_dir / "main.py").write_text("print('hello')", encoding="utf-8")
-        result = rc_executor._collect_experiment_evidence(run_dir)
-        assert "main.py" in result
-        assert "hello" in result
-
-    def test_includes_run_metrics(self, run_dir: Path) -> None:
-        runs_dir = run_dir / "stage-12" / "runs"
-        runs_dir.mkdir(parents=True, exist_ok=True)
-        (runs_dir / "run-1.json").write_text(
-            json.dumps({"metrics": {"loss": 0.5}, "elapsed_sec": 3.2}),
+    def test_includes_task_spec(self, run_dir: Path) -> None:
+        task_dir = run_dir / "stage-09"
+        task_dir.mkdir(parents=True, exist_ok=True)
+        (task_dir / "task_spec.yaml").write_text(
+            "objective: improve file unlock\nprimary_metric: success_rate\n",
             encoding="utf-8",
         )
         result = rc_executor._collect_experiment_evidence(run_dir)
+        assert "Experiment Task Spec" in result
+        assert "success_rate" in result
+
+    def test_includes_run_manifest(self, run_dir: Path) -> None:
+        manifest_dir = run_dir / "stage-11"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        (manifest_dir / "run_manifest.json").write_text(
+            json.dumps({"launch": {"command": "python train.py"}}),
+            encoding="utf-8",
+        )
+        result = rc_executor._collect_experiment_evidence(run_dir)
+        assert "Run Manifest" in result
+        assert "python train.py" in result
+
+    def test_includes_execution_record(self, run_dir: Path) -> None:
+        record_dir = run_dir / "stage-12"
+        record_dir.mkdir(parents=True, exist_ok=True)
+        (record_dir / "execution_record.json").write_text(
+            json.dumps({
+                "metrics": {"loss": 0.5},
+                "final_status": "completed",
+            }),
+            encoding="utf-8",
+        )
+        result = rc_executor._collect_experiment_evidence(run_dir)
+        assert "Execution Record" in result
         assert "loss" in result
         assert "0.5" in result
 
-    def test_includes_stderr_excerpt(self, run_dir: Path) -> None:
-        runs_dir = run_dir / "stage-12" / "runs"
-        runs_dir.mkdir(parents=True, exist_ok=True)
-        (runs_dir / "run-1.json").write_text(
+    def test_includes_result_artifacts(self, run_dir: Path) -> None:
+        artifacts_dir = run_dir / "stage-12"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        (artifacts_dir / "result_artifacts.json").write_text(
             json.dumps({
-                "metrics": {"loss": 0.5},
-                "stderr": "RuntimeWarning: divide by zero",
+                "artifacts": [
+                    {"path": "outputs/metrics.json", "sha256": "abc", "exists": True}
+                ]
             }),
             encoding="utf-8",
         )
         result = rc_executor._collect_experiment_evidence(run_dir)
-        assert "divide by zero" in result
-
-    def test_includes_refinement_summary(self, run_dir: Path) -> None:
-        refine_dir = run_dir / "stage-13"
-        refine_dir.mkdir(parents=True, exist_ok=True)
-        (refine_dir / "refinement_log.json").write_text(
-            json.dumps({
-                "iterations": [{"iteration": 1}, {"iteration": 2}],
-                "converged": True,
-                "stop_reason": "no_improvement_for_2_iterations",
-                "best_metric": 0.3,
-            }),
-            encoding="utf-8",
-        )
-        result = rc_executor._collect_experiment_evidence(run_dir)
-        assert "iterations_executed" in result
-        assert "2" in result
+        assert "Result Artifacts" in result
+        assert "outputs/metrics.json" in result
 
     def test_includes_actual_trial_count(self, run_dir: Path) -> None:
-        runs_dir = run_dir / "stage-12" / "runs"
-        runs_dir.mkdir(parents=True, exist_ok=True)
-        (runs_dir / "run-1.json").write_text(
-            json.dumps({"metrics": {"loss": 0.5}}), encoding="utf-8"
-        )
+        registry = run_dir / "stage-12" / "workspace_experiment_registry.jsonl"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(json.dumps({"job_id": "job-1"}) + "\n", encoding="utf-8")
         result = rc_executor._collect_experiment_evidence(run_dir)
         assert "1 time(s)" in result
-        assert "CRITICAL" in result
+        assert "Actual Trial Count" in result
 
 
 class TestWritePaperSections:

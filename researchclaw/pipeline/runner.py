@@ -228,9 +228,16 @@ def _run_experiment_diagnosis(run_dir: Path, config: RCConfig, run_id: str) -> N
 
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
 
-        # Collect stdout/stderr from experiment runs
-        # Look in stage-12 (HARNESS_SUBMIT_AND_COLLECT) and stage-13 (CODE_AGENT_REFINE), not stage-14
+        # Collect stdout/stderr from execution records and any retained run payloads.
         stdout, stderr = "", ""
+        for record_path in sorted(run_dir.glob("stage-12*/execution_record.json"), reverse=True)[:2]:
+            try:
+                record = json.loads(record_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if isinstance(record, dict):
+                stdout += str(record.get("stdout", "")) + "\n"
+                stderr += str(record.get("stderr", "")) + "\n"
         runs_dir = None
         for _candidate_runs in sorted(run_dir.glob("stage-1[23]*/runs"), reverse=True):
             if _candidate_runs.is_dir():
@@ -248,40 +255,25 @@ def _run_experiment_diagnosis(run_dir: Path, config: RCConfig, run_id: str) -> N
                 except (json.JSONDecodeError, OSError):
                     continue
 
-        # Load experiment plan from stage-09
+        # Load experiment task spec from stage-09
         plan = None
-        for candidate in sorted(run_dir.glob("stage-09*/exp_plan.yaml")):
+        for candidate in sorted(run_dir.glob("stage-09*/task_spec.yaml")):
             try:
                 import yaml as _yaml_diag
                 plan = _yaml_diag.safe_load(candidate.read_text(encoding="utf-8"))
             except Exception:
-                pass
-        if plan is None:
-            for candidate in sorted(run_dir.glob("stage-09*/experiment_design.json")):
-                try:
-                    plan = json.loads(candidate.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
-                    pass
-
-        # Load refinement log if available
-        ref_log = None
-        for candidate in sorted(run_dir.glob("stage-13*/refinement_log.json")):
-            try:
-                ref_log = json.loads(candidate.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
                 pass
 
         # Run diagnosis
         diag = diagnose_experiment(
             experiment_summary=summary,
             experiment_plan=plan,
-            refinement_log=ref_log,
             stdout=stdout.strip(),
             stderr=stderr.strip(),
         )
 
         # Run quality assessment
-        qa = assess_experiment_quality(summary, ref_log)
+        qa = assess_experiment_quality(summary, experiment_plan=plan)
 
         # Save diagnosis report
         diag_report = {
@@ -304,12 +296,7 @@ def _run_experiment_diagnosis(run_dir: Path, config: RCConfig, run_id: str) -> N
             from researchclaw.pipeline.experiment_repair import build_repair_prompt
 
             code: dict[str, str] = {}
-            # Try refined code first, then stage-10 experiment dir, then raw stage-10
-            for _glob_pat in (
-                "stage-13*/experiment_final/*.py",
-                "stage-10*/experiment/*.py",
-                "stage-10*/*.py",
-            ):
+            for _glob_pat in ("stage-13*/run_manifest.json", "stage-10*/run_manifest.json"):
                 for candidate in sorted(run_dir.glob(_glob_pat)):
                     try:
                         code[candidate.name] = candidate.read_text(encoding="utf-8")
@@ -347,9 +334,9 @@ def _run_experiment_repair(run_dir: Path, config: RCConfig, run_id: str) -> None
     """Execute the experiment repair loop when diagnosis finds quality issues.
 
     Calls the repair loop from ``experiment_repair.py`` which:
-    1. Loads experiment code and diagnosis
-    2. Gets fixes from LLM or OpenCode
-    3. Re-runs experiment in sandbox
+    1. Loads workspace manifest context and diagnosis
+    2. Gets fixes from the workspace agent
+    3. Re-runs through the harness submitter
     4. Re-assesses quality
     5. Repeats up to max_cycles
     """
@@ -658,14 +645,6 @@ def execute_pipeline(
             stage == Stage.RESULT_ANALYSIS
             and result.status == StageStatus.DONE
             and config.experiment.repair.enabled
-            # Agent-based sandboxes (collider_agent / biology_agent / stat_agent)
-            # write a canonical results.json atomically in stage 12.  Stage-14
-            # repair would just iterate on python source files that the agent
-            # never executed, then call sandbox.run_project() — which for agent
-            # sandboxes redundantly re-spawns the whole agent.  Skip the
-            # python-code repair loop entirely; the proceed-or-reject decision
-            # belongs in stage 15 RESEARCH_DECISION.
-            and config.experiment.mode not in ("collider_agent", "biology_agent", "stat_agent")
         ):
             _run_experiment_diagnosis(run_dir, config, run_id)
 

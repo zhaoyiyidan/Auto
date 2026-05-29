@@ -141,7 +141,6 @@ class ExperimentQualityAssessment:
 
 def assess_experiment_quality(
     experiment_summary: dict,
-    refinement_log: dict | None = None,
     experiment_plan: dict | None = None,
     *,
     min_conditions: int = 3,
@@ -153,8 +152,6 @@ def assess_experiment_quality(
     ----------
     experiment_summary:
         Parsed ``experiment_summary.json``.
-    refinement_log:
-        Parsed ``refinement_log.json``.
     experiment_plan:
         Parsed experiment plan (conditions list).
     min_conditions:
@@ -163,11 +160,10 @@ def assess_experiment_quality(
         Minimum seeds per condition for ``full_paper`` mode.
     """
     # Run full diagnosis
-    stdout = _extract_stdout(experiment_summary, refinement_log)
-    stderr = _extract_stderr(experiment_summary, refinement_log)
+    stdout = _extract_stdout(experiment_summary)
+    stderr = _extract_stderr(experiment_summary)
     diagnosis = diagnose_experiment(
         experiment_summary=experiment_summary,
-        refinement_log=refinement_log,
         stdout=stdout,
         stderr=stderr,
         experiment_plan=experiment_plan,
@@ -243,7 +239,6 @@ def _select_paper_mode(
 
 def diagnose_experiment(
     experiment_summary: dict,
-    refinement_log: dict | None = None,
     stdout: str = "",
     stderr: str = "",
     experiment_plan: dict | None = None,
@@ -256,8 +251,6 @@ def diagnose_experiment(
     ----------
     experiment_summary:
         Parsed ``experiment_summary.json``.
-    refinement_log:
-        Parsed ``refinement_log.json``.
     stdout:
         Combined stdout from experiment execution.
     stderr:
@@ -660,39 +653,27 @@ def _get_completed_conditions(summary: dict) -> set[str]:
     return completed
 
 
-def _extract_stdout(summary: dict, ref_log: dict | None) -> str:
+def _extract_stdout(summary: dict) -> str:
     """Extract combined stdout from experiment artifacts."""
     parts: list[str] = []
-    # From best_run
     stdout = summary.get("best_run", {}).get("stdout", "")
     if stdout:
         parts.append(stdout)
-    # From refinement log iterations
-    if ref_log:
-        for it in ref_log.get("iterations", []):
-            for key in ("sandbox", "sandbox_after_fix"):
-                sb = it.get(key, {})
-                if isinstance(sb, dict):
-                    out = sb.get("stdout", "")
-                    if out:
-                        parts.append(out)
+    for run in summary.get("runs", []):
+        if isinstance(run, dict) and run.get("stdout"):
+            parts.append(str(run["stdout"]))
     return "\n".join(parts)
 
 
-def _extract_stderr(summary: dict, ref_log: dict | None) -> str:
+def _extract_stderr(summary: dict) -> str:
     """Extract combined stderr from experiment artifacts."""
     parts: list[str] = []
     stderr = summary.get("best_run", {}).get("stderr", "")
     if stderr:
         parts.append(stderr)
-    if ref_log:
-        for it in ref_log.get("iterations", []):
-            for key in ("sandbox", "sandbox_after_fix"):
-                sb = it.get(key, {})
-                if isinstance(sb, dict):
-                    err = sb.get("stderr", "")
-                    if err:
-                        parts.append(err)
+    for run in summary.get("runs", []):
+        if isinstance(run, dict) and run.get("stderr"):
+            parts.append(str(run["stderr"]))
     return "\n".join(parts)
 
 

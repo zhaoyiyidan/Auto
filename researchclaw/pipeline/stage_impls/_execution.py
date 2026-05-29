@@ -211,6 +211,31 @@ def _manifest_source(
     return None
 
 
+def _latest_agent_result(run_dir: Path) -> dict[str, Any]:
+    text = _read_prior_artifact(run_dir, "stage-10-workspace-agent-result.json")
+    if not text:
+        text = _read_prior_artifact(run_dir, "stage-13-workspace-agent-result.json")
+    if not text:
+        return {}
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _read_result_artifacts(stage_dir: Path) -> list[dict[str, Any]]:
+    path = stage_dir / "result_artifacts.json"
+    if not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    artifacts = payload.get("artifacts") if isinstance(payload, dict) else None
+    return artifacts if isinstance(artifacts, list) else []
+
+
 def _estimate_stage12_footprint_bytes(run_dir: Path) -> int:
     """Sum the on-disk size of stage-12 and any stage-12_v* siblings."""
     total = 0
@@ -235,6 +260,93 @@ def _execute_experiment_run(
     llm: LLMClient | None = None,
     prompts: PromptManager | None = None,
 ) -> StageResult:
+    _ = adapters, llm, prompts
+    validation_text = _read_prior_artifact(run_dir, "manifest_validation.json")
+    manifest_text = _read_prior_artifact(run_dir, "run_manifest.json")
+    if not validation_text or not manifest_text:
+        return StageResult(
+            stage=Stage.EXPERIMENT_RUN,
+            status=StageStatus.FAILED,
+            artifacts=(),
+            error="E12_HARNESS_FAIL: missing validated run manifest",
+        )
+    try:
+        validation_payload = json.loads(validation_text)
+        manifest = RunManifest.from_json(manifest_text)
+    except Exception as exc:  # noqa: BLE001
+        return StageResult(
+            stage=Stage.EXPERIMENT_RUN,
+            status=StageStatus.FAILED,
+            artifacts=(),
+            error=f"E12_HARNESS_FAIL: invalid manifest inputs: {exc}",
+        )
+    if not bool(validation_payload.get("ok", False)):
+        return StageResult(
+            stage=Stage.EXPERIMENT_RUN,
+            status=StageStatus.FAILED,
+            artifacts=(),
+            error="E12_HARNESS_FAIL: manifest validation is not ok",
+        )
+
+    from researchclaw.experiment import submitter as submitter_factory
+    from researchclaw.pipeline import workspace_orchestrator
+
+    submitter = submitter_factory.create_submitter(config)
+    workspace = Path(config.experiment.workspace_agent.workspace_path).resolve()
+    agent_result = _latest_agent_result(run_dir)
+    submitter_cfg = getattr(config.experiment, "submitter", None)
+    wait = bool(getattr(submitter_cfg, "wait_for_completion", True))
+    timeout_sec = int(
+        getattr(submitter_cfg, "wait_timeout_sec", 0)
+        or getattr(config.experiment, "time_budget_sec", 300)
+    )
+    poll_interval_sec = int(getattr(submitter_cfg, "poll_interval_sec", 15))
+    try:
+        workspace_orchestrator.submit_and_collect(
+            manifest=manifest,
+            submitter=submitter,
+            workspace_path=workspace,
+            run_dir=stage_dir,
+            stage=12,
+            wait=wait,
+            timeout_sec=timeout_sec,
+            poll_interval_sec=poll_interval_sec,
+            base_sha=str(agent_result.get("base_sha", "")),
+            agent_commit_sha=manifest.code_commit,
+            provider=str(agent_result.get("provider_name", "")),
+            session_name=str(getattr(config.experiment.workspace_agent, "session_name", "")),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return StageResult(
+            stage=Stage.EXPERIMENT_RUN,
+            status=StageStatus.FAILED,
+            artifacts=(),
+            error=f"E12_HARNESS_FAIL: {exc}",
+        )
+
+    artifacts = _read_result_artifacts(stage_dir)
+    output_artifacts = (
+        "execution_record.json",
+        "submit_result.json",
+        "result_artifacts.json",
+    )
+    if artifacts and not any(bool(item.get("exists")) for item in artifacts):
+        return StageResult(
+            stage=Stage.EXPERIMENT_RUN,
+            status=StageStatus.FAILED,
+            artifacts=output_artifacts,
+            error="E12_HARNESS_FAIL: all declared result_paths are missing",
+        )
+    return StageResult(
+        stage=Stage.EXPERIMENT_RUN,
+        status=StageStatus.DONE,
+        artifacts=output_artifacts,
+        evidence_refs=(
+            "stage-12/execution_record.json",
+            "stage-12/result_artifacts.json",
+        ),
+    )
+
     from researchclaw.experiment.factory import create_sandbox
     from researchclaw.experiment.runner import ExperimentRunner
 

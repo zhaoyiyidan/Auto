@@ -18,7 +18,9 @@ from researchclaw.knowledge.base import write_stage_to_kb
 from researchclaw.pipeline.executor import StageResult, execute_stage
 from researchclaw.pipeline.stages import (
     DECISION_ROLLBACK,
+    EXPERIMENT_ROUTE_TARGETS,
     MAX_DECISION_PIVOTS,
+    MAX_EXPERIMENT_ITERATIONS,
     NONCRITICAL_STAGES,
     STAGE_SEQUENCE,
     Stage,
@@ -310,10 +312,186 @@ def _run_experiment_diagnosis(run_dir: Path, config: RCConfig, run_id: str) -> N
         logger.warning("Experiment diagnosis failed: %s", exc)
 
 
-def _run_experiment_repair(run_dir: Path, config: RCConfig, run_id: str) -> None:
-    """Compatibility no-op until the Stage 10-13 loop driver owns repairs."""
-    _ = run_dir, config
-    logger.info("[%s] Experiment repair loop is handled by Stage 10-13 routing", run_id)
+def _read_experiment_iterations(run_dir: Path) -> list[dict[str, object]]:
+    history_path = run_dir / "experiment_loop_history.json"
+    if not history_path.exists():
+        return []
+    try:
+        payload = json.loads(history_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    if isinstance(payload, dict) and isinstance(payload.get("iterations"), list):
+        return [item for item in payload["iterations"] if isinstance(item, dict)]
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    return []
+
+
+def _record_experiment_iteration(
+    run_dir: Path,
+    *,
+    route: str,
+    jump: str,
+    target: Stage,
+) -> int:
+    iterations = _read_experiment_iterations(run_dir)
+    attempt = len(iterations) + 1
+    iterations.append(
+        {
+            "iteration": attempt,
+            "route": route,
+            "jump": jump,
+            "target_stage": target.name,
+            "target_stage_num": int(target),
+            "timestamp": _utcnow_iso(),
+        }
+    )
+    payload = {
+        "schema_version": "researchclaw.experiment_loop_history.v1",
+        "iterations": iterations,
+    }
+    (run_dir / "experiment_loop_history.json").write_text(
+        json.dumps(payload, indent=2), encoding="utf-8"
+    )
+    return attempt
+
+
+def _route_to_stage(route: str) -> Stage | None:
+    return EXPERIMENT_ROUTE_TARGETS.get(route)
+
+
+def _run_experiment_loop(
+    *,
+    run_dir: Path,
+    run_id: str,
+    config: RCConfig,
+    adapters: AdapterBundle,
+    start_at: Stage = Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
+    auto_approve_gates: bool = False,
+    stop_on_gate: bool = False,
+    cancel_event: threading.Event | None = None,
+) -> tuple[list[StageResult], str]:
+    _ = stop_on_gate
+    results: list[StageResult] = []
+    loop_stages = {
+        Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
+        Stage.MANIFEST_VALIDATE_AND_PREPARE,
+        Stage.HARNESS_SUBMIT_AND_COLLECT,
+        Stage.EXPERIMENT_ROUTE_DECISION,
+    }
+    if start_at not in loop_stages:
+        start_at = Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR
+
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            return results, "stop"
+
+        if start_at in {
+            Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
+            Stage.MANIFEST_VALIDATE_AND_PREPARE,
+        }:
+            if start_at is Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR:
+                result = execute_stage(
+                    Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
+                    run_dir=run_dir,
+                    run_id=run_id,
+                    config=config,
+                    adapters=adapters,
+                    auto_approve_gates=auto_approve_gates,
+                )
+                results.append(result)
+                if result.status is not StageStatus.DONE:
+                    return results, "stop"
+
+            result = execute_stage(
+                Stage.MANIFEST_VALIDATE_AND_PREPARE,
+                run_dir=run_dir,
+                run_id=run_id,
+                config=config,
+                adapters=adapters,
+                auto_approve_gates=auto_approve_gates,
+            )
+            results.append(result)
+            if (
+                result.status is StageStatus.FAILED
+                and result.decision == "fix_code"
+            ):
+                if len(_read_experiment_iterations(run_dir)) >= MAX_EXPERIMENT_ITERATIONS:
+                    return results, "continue"
+                attempt = _record_experiment_iteration(
+                    run_dir,
+                    route="fix_code",
+                    jump="11->10",
+                    target=Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
+                )
+                _version_rollback_stages(
+                    run_dir,
+                    Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
+                    attempt,
+                    incremental=True,
+                )
+                start_at = Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR
+                continue
+            if result.status is not StageStatus.DONE:
+                return results, "stop"
+
+        if start_at in {
+            Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
+            Stage.MANIFEST_VALIDATE_AND_PREPARE,
+            Stage.HARNESS_SUBMIT_AND_COLLECT,
+        }:
+            result = execute_stage(
+                Stage.HARNESS_SUBMIT_AND_COLLECT,
+                run_dir=run_dir,
+                run_id=run_id,
+                config=config,
+                adapters=adapters,
+                auto_approve_gates=auto_approve_gates,
+            )
+            results.append(result)
+            if result.status is not StageStatus.DONE:
+                return results, "stop"
+
+        if config.experiment.repair.enabled:
+            _run_experiment_diagnosis(run_dir, config, run_id)
+
+        result = execute_stage(
+            Stage.EXPERIMENT_ROUTE_DECISION,
+            run_dir=run_dir,
+            run_id=run_id,
+            config=config,
+            adapters=adapters,
+            auto_approve_gates=auto_approve_gates,
+        )
+        results.append(result)
+        if result.status is not StageStatus.DONE:
+            return results, "stop"
+
+        route = result.decision or "continue"
+        if route in {"continue", "proceed"}:
+            return results, "continue"
+        if route in {"abort", "hitl"}:
+            return results, route
+        target = _route_to_stage(route)
+        if target is None:
+            return results, "stop"
+        if len(_read_experiment_iterations(run_dir)) >= MAX_EXPERIMENT_ITERATIONS:
+            return results, "continue"
+        attempt = _record_experiment_iteration(
+            run_dir,
+            route=route,
+            jump=f"13->{route}",
+            target=target,
+        )
+        if route == "revise_task_spec":
+            _version_rollback_stages(
+                run_dir,
+                Stage.EXPERIMENT_TASK_SPEC,
+                attempt,
+            )
+            return results, "revise_task_spec"
+        _version_rollback_stages(run_dir, target, attempt, incremental=True)
+        start_at = target
 
 
 def execute_pipeline(
@@ -366,6 +544,14 @@ def execute_pipeline(
     except Exception:
         logger.debug("Experiment memory initialisation skipped")
 
+    experiment_loop_stages = {
+        Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
+        Stage.MANIFEST_VALIDATE_AND_PREPARE,
+        Stage.HARNESS_SUBMIT_AND_COLLECT,
+        Stage.EXPERIMENT_ROUTE_DECISION,
+    }
+    experiment_loop_handled = False
+
     for stage in STAGE_SEQUENCE:
         started = _should_start(stage, from_stage, started)
         if not started:
@@ -375,6 +561,63 @@ def execute_pipeline(
         if cancel_event is not None and cancel_event.is_set():
             logger.info("[%s] Pipeline cancelled before stage %s", run_id, stage.name)
             print(f"[{run_id}] Pipeline cancelled by user.")
+            break
+
+        if stage in experiment_loop_stages:
+            if experiment_loop_handled:
+                continue
+            loop_results, outcome = _run_experiment_loop(
+                run_dir=run_dir,
+                run_id=run_id,
+                config=config,
+                adapters=adapters,
+                start_at=stage,
+                auto_approve_gates=auto_approve_gates,
+                stop_on_gate=stop_on_gate,
+                cancel_event=cancel_event,
+            )
+            results.extend(loop_results)
+            for loop_result in loop_results:
+                if loop_result.status is StageStatus.DONE:
+                    _write_checkpoint(
+                        run_dir,
+                        loop_result.stage,
+                        run_id,
+                        adapters=adapters,
+                    )
+                    if kb_root is not None:
+                        try:
+                            loop_stage_dir = run_dir / f"stage-{int(loop_result.stage):02d}"
+                            write_stage_to_kb(
+                                kb_root,
+                                stage_id=int(loop_result.stage),
+                                stage_name=loop_result.stage.name.lower(),
+                                run_id=run_id,
+                                artifacts=list(loop_result.artifacts),
+                                stage_dir=loop_stage_dir,
+                                backend=config.knowledge_base.backend,
+                                topic=config.research.topic,
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+            experiment_loop_handled = True
+            if outcome == "continue":
+                continue
+            if outcome == "revise_task_spec":
+                revised_results = execute_pipeline(
+                    run_dir=run_dir,
+                    run_id=run_id,
+                    config=config,
+                    adapters=adapters,
+                    from_stage=Stage.EXPERIMENT_TASK_SPEC,
+                    auto_approve_gates=auto_approve_gates,
+                    stop_on_gate=stop_on_gate,
+                    skip_noncritical=skip_noncritical,
+                    kb_root=kb_root,
+                    cancel_event=cancel_event,
+                )
+                results.extend(revised_results)
+                break
             break
 
         stage_num = int(stage)
@@ -541,24 +784,6 @@ def execute_pipeline(
             print(f"[{run_id}] Reached --to-stage {stage.name}, stopping pipeline.")
             break
 
-        # --- Experiment diagnosis + repair after Stage 14 (result_analysis) ---
-        if (
-            stage == Stage.RESULT_ANALYSIS
-            and result.status == StageStatus.DONE
-            and config.experiment.repair.enabled
-        ):
-            _run_experiment_diagnosis(run_dir, config, run_id)
-
-            # Check if repair loop should run
-            _diag_path = run_dir / "experiment_diagnosis.json"
-            if _diag_path.exists():
-                try:
-                    _diag_data = json.loads(_diag_path.read_text(encoding="utf-8"))
-                    if _diag_data.get("repair_needed"):
-                        _run_experiment_repair(run_dir, config, run_id)
-                except (json.JSONDecodeError, OSError):
-                    pass
-
         # --- Heartbeat for sentinel watchdog ---
         if result.status == StageStatus.DONE:
             _write_heartbeat(run_dir, stage, run_id)
@@ -570,18 +795,7 @@ def execute_pipeline(
             and result.decision in DECISION_ROLLBACK
         ):
             pivot_count = _read_pivot_count(run_dir)
-            # R6-4: Skip REFINE if experiment metrics are empty for consecutive cycles
-            if pivot_count > 0 and _consecutive_empty_metrics(run_dir, pivot_count):
-                logger.warning(
-                    "Consecutive REFINE cycles produced empty metrics — forcing PROCEED"
-                )
-                print(
-                    f"[{run_id}] Consecutive empty metrics across REFINE cycles — forcing PROCEED"
-                )
-                # BUG-211: Promote best stage-14 before proceeding with
-                # empty data — an earlier iteration may have real metrics.
-                _promote_best_stage14(run_dir, config)
-            elif pivot_count < MAX_DECISION_PIVOTS:
+            if pivot_count < MAX_DECISION_PIVOTS:
                 rollback_target = DECISION_ROLLBACK[result.decision]
                 _record_decision_history(
                     run_dir, result.decision, rollback_target, pivot_count + 1
@@ -598,22 +812,6 @@ def execute_pipeline(
                     f"rollback to {rollback_target.name} "
                     f"(attempt {pivot_count + 1}/{MAX_DECISION_PIVOTS})"
                 )
-                if result.decision == "refine":
-                    pivot_results = _run_refine_iteration(
-                        run_dir=run_dir,
-                        run_id=run_id,
-                        config=config,
-                        adapters=adapters,
-                        attempt=pivot_count + 1,
-                        auto_approve_gates=auto_approve_gates,
-                        stop_on_gate=stop_on_gate,
-                        skip_noncritical=skip_noncritical,
-                        kb_root=kb_root,
-                        cancel_event=cancel_event,
-                    )
-                    results.extend(pivot_results)
-                    _promote_best_stage14(run_dir, config)
-                    break
                 # Version existing stage directories before overwriting.
                 _version_rollback_stages(
                     run_dir, rollback_target, pivot_count + 1,
@@ -632,8 +830,6 @@ def execute_pipeline(
                     cancel_event=cancel_event,
                 )
                 results.extend(pivot_results)
-                # BUG-211: Promote best stage-14 after REFINE completes so
-                # downstream stages use the best data, not just the latest.
                 _promote_best_stage14(run_dir, config)
                 break  # Exit current loop; recursive call handles the rest
             else:
@@ -1134,84 +1330,6 @@ def _version_rollback_stages(
             logger.debug(
                 "Versioned (rename) %s → %s", stage_dir.name, version_dir.name
             )
-
-
-def _run_refine_iteration(
-    *,
-    run_dir: Path,
-    run_id: str,
-    config: RCConfig,
-    adapters: AdapterBundle,
-    attempt: int,
-    auto_approve_gates: bool,
-    stop_on_gate: bool,
-    skip_noncritical: bool,
-    kb_root: Path | None,
-    cancel_event: threading.Event | None,
-) -> list[StageResult]:
-    _ = skip_noncritical, kb_root
-    _version_rollback_stages(
-        run_dir,
-        Stage.MANIFEST_VALIDATE_AND_PREPARE,
-        attempt,
-    )
-    results: list[StageResult] = []
-    for stage in (
-        Stage.EXPERIMENT_ROUTE_DECISION,
-        Stage.MANIFEST_VALIDATE_AND_PREPARE,
-        Stage.HARNESS_SUBMIT_AND_COLLECT,
-        Stage.RESULT_ANALYSIS,
-    ):
-        if cancel_event is not None and cancel_event.is_set():
-            break
-        result = execute_stage(
-            stage,
-            run_dir=run_dir,
-            run_id=run_id,
-            config=config,
-            adapters=adapters,
-            auto_approve_gates=auto_approve_gates,
-        )
-        results.append(result)
-        if result.status is StageStatus.BLOCKED_APPROVAL and stop_on_gate:
-            break
-        if result.status is not StageStatus.DONE:
-            break
-    return results
-
-
-def _consecutive_empty_metrics(run_dir: Path, pivot_count: int) -> bool:
-    """R6-4: Check if the current and previous REFINE cycles both produced empty metrics."""
-    # Check the most recent experiment_summary.json (stage-14) and its versioned predecessor.
-    # BUG-215: When stage-14/ doesn't exist (renamed to stage-14_v{N} without
-    # promotion), fall back to the latest versioned directory as "current".
-    current = run_dir / "stage-14" / "experiment_summary.json"
-    if not current.exists():
-        # Try the latest versioned directory
-        for _v in range(pivot_count + 1, 0, -1):
-            alt = run_dir / f"stage-14_v{_v}" / "experiment_summary.json"
-            if alt.exists():
-                current = alt
-                break
-    prev = run_dir / f"stage-14_v{pivot_count}" / "experiment_summary.json"
-    for path in (current, prev):
-        if not path.exists():
-            return False
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            # Check all possible metric locations
-            has_metrics = False
-            ms = data.get("metrics_summary", {})
-            if isinstance(ms, dict) and ms:
-                has_metrics = True
-            br = data.get("best_run", {})
-            if isinstance(br, dict) and br.get("metrics"):
-                has_metrics = True
-            if has_metrics:
-                return False  # At least one cycle had real metrics
-        except (json.JSONDecodeError, OSError, AttributeError):
-            return False
-    return True  # Both cycles had empty metrics
 
 
 def _promote_best_stage14(run_dir: Path, config: RCConfig) -> None:

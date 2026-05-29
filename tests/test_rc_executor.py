@@ -2916,67 +2916,6 @@ class TestExperimentHarness:
 # ===================================================================
 
 
-class TestConsecutiveEmptyMetrics:
-    """R6-4: Pipeline should detect consecutive empty-metrics REFINE cycles."""
-
-    def test_detects_consecutive_empty(self, tmp_path: Path) -> None:
-        """Two cycles with empty metrics should return True."""
-        from researchclaw.pipeline.runner import _consecutive_empty_metrics
-
-        run_dir = tmp_path / "run"
-        # Current cycle (stage-14)
-        s14 = run_dir / "stage-14"
-        s14.mkdir(parents=True)
-        (s14 / "experiment_summary.json").write_text(json.dumps({
-            "metrics_summary": {},
-            "best_run": {"metrics": {}},
-        }))
-        # Previous cycle (stage-14_v1)
-        s14v1 = run_dir / "stage-14_v1"
-        s14v1.mkdir(parents=True)
-        (s14v1 / "experiment_summary.json").write_text(json.dumps({
-            "metrics_summary": {},
-            "best_run": {"metrics": {}},
-        }))
-
-        assert _consecutive_empty_metrics(run_dir, pivot_count=1) is True
-
-    def test_not_empty_when_metrics_exist(self, tmp_path: Path) -> None:
-        """If any cycle has real metrics, return False."""
-        from researchclaw.pipeline.runner import _consecutive_empty_metrics
-
-        run_dir = tmp_path / "run"
-        s14 = run_dir / "stage-14"
-        s14.mkdir(parents=True)
-        (s14 / "experiment_summary.json").write_text(json.dumps({
-            "metrics_summary": {},
-            "best_run": {"metrics": {"loss": 0.5}},
-        }))
-        s14v1 = run_dir / "stage-14_v1"
-        s14v1.mkdir(parents=True)
-        (s14v1 / "experiment_summary.json").write_text(json.dumps({
-            "metrics_summary": {},
-            "best_run": {"metrics": {}},
-        }))
-
-        assert _consecutive_empty_metrics(run_dir, pivot_count=1) is False
-
-    def test_false_when_no_previous_cycle(self, tmp_path: Path) -> None:
-        """First cycle (no v1) should return False."""
-        from researchclaw.pipeline.runner import _consecutive_empty_metrics
-
-        run_dir = tmp_path / "run"
-        s14 = run_dir / "stage-14"
-        s14.mkdir(parents=True)
-        (s14 / "experiment_summary.json").write_text(json.dumps({
-            "metrics_summary": {},
-            "best_run": {"metrics": {}},
-        }))
-
-        # No stage-14_v1 exists
-        assert _consecutive_empty_metrics(run_dir, pivot_count=1) is False
-
-
 # ===================================================================
 # R7 Tests — Experiment-Paper Quality Alignment
 # ===================================================================

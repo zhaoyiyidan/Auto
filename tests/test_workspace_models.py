@@ -7,10 +7,13 @@ from pathlib import Path
 import pytest
 
 from researchclaw.experiment.workspace import (
+    ExecutionRecord,
     ExperimentRecord,
     LaunchCommand,
     ManifestValidation,
     MetricsSpec,
+    ResultArtifact,
+    ResultArtifacts,
     ResourceSpec,
     RunManifest,
     SubmitRequest,
@@ -310,3 +313,55 @@ class TestManifestValidation:
 
         assert loaded == validation
         assert loaded.errors == ["workspace has uncommitted changes"]
+
+
+class TestExecutionRecord:
+    def test_dict_roundtrip(self) -> None:
+        record = ExecutionRecord(
+            stage=12,
+            code_commit="abc123",
+            submitter="local",
+            job_id="local-1",
+            submit_status="submitted",
+            final_status="completed",
+            log_path="logs/run.log",
+            result_paths=["outputs/metrics.json"],
+            result_hashes={"outputs/metrics.json": "sha256"},
+            metrics={"accuracy": 0.91},
+            elapsed_sec=3.5,
+            waited=True,
+            recorded_at="2026-05-29T00:00:00Z",
+        )
+
+        loaded = ExecutionRecord.from_dict(record.to_dict())
+
+        assert loaded == record
+        assert loaded.metrics["accuracy"] == 0.91
+
+
+class TestResultArtifacts:
+    def test_dict_roundtrip(self) -> None:
+        artifacts = ResultArtifacts(
+            code_commit="abc123",
+            artifacts=[
+                ResultArtifact(
+                    path="outputs/metrics.json",
+                    sha256="sha256",
+                    size_bytes=42,
+                    exists=True,
+                ),
+                ResultArtifact(
+                    path="outputs/missing.json",
+                    sha256="",
+                    size_bytes=0,
+                    exists=False,
+                ),
+            ],
+            collected_at="2026-05-29T00:00:00Z",
+        )
+
+        loaded = ResultArtifacts.from_dict(artifacts.to_dict())
+
+        assert loaded == artifacts
+        assert loaded.artifacts[0].exists is True
+        assert loaded.artifacts[1].exists is False

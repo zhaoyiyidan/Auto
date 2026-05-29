@@ -38,13 +38,10 @@ logger = logging.getLogger(__name__)
 
 
 def _select_output_files(contract, config) -> tuple[str, ...]:
-    """Pick the contract's collider-mode outputs when running collider_agent."""
+    """Return the contract's declared outputs."""
+    _ = config
     if contract is None:
         return ()
-    mode = getattr(getattr(config, "experiment", None), "mode", "") or ""
-    alt = getattr(contract, "collider_output_files", ()) or ()
-    if mode == "collider_agent" and alt:
-        return tuple(alt)
     return tuple(contract.output_files)
 
 # ---------------------------------------------------------------------------

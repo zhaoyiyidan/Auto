@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -62,6 +63,30 @@ def submit_job(
     request: SubmitRequest,
 ) -> SubmitResult:
     return submitter.submit(request)
+
+
+def wait_for_completion(
+    submitter: TrainingSubmitter,
+    result: SubmitResult,
+    *,
+    timeout_sec: int,
+    poll_interval_sec: int,
+) -> str:
+    poll = getattr(submitter, "poll", None)
+    if not callable(poll):
+        return "unknown"
+
+    deadline = time.monotonic() + max(timeout_sec, 0)
+    while True:
+        status = str(poll(result))
+        if status in {"completed", "failed"}:
+            return status
+        if status == "unknown":
+            return "unknown"
+        if time.monotonic() >= deadline:
+            return "timeout"
+        if poll_interval_sec > 0:
+            time.sleep(min(poll_interval_sec, max(deadline - time.monotonic(), 0)))
 
 
 def run_workspace_agent_task(

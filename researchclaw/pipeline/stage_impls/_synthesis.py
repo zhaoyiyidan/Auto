@@ -31,6 +31,12 @@ def _is_acp_provider(config: RCConfig) -> bool:
     return getattr(llm_config, "provider", "") == "acp"
 
 
+def _is_debate_enabled(config: RCConfig) -> bool:
+    """ACP hypothesis debate is on by default; gated by llm.acp.enable_debate."""
+    acp_config = getattr(getattr(config, "llm", None), "acp", None)
+    return bool(getattr(acp_config, "enable_debate", True))
+
+
 def _execute_synthesis(
     stage_dir: Path,
     run_dir: Path,
@@ -131,7 +137,7 @@ def _execute_hypothesis_gen(
         _active_roles = _pm.debate_roles_hypothesis()
         hypotheses_md: str | None = None
 
-        if _is_acp_provider(config) and _active_roles:
+        if _is_acp_provider(config) and _active_roles and _is_debate_enabled(config):
             try:
                 from researchclaw.pipeline.stage_impls._hypothesis_debate import (
                     run_acp_debate,

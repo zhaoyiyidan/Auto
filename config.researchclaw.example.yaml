@@ -60,6 +60,7 @@ llm:
   #   base_url: "https://your-provider.example.com/v1"
   #   api_key_env: "CUSTOM_API_KEY"
   #   timeout_sec: 1800
+  #   enable_debate: true   # default true; set false to skip the slow stage-8 hypothesis debate
 
 security:
   hitl_required_stages: [5, 9, 20]

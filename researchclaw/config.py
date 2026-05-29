@@ -203,6 +203,7 @@ class AcpConfig:
     api_key_env: str = ""
     debate_max_rounds: int = 2
     debate_confidence_min: float = 0.6
+    enable_debate: bool = True
 
 
 @dataclass(frozen=True)
@@ -1177,6 +1178,7 @@ def _parse_llm_config(data: dict[str, Any]) -> LlmConfig:
             debate_confidence_min=_safe_float(
                 acp_data.get("debate_confidence_min"), 0.6
             ),
+            enable_debate=bool(acp_data.get("enable_debate", True)),
         ),
     )
 

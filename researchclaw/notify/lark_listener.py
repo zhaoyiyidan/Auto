@@ -76,9 +76,17 @@ class LarkHITLListener:
             since_iso=waiting.since,
         )
         for message in messages:
+            sender_id = str(getattr(message, "sender_id", "") or "")
+            if self.config.allowed_senders and sender_id not in self.config.allowed_senders:
+                continue
+
             parsed = parse_reply(getattr(message, "text", ""))
             if parsed is None:
                 continue
+            if not _action_allowed(parsed.action.value, waiting, self.config):
+                self._send_invalid_feedback(message, waiting)
+                return PollResult.INVALID_ACTION
+
             write_response(self.run_dir / "hitl", parsed.to_human_input())
             self._handled_keys.add(key)
             return PollResult.RESPONDED
@@ -86,6 +94,19 @@ class LarkHITLListener:
         if notified_this_tick:
             return PollResult.NOTIFIED_ONLY
         return PollResult.NO_REPLY
+
+    def _send_invalid_feedback(self, message: object, waiting: WaitingState) -> None:
+        message_id = str(getattr(message, "message_id", "") or "")
+        if message_id and message_id in self._feedback_sent:
+            return
+
+        self.notifier.send(
+            "Invalid action",
+            "Action is not allowed for this pause. Valid actions: "
+            + ", ".join(_allowed_actions(waiting, self.config)),
+        )
+        if message_id:
+            self._feedback_sent.add(message_id)
 
 
 def _prompt_title(run_id: str, waiting: WaitingState) -> str:
@@ -105,3 +126,21 @@ def _prompt_body(waiting: WaitingState) -> str:
     if waiting.output_files:
         lines.append("Output files: " + ", ".join(waiting.output_files))
     return "\n".join(lines)
+
+
+def _allowed_actions(
+    waiting: WaitingState,
+    config: LarkHITLConfig,
+) -> tuple[str, ...]:
+    if not config.allowed_actions:
+        return waiting.available_actions
+    configured = set(config.allowed_actions)
+    return tuple(action for action in waiting.available_actions if action in configured)
+
+
+def _action_allowed(
+    action: str,
+    waiting: WaitingState,
+    config: LarkHITLConfig,
+) -> bool:
+    return action in _allowed_actions(waiting, config)

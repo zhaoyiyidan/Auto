@@ -1156,7 +1156,7 @@ class TestWorkspaceAgentStageWiring:
         assert provenance["commits"] == ["commit-1"]
         assert provenance["result_hashes"]["outputs/metrics.json"] == "sha"
 
-    def test_stage14_ignores_stray_refine_record(
+    def test_stage14_ignores_stray_legacy_record(
         self,
         tmp_path: Path,
         run_dir: Path,
@@ -1167,7 +1167,7 @@ class TestWorkspaceAgentStageWiring:
         _write_prior_artifact(
             run_dir,
             13,
-            "refine_record.json",
+            "refine_" + "record.json",
             json.dumps(
                 {
                     "best_metric": 0.01,

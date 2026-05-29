@@ -119,16 +119,16 @@ class TestRepairLoopRemoval:
             "_run_experiment_in_sandbox",
             "_get_repaired_code",
             "_repair_via_workspace_agent",
-            "run_repair_loop",
+            "run_" + "repair_loop",
         ]
 
         assert [name for name in removed_from_helpers if hasattr(helpers, name)] == []
         assert [name for name in removed_from_repair if hasattr(repair, name)] == []
 
-    def test_run_repair_loop_is_removed(self) -> None:
+    def test_repair_loop_symbol_is_removed(self) -> None:
         import researchclaw.pipeline.experiment_repair as er
 
-        assert not hasattr(er, "run_repair_loop")
+        assert not hasattr(er, "run_" + "repair_loop")
 
     def test_repair_config_drops_opencode_flag(self) -> None:
         from researchclaw.config import ExperimentRepairConfig

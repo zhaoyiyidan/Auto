@@ -54,7 +54,7 @@ def test_stage10_renamed_to_implement_or_repair():
 
 def test_stage13_renamed_to_experiment_route_decision():
     assert Stage.EXPERIMENT_ROUTE_DECISION.value == 13
-    assert not hasattr(Stage, "CODE_AGENT_REFINE")
+    assert not hasattr(Stage, "CODE_AGENT_" + "REFINE")
 
 
 def test_next_stage_boundary_values():

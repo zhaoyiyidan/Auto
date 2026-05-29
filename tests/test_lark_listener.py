@@ -37,6 +37,11 @@ class _FakeReader:
         return []
 
 
+class _RaisingReader:
+    def list_messages(self, *, chat_id: str, since_iso: str):
+        raise RuntimeError("reader failed")
+
+
 def _config(
     *,
     notify: bool = True,
@@ -350,3 +355,48 @@ def test_feedback_sent_once_per_message_id(tmp_path: Path):
     assert listener.poll_once() is PollResult.INVALID_ACTION
     assert listener.poll_once() is PollResult.INVALID_ACTION
     assert len(notifier.calls) == 2
+
+
+def test_corrupt_waiting_returns_error(tmp_path: Path):
+    hitl_dir = tmp_path / "hitl"
+    hitl_dir.mkdir()
+    (hitl_dir / "waiting.json").write_text("{bad", encoding="utf-8")
+    listener = LarkHITLListener(
+        reader=_FakeReader(),
+        notifier=_FakeNotifier(),
+        run_dir=tmp_path,
+        config=_config(),
+        run_id="run-1",
+    )
+
+    assert listener.poll_once() is PollResult.ERROR
+
+
+def test_reader_exception_caught(tmp_path: Path):
+    _write_waiting(tmp_path)
+    listener = LarkHITLListener(
+        reader=_RaisingReader(),
+        notifier=_FakeNotifier(),
+        run_dir=tmp_path,
+        config=_config(),
+        run_id="run-1",
+    )
+
+    assert listener.poll_once() is PollResult.ERROR
+
+
+def test_run_stops_after_max_iterations(tmp_path: Path, monkeypatch):
+    _write_waiting(tmp_path)
+    reader = _FakeReader()
+    listener = LarkHITLListener(
+        reader=reader,
+        notifier=_FakeNotifier(),
+        run_dir=tmp_path,
+        config=_config(),
+        run_id="run-1",
+    )
+    monkeypatch.setattr("researchclaw.notify.lark_listener.time.sleep", lambda _: None)
+
+    listener.run(max_iterations=3)
+
+    assert len(reader.calls) == 3

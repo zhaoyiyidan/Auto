@@ -184,6 +184,82 @@ def test_safe_filename_truncates_to_100_chars() -> None:
 
 
 class TestWorkspaceAgentStageWiring:
+    def test_stage9_emits_task_spec_template(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        from researchclaw.experiment.workspace import TaskSpec
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        _write_prior_artifact(run_dir, 8, "hypotheses.md", "# Hypothesis\nImprove X")
+        stage_dir = run_dir / "stage-09"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_experiment_design(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.DONE
+        assert result.artifacts == ("task_spec.yaml",)
+        spec = TaskSpec.from_path(stage_dir / "task_spec.yaml")
+        assert spec.workspace == cfg.experiment.workspace_agent.workspace_path
+        assert spec.primary_metric == cfg.experiment.metric_key
+        assert spec.metric_direction == cfg.experiment.metric_direction
+        assert spec.objective
+        assert spec.expected_outputs
+
+    def test_stage9_uses_llm_task_spec_fields(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        from researchclaw.experiment.workspace import TaskSpec
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        _write_prior_artifact(run_dir, 8, "hypotheses.md", "# Hypothesis\nImprove X")
+        stage_dir = run_dir / "stage-09"
+        stage_dir.mkdir()
+        llm = FakeLLMClient(
+            "\n".join(
+                [
+                    "workspace: /model/workspace",
+                    "objective: model objective",
+                    "constraints:",
+                    "  - single GPU",
+                    "primary_metric: f1",
+                    "metric_direction: minimize",
+                    "allowed_scope:",
+                    "  - src/",
+                    "forbidden_scope:",
+                    "  - data/raw/",
+                    "expected_outputs:",
+                    "  - outputs/f1.json",
+                ]
+            )
+        )
+
+        result = rc_executor._execute_experiment_design(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=llm,
+        )
+
+        assert result.status is StageStatus.DONE
+        spec = TaskSpec.from_path(stage_dir / "task_spec.yaml")
+        assert spec.workspace == "/model/workspace"
+        assert spec.objective == "model objective"
+        assert spec.primary_metric == "f1"
+        assert spec.expected_outputs == ["outputs/f1.json"]
+
     def test_workspace_codegen_prompt_has_agent_contract(self) -> None:
         from researchclaw.pipeline.stage_impls._code_generation import (
             _workspace_codegen_prompt,

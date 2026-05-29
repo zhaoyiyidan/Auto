@@ -184,6 +184,7 @@ def test_rebuild_idempotent(tmp_path: Path) -> None:
     assert sorted(
         path.name
         for path in (tmp_path / "hypothesis_tree" / "node_tree" / "root").iterdir()
+        if path.is_dir()
     ) == ["h-1"]
 
 

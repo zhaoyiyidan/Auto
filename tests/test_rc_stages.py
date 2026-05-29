@@ -178,7 +178,7 @@ def test_approve_event_transitions_blocked_stage_to_done():
     )
 
     assert outcome.status is StageStatus.DONE
-    assert outcome.next_stage is Stage.CODE_AGENT_IMPLEMENT
+    assert outcome.next_stage is Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR
     assert outcome.checkpoint_required is True
 
 
@@ -350,7 +350,7 @@ def test_decision_rollback_pivot_targets_hypothesis_gen():
 
 
 def test_decision_rollback_refine_targets_iterative_refine():
-    assert DECISION_ROLLBACK["refine"] is Stage.CODE_AGENT_REFINE
+    assert DECISION_ROLLBACK["refine"] is Stage.EXPERIMENT_ROUTE_DECISION
 
 
 def test_max_decision_pivots_is_positive():

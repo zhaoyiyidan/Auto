@@ -243,7 +243,7 @@ def _execute_code_agent_refine(
     execution_text = _read_prior_artifact(run_dir, "execution_record.json")
     artifacts_text = _read_prior_artifact(run_dir, "result_artifacts.json") or "{}"
     if not execution_text:
-        return _failed(Stage.CODE_AGENT_REFINE, "E13_REFINE_FAIL: missing execution_record.json")
+        return _failed(Stage.EXPERIMENT_ROUTE_DECISION, "E13_REFINE_FAIL: missing execution_record.json")
 
     from researchclaw.experiment import workspace_agent as workspace_agent_factory
     from researchclaw.pipeline import workspace_orchestrator
@@ -280,7 +280,7 @@ def _execute_code_agent_refine(
     )
     if not result.ok or result.agent_commit_sha is None or result.agent_commit_sha == result.base_sha:
         return StageResult(
-            stage=Stage.CODE_AGENT_REFINE,
+            stage=Stage.EXPERIMENT_ROUTE_DECISION,
             status=StageStatus.FAILED,
             artifacts=("stage-13-workspace-agent-result.json",),
             error=f"E13_REFINE_FAIL: {result.error or 'agent did not commit'}",
@@ -288,7 +288,7 @@ def _execute_code_agent_refine(
     manifest_source = _manifest_source(workspace, result.manifest_path, manifest_filename)
     if manifest_source is None:
         return StageResult(
-            stage=Stage.CODE_AGENT_REFINE,
+            stage=Stage.EXPERIMENT_ROUTE_DECISION,
             status=StageStatus.FAILED,
             artifacts=("stage-13-workspace-agent-result.json",),
             error="E13_REFINE_FAIL: missing run_manifest.json",
@@ -302,7 +302,7 @@ def _execute_code_agent_refine(
         encoding="utf-8",
     )
     return StageResult(
-        stage=Stage.CODE_AGENT_REFINE,
+        stage=Stage.EXPERIMENT_ROUTE_DECISION,
         status=StageStatus.DONE,
         artifacts=("refine_record.json", "run_manifest.json"),
         evidence_refs=("stage-13/refine_record.json", "stage-13/run_manifest.json"),

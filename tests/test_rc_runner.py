@@ -129,7 +129,7 @@ def test_execute_pipeline_stops_on_paused_stage(
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
-    pause_stage = Stage.CODE_AGENT_REFINE
+    pause_stage = Stage.EXPERIMENT_ROUTE_DECISION
 
     def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
         _ = kwargs
@@ -572,7 +572,7 @@ def test_refine_decision_runs_workspace_refine_iteration(
     )
     decision_index = seen.index(Stage.RESEARCH_DECISION)
     assert seen[decision_index + 1 : decision_index + 5] == [
-        Stage.CODE_AGENT_REFINE,
+        Stage.EXPERIMENT_ROUTE_DECISION,
         Stage.MANIFEST_VALIDATE_AND_PREPARE,
         Stage.HARNESS_SUBMIT_AND_COLLECT,
         Stage.RESULT_ANALYSIS,
@@ -612,7 +612,7 @@ def test_run_refine_iteration_versions_and_executes_13_11_12_14(
     )
 
     assert [result.stage for result in results] == [
-        Stage.CODE_AGENT_REFINE,
+        Stage.EXPERIMENT_ROUTE_DECISION,
         Stage.MANIFEST_VALIDATE_AND_PREPARE,
         Stage.HARNESS_SUBMIT_AND_COLLECT,
         Stage.RESULT_ANALYSIS,
@@ -684,7 +684,7 @@ def test_read_pivot_count_returns_zero_for_no_history(run_dir: Path) -> None:
 
 def test_record_decision_history_appends(run_dir: Path) -> None:
     rc_runner._record_decision_history(run_dir, "pivot", Stage.HYPOTHESIS_GEN, 1)
-    rc_runner._record_decision_history(run_dir, "refine", Stage.CODE_AGENT_REFINE, 2)
+    rc_runner._record_decision_history(run_dir, "refine", Stage.EXPERIMENT_ROUTE_DECISION, 2)
     history = json.loads((run_dir / "decision_history.json").read_text())
     assert len(history) == 2
     assert history[0]["decision"] == "pivot"

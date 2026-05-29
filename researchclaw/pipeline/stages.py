@@ -5,8 +5,8 @@ Migrated from arc/state_machine.py (19 stages) with the following changes:
   - SEARCH_PLAN + SOURCE_CONNECT → SEARCH_STRATEGY
   - RELEVANCE_SCREEN + QUALITY_SCREEN → LITERATURE_SCREEN
   - CLUSTER_TOPICS + GAP_ANALYSIS → SYNTHESIS
-  - EXPERIMENT_TASK_SPEC + CODE_AGENT_IMPLEMENT + MANIFEST_VALIDATE_AND_PREPARE
-  - HARNESS_SUBMIT_AND_COLLECT + CODE_AGENT_REFINE
+  - EXPERIMENT_TASK_SPEC + CODE_AGENT_IMPLEMENT_OR_REPAIR + MANIFEST_VALIDATE_AND_PREPARE
+  - HARNESS_SUBMIT_AND_COLLECT + EXPERIMENT_ROUTE_DECISION
   - WRITE_DRAFT split → PAPER_OUTLINE + PAPER_DRAFT
   - Added PAPER_REVISION, QUALITY_GATE, EXPORT_PUBLISH
   - RETROSPECTIVE_ARCHIVE split → KNOWLEDGE_ARCHIVE (+ QUALITY_GATE + EXPORT_PUBLISH)
@@ -38,12 +38,12 @@ class Stage(IntEnum):
 
     # Phase D: Workspace-native experiment preparation
     EXPERIMENT_TASK_SPEC = 9  # GATE
-    CODE_AGENT_IMPLEMENT = 10
+    CODE_AGENT_IMPLEMENT_OR_REPAIR = 10
     MANIFEST_VALIDATE_AND_PREPARE = 11
 
     # Phase E: Harness execution and code-agent refinement
     HARNESS_SUBMIT_AND_COLLECT = 12
-    CODE_AGENT_REFINE = 13
+    EXPERIMENT_ROUTE_DECISION = 13
 
     # Phase F: Analysis & Decision
     RESULT_ANALYSIS = 14
@@ -127,7 +127,7 @@ GATE_ROLLBACK: dict[Stage, Stage] = {
 
 DECISION_ROLLBACK: dict[str, Stage] = {
     "pivot": Stage.HYPOTHESIS_GEN,       # Discard hypotheses, re-generate
-    "refine": Stage.CODE_AGENT_REFINE,    # Keep hypotheses, re-run experiments
+    "refine": Stage.EXPERIMENT_ROUTE_DECISION,    # Keep hypotheses, re-run experiments
 }
 
 MAX_DECISION_PIVOTS: int = 2  # Prevent infinite loops
@@ -159,12 +159,12 @@ PHASE_MAP: dict[str, tuple[Stage, ...]] = {
     "C: Knowledge Synthesis": (Stage.SYNTHESIS, Stage.HYPOTHESIS_GEN),
     "D: Experiment Design": (
         Stage.EXPERIMENT_TASK_SPEC,
-        Stage.CODE_AGENT_IMPLEMENT,
+        Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
         Stage.MANIFEST_VALIDATE_AND_PREPARE,
     ),
     "E: Experiment Execution": (
         Stage.HARNESS_SUBMIT_AND_COLLECT,
-        Stage.CODE_AGENT_REFINE,
+        Stage.EXPERIMENT_ROUTE_DECISION,
     ),
     "F: Analysis & Decision": (Stage.RESULT_ANALYSIS, Stage.RESEARCH_DECISION),
     "G: Paper Writing": (

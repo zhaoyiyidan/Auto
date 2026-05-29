@@ -97,8 +97,8 @@ CONTRACTS: dict[Stage, StageContract] = {
         error_code="E09_TASKSPEC_REJECT",
         max_retries=0,
     ),
-    Stage.CODE_AGENT_IMPLEMENT: StageContract(
-        stage=Stage.CODE_AGENT_IMPLEMENT,
+    Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR: StageContract(
+        stage=Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
         input_files=("task_spec.yaml",),
         output_files=("stage-10-workspace-agent-result.json", "run_manifest.json"),
         dod="Workspace code agent committed implementation and wrote run manifest",
@@ -122,8 +122,8 @@ CONTRACTS: dict[Stage, StageContract] = {
         error_code="E12_HARNESS_FAIL",
         max_retries=2,
     ),
-    Stage.CODE_AGENT_REFINE: StageContract(
-        stage=Stage.CODE_AGENT_REFINE,
+    Stage.EXPERIMENT_ROUTE_DECISION: StageContract(
+        stage=Stage.EXPERIMENT_ROUTE_DECISION,
         input_files=("execution_record.json",),
         output_files=("refine_record.json", "run_manifest.json"),
         dod="Workspace code agent refined implementation from real harness results",

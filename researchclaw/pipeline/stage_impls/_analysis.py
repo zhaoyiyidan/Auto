@@ -229,7 +229,7 @@ def _execute_result_analysis(
     if runs_dir:
         context = _collect_json_context(Path(runs_dir), max_files=30)
 
-    # --- R13-1: Merge Stage 13 (CODE_AGENT_REFINE) results if available ---
+    # --- R13-1: Merge Stage 13 (EXPERIMENT_ROUTE_DECISION) results if available ---
     # Stage 13 stores richer per-condition metrics in its refine record
     # that _collect_experiment_results() misses (it only scans runs/ dirs).
     _refine_log_text = _read_prior_artifact(run_dir, "refine_record.json")

@@ -1498,7 +1498,7 @@ def test_execute_stage_executor_exception_returns_failed(
         Stage.SYNTHESIS,
         Stage.HYPOTHESIS_GEN,
         Stage.EXPERIMENT_TASK_SPEC,
-        Stage.CODE_AGENT_IMPLEMENT,
+        Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
     ],
 )
 def test_stage_executor_mapping_values_are_callable(stage: Stage) -> None:

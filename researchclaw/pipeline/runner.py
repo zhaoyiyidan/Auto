@@ -553,7 +553,7 @@ def execute_pipeline(
                 logger.debug("Experiment spec validation skipped")
 
         # ── Pitfall detection after code generation / experiment run ──
-        if stage in (Stage.CODE_AGENT_IMPLEMENT, Stage.HARNESS_SUBMIT_AND_COLLECT) and result.status == StageStatus.DONE:
+        if stage in (Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR, Stage.HARNESS_SUBMIT_AND_COLLECT) and result.status == StageStatus.DONE:
             try:
                 from researchclaw.pipeline.pitfall_detector import PitfallDetector
                 detector = PitfallDetector()
@@ -573,7 +573,7 @@ def execute_pipeline(
                 logger.debug("Pitfall detection skipped")
 
         # ── Experiment memory: record outcome after experiment stages ──
-        if stage in (Stage.HARNESS_SUBMIT_AND_COLLECT, Stage.CODE_AGENT_REFINE) and result.status == StageStatus.DONE and exp_memory:
+        if stage in (Stage.HARNESS_SUBMIT_AND_COLLECT, Stage.EXPERIMENT_ROUTE_DECISION) and result.status == StageStatus.DONE and exp_memory:
             try:
                 from researchclaw.memory.experiment_memory import ExperimentOutcome
                 import time as _time_mod
@@ -1256,7 +1256,7 @@ def _run_refine_iteration(
     )
     results: list[StageResult] = []
     for stage in (
-        Stage.CODE_AGENT_REFINE,
+        Stage.EXPERIMENT_ROUTE_DECISION,
         Stage.MANIFEST_VALIDATE_AND_PREPARE,
         Stage.HARNESS_SUBMIT_AND_COLLECT,
         Stage.RESULT_ANALYSIS,

@@ -75,7 +75,7 @@ def test_workspace_native_stage_contracts_are_exact():
             "E09_TASKSPEC_REJECT",
             0,
         ),
-        Stage.CODE_AGENT_IMPLEMENT: (
+        Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR: (
             ("task_spec.yaml",),
             ("stage-10-workspace-agent-result.json", "run_manifest.json"),
             "E10_CODE_AGENT_FAIL",
@@ -93,7 +93,7 @@ def test_workspace_native_stage_contracts_are_exact():
             "E12_HARNESS_FAIL",
             2,
         ),
-        Stage.CODE_AGENT_REFINE: (
+        Stage.EXPERIMENT_ROUTE_DECISION: (
             ("execution_record.json",),
             ("refine_record.json", "run_manifest.json"),
             "E13_REFINE_FAIL",
@@ -121,7 +121,7 @@ def test_stage_contract_has_no_collider_output_files_field():
 def test_select_output_files_returns_contract_outputs_unconditionally():
     from researchclaw.pipeline.executor import _select_output_files
 
-    contract = CONTRACTS[Stage.CODE_AGENT_IMPLEMENT]
+    contract = CONTRACTS[Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR]
 
     assert _select_output_files(contract, object()) == contract.output_files
     assert _select_output_files(None, object()) == ()

@@ -121,6 +121,40 @@ class RunManifest:
 
 
 @dataclass(frozen=True)
+class ManifestValidation:
+    """ResearchClaw validation result for an agent-authored run manifest."""
+
+    ok: bool
+    schema_version: str
+    code_commit: str
+    commit_exists: bool
+    workspace_dirty: bool
+    launch_command: str
+    launch_cwd: str
+    result_paths: list[str]
+    errors: list[str] = field(default_factory=list)
+    checked_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ManifestValidation:
+        return cls(
+            ok=bool(data["ok"]),
+            schema_version=str(data["schema_version"]),
+            code_commit=str(data["code_commit"]),
+            commit_exists=bool(data["commit_exists"]),
+            workspace_dirty=bool(data["workspace_dirty"]),
+            launch_command=str(data["launch_command"]),
+            launch_cwd=str(data["launch_cwd"]),
+            result_paths=list(data.get("result_paths") or []),
+            errors=list(data.get("errors") or []),
+            checked_at=str(data.get("checked_at", "")),
+        )
+
+
+@dataclass(frozen=True)
 class WorkspaceAgentResult:
     """Result of invoking a code agent in an existing git workspace."""
 

@@ -17,7 +17,7 @@ class MathPromptAdapter(PromptAdapter):
         return PromptBlocks(
             compute_budget=domain.compute_budget_guidance or (
                 "Numerical methods are typically fast.\n"
-                "Use 5-8 refinement levels for convergence plots.\n"
+                "Use 5-8 resolution levels for convergence plots.\n"
                 "Step sizes: geometric sequence (h, h/2, h/4, ...)"
             ),
             dataset_guidance=domain.dataset_guidance or (
@@ -59,7 +59,7 @@ class MathPromptAdapter(PromptAdapter):
                 "Numerical methods convergence study:\n"
                 "1. Implement methods from scratch (not just scipy wrappers)\n"
                 "2. Use test problems with KNOWN exact solutions\n"
-                "3. Run at 5+ refinement levels\n"
+                "3. Run at 5+ resolution levels\n"
                 "4. Compute error: ||u_h - u_exact||_2\n"
                 "5. Report convergence order: p = log(e_h / e_{h/2}) / log(2)\n"
                 "6. Output results.json with convergence data"

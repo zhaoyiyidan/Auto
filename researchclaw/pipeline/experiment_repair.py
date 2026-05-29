@@ -307,7 +307,7 @@ def _build_experiment_summary_from_run(
             seed_key = "/".join(parts[1:-1])
             condition_summaries[cond_name]["seeds"].setdefault(seed_key, {})[metric_name] = value
         elif len(parts) == 2:
-            # BUG-199: Stage 13 refinement produces 2-part keys
+            # BUG-199: Stage 13 repair output can produce 2-part keys
             # (condition_name/metric_name) without a seed component.
             # Treat as a single-seed result.
             cond_name, metric_name = parts

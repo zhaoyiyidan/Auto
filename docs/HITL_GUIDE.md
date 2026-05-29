@@ -132,7 +132,7 @@ Action >
 | `a` | **Approve** | Accept the output and continue to the next stage |
 | `r` | **Reject** | Reject the output; pipeline rolls back to an earlier stage |
 | `e` | **Edit** | Opens the output file in your `$EDITOR` (vim, nano, VS Code, etc.) |
-| `c` | **Collaborate** | Start a multi-turn chat with the AI to refine the output together |
+| `c` | **Collaborate** | Start a multi-turn chat with the AI to revise the output together |
 | `i` | **Inject Guidance** | Provide direction that will be incorporated into subsequent stages |
 | `s` | **Skip** | Skip this stage entirely (use with caution) |
 | `b` | **Rollback** | Jump back to a specific earlier stage |
@@ -189,12 +189,12 @@ researchclaw guide artifacts/rc-2026-0328-abc123 --stage 9 --message "Add Dropou
 | 3 | Search Strategy | Pause after | Add missing search terms or sources |
 | 5 | Literature Screen | **Approval required** | Verify important papers aren't filtered out |
 | 7 | Synthesis | Pause after | Check if the identified gaps match your understanding |
-| **8** | **Hypothesis Gen** | **Collaboration** | **Review, discuss, and refine the core research idea** |
+| **8** | **Hypothesis Gen** | **Collaboration** | **Review, discuss, and revise the core research idea** |
 | **9** | **Experiment Design** | **Collaboration + Approval** | **Verify baselines, benchmarks, metrics, ablations** |
 | 10 | Code Generation | Pause after | Spot-check code quality |
 | 12 | Experiment Run | Stream output | Monitor training metrics in real-time |
-| 13 | Iterative Refine | Pause after | Decide if refinement should continue |
-| **15** | **Research Decision** | **Approval required** | **Choose PROCEED, PIVOT, or REFINE** |
+| 13 | Iterative Repair | Pause after | Decide if repair should continue |
+| **15** | **Research Decision** | **Approval required** | **Choose PROCEED, PIVOT, or EXTEND** |
 | 16 | Paper Outline | Pause after | Adjust section structure |
 | **17** | **Paper Draft** | **Collaboration** | **Co-write key sections** |
 | 18 | Peer Review | Pause after | Prioritize which review comments to address |
@@ -248,7 +248,7 @@ You > Yes, approve.
 ```
 
 The workshop automatically:
-- Saves your refined hypothesis to `hypotheses.md`
+- Saves your revised hypothesis to `hypotheses.md`
 - Records the conversation in `hitl/chat_stage_08.jsonl`
 - Persists candidate evaluations in `hitl/idea_workshop.json`
 
@@ -283,7 +283,7 @@ AI > Updated. Current checklist:
 
 The Paper Co-Writer supports three workflows:
 
-1. **AI-first** (default): AI writes the draft, you edit and refine
+1. **AI-first** (default): AI writes the draft, you edit and revise
 2. **Human-first**: You write key paragraphs, AI expands and polishes
 3. **Interleaved**: You alternate — you write the Method, AI writes Related Work
 

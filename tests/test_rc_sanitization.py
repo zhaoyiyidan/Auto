@@ -266,9 +266,9 @@ model.learn(total_timesteps=100000)
 def test_sanitize_reads_promoted_best_data(run_dir: Path) -> None:
     """BUG-222: Sanitizer uses experiment_summary_best.json (promoted best).
 
-    After REFINE, the pipeline promotes the best iteration's data to
+    After repair loops, the pipeline promotes the best iteration's data to
     experiment_summary_best.json.  The sanitizer should validate against
-    that file, not scan all refinement logs.
+    that file, not scan all repair logs.
     """
     # Stale stage-14 data (from a regressed iteration)
     _write_experiment_summary(run_dir, {
@@ -304,8 +304,8 @@ def test_sanitize_reads_promoted_best_data(run_dir: Path) -> None:
     assert report["numbers_replaced"] == 0
 
 
-def test_sanitize_rejects_regressed_refine_data(run_dir: Path) -> None:
-    """BUG-222: Regressed REFINE iteration data must NOT pass sanitizer.
+def test_sanitize_rejects_regressed_repair_data(run_dir: Path) -> None:
+    """BUG-222: Regressed repair iteration data must NOT pass sanitizer.
 
     Reproduces the Run 75 fabrication bypass: v1 had 74.52%, v3 regressed
     to 69.30%.  Paper cited v3 numbers.  The sanitizer should reject them.

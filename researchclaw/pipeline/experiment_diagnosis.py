@@ -223,7 +223,7 @@ def _select_paper_mode(
         best_run = experiment_summary.get("best_run", {})
         metrics = best_run.get("metrics", {})
         # Simple heuristic: if primary_metric is very low, might be negative result
-        # This is refined by checking baseline vs proposed in the full pipeline
+        # This is revised by checking baseline vs proposed in the full pipeline
         return PaperMode.FULL_PAPER
 
     if len(diagnosis.conditions_completed) >= 2:

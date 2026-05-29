@@ -32,7 +32,7 @@ _STAGE_SUMMARIES: dict[int, str] = {
     10: "Experiment code generated. Review the code structure and quality.",
     11: "Resource schedule created. Confirm GPU/time allocation.",
     12: "Experiments running/completed. Check if results look reasonable and training is progressing normally.",
-    13: "Iterative refinement done. Review the improvement trajectory.",
+    13: "Experiment route decision done. Review the repair/rerun trajectory.",
     14: "Results analyzed. Verify the statistical analysis and conclusions are sound.",
     15: "Research decision point. Choose: PROCEED to paper writing, PIVOT to new hypothesis, or EXTEND follow-up hypotheses.",
     16: "Paper outline created. Review the section structure and key points for each section.",

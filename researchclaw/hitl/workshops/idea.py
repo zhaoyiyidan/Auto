@@ -3,7 +3,7 @@
 Provides a structured framework for human-AI co-creation of research ideas:
 1. Brainstorm — generate multiple candidate ideas
 2. Evaluate — score each idea on novelty, feasibility, impact
-3. Refine — iteratively improve the chosen idea
+3. Revise — iteratively improve the chosen idea
 4. Validate — check novelty against literature
 """
 
@@ -198,17 +198,17 @@ class IdeaWorkshop:
         self.evaluations = evaluations
         return evaluations
 
-    def refine(
+    def revise(
         self, idea: IdeaCandidate, feedback: str
     ) -> IdeaCandidate:
-        """Refine an idea based on human feedback.
+        """Revise an idea based on human feedback.
 
         Args:
-            idea: The idea to refine.
+            idea: The idea to revise.
             feedback: Human's feedback and suggestions.
 
         Returns:
-            Refined IdeaCandidate.
+            Revised IdeaCandidate.
         """
         if self.llm is None:
             return idea
@@ -216,7 +216,7 @@ class IdeaWorkshop:
         try:
             response = self.llm.chat([
                 {"role": "system", "content": (
-                    "Refine this research idea based on the feedback. "
+                    "Revise this research idea based on the feedback. "
                     "Return updated JSON with title, description, "
                     "baselines (list), keywords (list)."
                 )},
@@ -227,11 +227,11 @@ class IdeaWorkshop:
                     f"Human feedback:\n{feedback}"
                 )},
             ])
-            refined = self._parse_single_idea(response)
-            if refined:
-                return refined
+            revised = self._parse_single_idea(response)
+            if revised:
+                return revised
         except Exception as exc:
-            logger.warning("Refinement failed: %s", exc)
+            logger.warning("Revision failed: %s", exc)
 
         return idea
 

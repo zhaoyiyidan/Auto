@@ -355,7 +355,7 @@ class TestFromRunDir:
         assert len(reg.condition_names) == 0
 
     # -----------------------------------------------------------------------
-    # BUG-222: best_only mode — REFINE bypass prevention
+    # BUG-222: best_only mode — repair bypass prevention
     # -----------------------------------------------------------------------
 
     def test_best_only_uses_experiment_summary_best(self, tmp_path: Path) -> None:

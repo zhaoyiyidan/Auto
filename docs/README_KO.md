@@ -177,7 +177,7 @@ experiment:
 | 기능 | 작동 방식 |
 |------|----------|
 | **🧑‍✈️ 코파일럿 모드** | 6가지 개입 모드 — 완전 자율부터 단계별까지. 중요한 결정(가설, 베이스라인, 논문 작성)에서 AI를 안내하거나 자유롭게 실행. SmartPause가 인간의 입력이 도움이 될 때를 자동 감지. |
-| **🔄 PIVOT / REFINE 루프** | 15단계에서 자율적으로 결정: PROCEED, REFINE (매개변수 조정), 또는 PIVOT (새 방향). 산출물 자동 버전 관리. |
+| **🔄 PIVOT / EXTEND 루프** | 15단계에서 자율적으로 결정: PROCEED, EXTEND (follow-up hypotheses), 또는 PIVOT (새 방향). 산출물 자동 버전 관리. |
 | **🤖 멀티 에이전트 토론** | 가설 생성, 결과 분석, 피어 리뷰 각각에서 구조화된 다관점 토론을 수행. |
 | **🧬 자기 학습** | 각 실행에서 교훈 추출 (의사결정 근거, 런타임 경고, 메트릭 이상), 30일 시간 감쇠. 향후 실행이 과거의 실수에서 학습. |
 | **📚 지식 기반** | 각 실행에서 6개 카테고리 (결정, 실험, 발견, 문헌, 질문, 리뷰)에 걸친 구조화된 지식 기반 구축. |
@@ -285,11 +285,11 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 ```
 페이즈 A: 연구 범위 설정            페이즈 E: 실험 실행
   1. TOPIC_INIT                      12. EXPERIMENT_RUN
-  2. PROBLEM_DECOMPOSE               13. ITERATIVE_REFINE  ← 자가 복구
+  2. PROBLEM_DECOMPOSE               13. EXPERIMENT_ROUTE_DECISION  ← 자가 복구
 
 페이즈 B: 문헌 탐색                페이즈 F: 분석 및 의사결정
   3. SEARCH_STRATEGY                 14. RESULT_ANALYSIS    ← 멀티 에이전트
-  4. LITERATURE_COLLECT  ← 실제 API  15. RESEARCH_DECISION  ← PIVOT/REFINE
+  4. LITERATURE_COLLECT  ← 실제 API  15. RESEARCH_DECISION  ← PIVOT / EXTEND
   5. LITERATURE_SCREEN   [게이트]
   6. KNOWLEDGE_EXTRACT               페이즈 G: 논문 작성
                                      16. PAPER_OUTLINE
@@ -308,7 +308,7 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 
 > **코파일럿 모드** (`--mode co-pilot`): 7-8단계(아이디어 워크숍), 9단계(베이스라인 내비게이터), 16-17단계(논문 코라이터)에서 깊은 인간-AI 협업. 나머지 단계는 SmartPause 모니터링과 함께 자동 실행.
 
-> **의사결정 루프**: 15단계에서 REFINE (→ 13단계) 또는 PIVOT (→ 8단계)을 트리거할 수 있으며, 산출물 버전 관리가 자동으로 이루어집니다.
+> **의사결정 루프**: 15단계에서 EXTEND (→ 8단계) 또는 PIVOT (→ 8단계)을 트리거할 수 있으며, 산출물 버전 관리가 자동으로 이루어집니다.
 
 <details>
 <summary>📋 각 페이즈별 상세 설명</summary>
@@ -321,7 +321,7 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 | **C: 종합** | 연구 결과 클러스터링, 연구 갭 식별, 멀티 에이전트 토론을 통한 검증 가능한 가설 생성 |
 | **D: 설계** | 실험 계획 설계, 하드웨어 인식 실행 가능 Python 생성 (GPU 등급 → 패키지 선택), 리소스 요구 사항 추정 |
 | **E: 실행** | 샌드박스에서 실험 실행, NaN/Inf 및 런타임 버그 감지, LLM을 통한 표적화된 코드 자가 복구 |
-| **F: 분석** | 결과에 대한 멀티 에이전트 분석; 근거가 포함된 자율 PROCEED / REFINE / PIVOT 결정 |
+| **F: 분석** | 결과에 대한 멀티 에이전트 분석; 근거가 포함된 자율 PROCEED / EXTEND / PIVOT 결정 |
 | **G: 작성** | 개요 → 섹션별 작성 (5,000-6,500단어) → 피어 리뷰 (방법론-증거 일관성 포함) → 길이 제한 적용 수정 |
 | **H: 최종화** | 품질 게이트, 지식 아카이빙, 학회 템플릿 포함 LaTeX 내보내기, 인용 무결성 + 관련성 검증 |
 
@@ -517,11 +517,11 @@ researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
 | 메트릭 | 기준선 | MetaClaw 사용 시 | 개선 |
 |--------|--------|-----------------|------|
 | 단계 재시도율 | 10.5% | 7.9% | **-24.8%** |
-| Refine 사이클 수 | 2.0 | 1.2 | **-40.0%** |
+| Repair cycles 수 | 2.0 | 1.2 | **-40.0%** |
 | 파이프라인 단계 완료율 | 18/19 | 19/19 | **+5.3%** |
 | 전체 견고성 점수 (종합) | 0.714 | 0.845 | **+18.3%** |
 
-> 종합 견고성 점수는 단계 완료율 (40%), 재시도 감소 (30%), Refine 사이클 효율성 (30%)의 가중 평균입니다.
+> 종합 견고성 점수는 단계 완료율 (40%), 재시도 감소 (30%), Repair cycles 효율성 (30%)의 가중 평균입니다.
 
 ### 하위 호환성
 

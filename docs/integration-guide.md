@@ -165,7 +165,7 @@ research:
 experiment:
   mode: "sandbox"              # How experiments run (see Section 7)
   time_budget_sec: 300         # Max seconds per experiment run
-  max_iterations: 10           # Max refinement loops in Stage 13
+  max_iterations: 10           # Max repair loops in Stage 13
   metric_key: "primary_metric" # What metric to optimize
   metric_direction: "minimize" # "minimize" or "maximize"
   sandbox:
@@ -318,7 +318,7 @@ The pipeline runs in 8 phases. Each stage reads artifacts from previous stages a
 | # | Stage | What Happens | Produces |
 |---|-------|-------------|----------|
 | 12 | EXPERIMENT_RUN | Runs the experiment code (sandbox or simulated); immutable harness injected for time guard and metric validation; partial results captured on timeout | `runs/` |
-| 13 | ITERATIVE_REFINE | LLM analyzes results, improves code, re-runs (up to 10 iterations); timeout-aware prompts; NaN/divergence fast-fail; stdout truncated for context efficiency | `refinement_log.json`, `experiment_final.py` |
+| 13 | EXPERIMENT_ROUTE_DECISION | LLM analyzes results, improves code, re-runs (up to 10 iterations); timeout-aware prompts; NaN/divergence fast-fail; stdout truncated for context efficiency | `repairment_log.json`, `experiment_final.py` |
 
 ### Phase F: Analysis & Decision
 
@@ -378,9 +378,9 @@ artifacts/rc-20260310-143200-a1b2c3/
 ├── stage-10/experiment_spec.md            # Experiment specification
 ├── stage-11/schedule.json                 # Resource schedule
 ├── stage-12/runs/run-1.json               # Experiment results
-├── stage-13/experiment_final.py           # Refined experiment code
+├── stage-13/experiment_final.py           # Repaird experiment code
 ├── stage-13/experiment_v1.py              # Iteration 1 snapshot
-├── stage-13/refinement_log.json           # Refinement history
+├── stage-13/repairment_log.json           # repair history
 ├── stage-14/analysis.md                   # Statistical analysis
 ├── stage-14/experiment_summary.json       # Metrics summary
 ├── stage-15/decision.md                   # Proceed/Pivot decision
@@ -684,11 +684,11 @@ In controlled A/B experiments (same topic, same LLM, same configuration):
 | Metric | Baseline | With MetaClaw | Improvement |
 |--------|----------|---------------|-------------|
 | Stage retry rate | 10.5% | 7.9% | **-24.8%** |
-| Refine cycle count | 2.0 | 1.2 | **-40.0%** |
+| Repair cycle count | 2.0 | 1.2 | **-40.0%** |
 | Pipeline stage completion | 18/19 | 19/19 | **+5.3%** |
 | Overall robustness score (composite) | 0.714 | 0.845 | **+18.3%** |
 
-> Composite robustness score is a weighted average of stage completion rate (40%), retry reduction (30%), and refine cycle efficiency (30%).
+> Composite robustness score is a weighted average of stage completion rate (40%), retry reduction (30%), and repair cycle efficiency (30%).
 
 ### Key Files
 

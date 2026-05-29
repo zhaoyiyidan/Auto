@@ -161,9 +161,12 @@ def _classify_error(stage_name: str, error_text: str) -> str:
 _STAGE_NAMES: dict[int, str] = {
     1: "topic_init", 2: "problem_decompose", 3: "search_strategy",
     4: "literature_collect", 5: "literature_screen", 6: "knowledge_extract",
-    7: "synthesis", 8: "hypothesis_gen", 9: "experiment_design",
-    10: "code_generation", 11: "resource_planning", 12: "experiment_run",
-    13: "iterative_refine", 14: "result_analysis", 15: "research_decision",
+    7: "synthesis", 8: "hypothesis_gen", 9: "experiment_task_spec",
+    10: "code_agent_implement_or_repair",
+    11: "manifest_validate_and_prepare",
+    12: "harness_submit_and_collect",
+    13: "experiment_route_decision",
+    14: "result_analysis", 15: "research_decision",
     16: "paper_outline", 17: "paper_draft", 18: "peer_review",
     19: "paper_revision", 20: "quality_gate", 21: "knowledge_archive",
     22: "export_publish", 23: "citation_verify",
@@ -180,7 +183,7 @@ def extract_lessons(
     Detects:
     - Failed stages → error lesson
     - Blocked stages → pipeline lesson
-    - Decision pivots/refines → pipeline lesson (with rationale if available)
+    - Decision pivots/extensions → pipeline lesson (with rationale if available)
     - Runtime warnings from experiment stderr → code_bug lesson
     - Metric anomalies (NaN, identical convergence) → metric_anomaly lesson
     """
@@ -219,8 +222,8 @@ def extract_lessons(
                 run_id=run_id,
             ))
 
-        # PIVOT / REFINE decisions — extract rationale if available
-        if decision in ("pivot", "refine"):
+        # PIVOT / EXTEND decisions — extract rationale if available
+        if decision in ("pivot", "extend"):
             rationale = _extract_decision_rationale(run_dir) if run_dir else ""
             desc = f"Research decision was {decision.upper()}"
             if rationale:
@@ -283,7 +286,7 @@ def _parse_justification_from_excerpt(text: str) -> str:
     match = pattern.search(text)
     if match:
         return match.group(1).strip()[:300]
-    # Fallback: skip the first line (## Decision / **REFINE**) and return the rest
+    # Fallback: skip the first line (## Decision / **EXTEND**) and return the rest
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     # Skip heading lines starting with ## or **
     content_lines = [

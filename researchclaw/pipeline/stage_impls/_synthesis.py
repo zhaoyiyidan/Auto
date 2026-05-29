@@ -189,7 +189,7 @@ def _execute_hypothesis_gen(
                 logger.info("Applying HITL guidance to hypotheses")
                 resp = llm.chat(
                     [{"role": "user", "content": (
-                        f"Refine the following hypotheses based on this human guidance.\n\n"
+                        f"Revise the following hypotheses based on this human guidance.\n\n"
                         f"## Current Hypotheses\n{hypotheses_md}\n\n"
                         f"## Human Guidance\n{guidance}\n\n"
                         f"Produce improved hypotheses that incorporate the guidance."

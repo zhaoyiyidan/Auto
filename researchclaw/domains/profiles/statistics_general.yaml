@@ -28,7 +28,7 @@ experiment_paradigm: simulation
 
 condition_terminology:
   baseline: ordinary or non-orthogonalized estimator (e.g. plug-in, percentile)
-  proposed: refined / orthogonalized / robust estimator under test
+  proposed: revised / orthogonalized / robust estimator under test
   variant: data-generating process or method ablation
   input: sample size, distribution, contamination level, or design knob
   metric: empirical coverage / bias / RMSE / interval width / selection accuracy

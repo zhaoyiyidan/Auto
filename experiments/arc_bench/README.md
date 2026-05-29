@@ -284,7 +284,7 @@ The pipeline runs all 23 stages, the agent writes a canonical
 `results.json` at the workspace root (mandated by the prompt footer in
 `BiologyAgentSandbox._prepare_workspace` / `ColliderAgentSandbox._prepare_workspace`),
 the sandbox surfaces those scientific keys into stage-14 metrics, and the
-judge produces a leaf-graded rubric score.  No python-code refinement
+judge produces a leaf-graded rubric score.  No python-code repair
 loops — the agent is atomic and either the results.json passes or it
 doesn't.
 

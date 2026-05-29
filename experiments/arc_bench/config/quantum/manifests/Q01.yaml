@@ -86,7 +86,7 @@ experiment_design:
   metrics:
     - name: "quantum_test_accuracy_mean"
       direction: "maximize"
-      description: "Primary metric. Mean of the 5-seed test_accuracy means across the THREE quantum encodings ONLY. The classical baseline is reported separately and does NOT contribute to this metric. This isolates the refinement signal from the baseline."
+      description: "Primary metric. Mean of the 5-seed test_accuracy means across the THREE quantum encodings ONLY. The classical baseline is reported separately and does NOT contribute to this metric. This isolates the iteration signal from the baseline."
     - name: "test_accuracy"
       direction: "maximize"
       description: "Per-condition mean accuracy on the 20% held-out test split, averaged over 5 random seeds. Reported per condition (angle, amplitude, zz_feature_map, logistic_regression)."

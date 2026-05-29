@@ -282,7 +282,7 @@ class TestSelectBestResults:
 
 
 class TestBuildExperimentSummaryTwoPartKeys:
-    """BUG-199: Stage 13 refinement produces 2-part keys (condition/metric)
+    """BUG-199: Stage 13 repair output can produce 2-part keys (condition/metric)
     instead of 3-part keys (condition/seed/metric).  The parser must handle
     both formats.
     """
@@ -337,7 +337,7 @@ class TestBuildExperimentSummaryTwoPartKeys:
                 # 3-part keys (with seed)
                 "Baseline/0/accuracy": 0.80,
                 "Baseline/1/accuracy": 0.82,
-                # 2-part keys (Stage 13 refinement output)
+                # 2-part keys (Stage 13 repair output)
                 "Proposed/accuracy": 0.94,
             },
             "elapsed_sec": 120.0,

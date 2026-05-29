@@ -444,7 +444,7 @@ def _run_collaboration_loop(
 ) -> StageResult:
     """Run an interactive collaboration loop for a stage.
 
-    The human and AI take turns discussing and refining the stage output.
+    The human and AI take turns discussing and revising the stage output.
     The loop continues until the human approves or aborts.
     """
     from researchclaw.hitl.collaboration import CollaborationSession

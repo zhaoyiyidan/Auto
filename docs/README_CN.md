@@ -177,7 +177,7 @@ experiment:
 | 能力 | 工作原理 |
 |------|----------|
 | **🧑‍✈️ Co-Pilot 模式** | 6 种干预模式 — 从完全自动到逐步引导。在关键决策（假设、基线、论文写作）时引导 AI，或放手让它自由运行。SmartPause 自动检测何时需要人类输入。 |
-| **🔄 PIVOT / REFINE 循环** | 第 15 阶段自主决策：PROCEED、REFINE（调参）或 PIVOT（新方向）。产物自动版本化。 |
+| **🔄 PIVOT / EXTEND 循环** | 第 15 阶段自主决策：PROCEED、EXTEND（follow-up hypotheses）或 PIVOT（新方向）。产物自动版本化。 |
 | **🤖 多 Agent 辩论** | 假设生成、结果分析、同行评审均使用结构化的多视角辩论。 |
 | **🧬 自学习** | 每次运行提取教训（决策理由、运行时警告、指标异常），30 天时间衰减。未来运行从过去的错误中学习。 |
 | **📚 知识库** | 每次运行在 6 个类别（决策、实验、发现、文献、问题、评审）中构建结构化知识库。 |
@@ -285,11 +285,11 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 ```
 阶段组 A：研究定义                阶段组 E：实验执行
   1. TOPIC_INIT                    12. EXPERIMENT_RUN
-  2. PROBLEM_DECOMPOSE             13. ITERATIVE_REFINE  ← 自修复
+  2. PROBLEM_DECOMPOSE             13. EXPERIMENT_ROUTE_DECISION  ← 自修复
 
 阶段组 B：文献发现                阶段组 F：分析与决策
   3. SEARCH_STRATEGY               14. RESULT_ANALYSIS    ← 多Agent
-  4. LITERATURE_COLLECT ← 真实API  15. RESEARCH_DECISION  ← PIVOT/REFINE
+  4. LITERATURE_COLLECT ← 真实API  15. RESEARCH_DECISION  ← PIVOT / EXTEND
   5. LITERATURE_SCREEN  [门控]
   6. KNOWLEDGE_EXTRACT             阶段组 G：论文撰写
                                    16. PAPER_OUTLINE
@@ -308,7 +308,7 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 
 > **Co-Pilot 模式**（`--mode co-pilot`）：在阶段 7-8（Idea Workshop）、阶段 9（Baseline Navigator）和阶段 16-17（Paper Co-Writer）进行深度人机协作。其他阶段自动执行，SmartPause 持续监控。
 
-> **决策循环**：第 15 阶段可触发 REFINE（→ 第 13 阶段）或 PIVOT（→ 第 8 阶段），自动版本化之前的产物。
+> **决策循环**：第 15 阶段可触发 EXTEND（→ 第 8 阶段）或 PIVOT（→ 第 8 阶段），自动版本化之前的产物。
 
 <details>
 <summary>📋 各阶段组职责</summary>
@@ -321,7 +321,7 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 | **C：综合** | 聚类研究发现，识别研究空白，通过多 Agent 辩论生成可验证假设 |
 | **D：设计** | 设计实验方案，生成硬件感知的可运行 Python 代码（GPU 等级 → 包选择），估算资源需求 |
 | **E：执行** | 在沙箱中运行实验，检测 NaN/Inf 和运行时 Bug，通过定向 LLM 修复自愈代码 |
-| **F：分析** | 多 Agent 分析实验结果；自主 PROCEED / REFINE / PIVOT 决策并附理由 |
+| **F：分析** | 多 Agent 分析实验结果；自主 PROCEED / EXTEND / PIVOT 决策并附理由 |
 | **G：写作** | 大纲 → 分段撰写初稿（5,000-6,500 词）→ 同行评审（含方法论-证据一致性）→ 带长度保障的修订 |
 | **H：终稿** | 质量门控，知识归档，LaTeX 导出（适配顶会模板），引用完整性 + 相关性核查 |
 
@@ -517,11 +517,11 @@ researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
 | 指标 | 基线 | 使用 MetaClaw | 改善 |
 |------|------|---------------|------|
 | 阶段重试率 | 10.5% | 7.9% | **-24.8%** |
-| Refine 循环次数 | 2.0 | 1.2 | **-40.0%** |
+| Repair 循环次数 | 2.0 | 1.2 | **-40.0%** |
 | 流水线阶段完成率 | 18/19 | 19/19 | **+5.3%** |
 | 整体鲁棒性得分（综合） | 0.714 | 0.845 | **+18.3%** |
 
-> 综合鲁棒性得分是阶段完成率（40%）、重试减少（30%）和 Refine 循环效率（30%）的加权平均。
+> 综合鲁棒性得分是阶段完成率（40%）、重试减少（30%）和 Repair 循环效率（30%）的加权平均。
 
 ### 向后兼容性
 

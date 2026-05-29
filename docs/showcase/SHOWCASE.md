@@ -52,7 +52,7 @@ Below are **eight papers** generated **entirely by AutoResearchClaw** — each s
 <td align="center" width="3%">➜</td>
 <td align="center" width="12%">
 
-**🔬**<br>**Execute**<br><sub>sandbox + refine</sub>
+**🔬**<br>**Execute**<br><sub>sandbox + repair</sub>
 </td>
 <td align="center" width="3%">➜</td>
 <td align="center" width="12%">
@@ -98,7 +98,7 @@ Systematically quantify pre-asymptotic, finite-*N* deviations of empirical eigen
 
 | | |
 |:---|:---|
-| 🔗 **Stages** | 23 stages + 2 refinement iterations |
+| 🔗 **Stages** | 23 stages + 2 repair iterations |
 | 📚 **Literature** | 473 papers collected → 26 cited |
 | 💻 **Code** | 10,290 lines of Python |
 | ⏱️ **Runtime** | ~2 h 25 min |
@@ -146,7 +146,7 @@ Reframe the classical 2SLS / LIML / Fuller-*k* / JIVE comparison around decision
 
 | | |
 |:---|:---|
-| 🔗 **Stages** | 23 stages + 2 refinement iterations |
+| 🔗 **Stages** | 23 stages + 2 repair iterations |
 | 📚 **Literature** | 366 papers collected → 41 cited |
 | 💻 **Code** | 10,062 lines of Python |
 | ⏱️ **Runtime** | ~2 h 56 min |
@@ -194,7 +194,7 @@ Map the boundary between structural and practical identifiability in SIR vs. SEI
 
 | | |
 |:---|:---|
-| 🔗 **Stages** | 23 stages + 2 refinement iterations |
+| 🔗 **Stages** | 23 stages + 2 repair iterations |
 | 📚 **Literature** | 388 papers collected → 29 cited |
 | 💻 **Code** | 9,374 lines of Python |
 | ⏱️ **Runtime** | ~2 h 23 min |
@@ -242,7 +242,7 @@ Go beyond "which preconditioner wins" — build a feature-conditioned decision m
 
 | | |
 |:---|:---|
-| 🔗 **Stages** | 23 stages + 2 refinement iterations |
+| 🔗 **Stages** | 23 stages + 2 repair iterations |
 | 📚 **Literature** | 320 papers collected → 33 cited |
 | 💻 **Code** | 14,557 lines of Python |
 | ⏱️ **Runtime** | ~2 h 30 min |
@@ -296,7 +296,7 @@ Most LoRA configurations use a fixed, uniform rank across all layers. GARD propo
 
 | | |
 |:---|:---|
-| 🔗 **Stages** | 23 stages + 2 refinement iterations |
+| 🔗 **Stages** | 23 stages + 2 repair iterations |
 | 📚 **Literature** | 60 references cited (100% verified) |
 | 💻 **Code** | 2,894 lines of Python (5 files) |
 | ⏱️ **Runtime** | ~50 min |
@@ -344,7 +344,7 @@ Count-based exploration in RL relies on state visitation counts, but raw state s
 
 | | |
 |:---|:---|
-| 🔗 **Stages** | 23 stages + 2 refinement iterations |
+| 🔗 **Stages** | 23 stages + 2 repair iterations |
 | 📚 **Literature** | 25 references cited (100% verified) |
 | 💻 **Code** | 2,067 lines of Python (4 files) |
 | 🐳 **Experiment** | 32 min GPU sandbox execution |
@@ -393,7 +393,7 @@ Existing ViT token pruning methods reduce tokens based on attention or saliency 
 
 | | |
 |:---|:---|
-| 🔗 **Stages** | 23 stages + 2 refinement iterations |
+| 🔗 **Stages** | 23 stages + 2 repair iterations |
 | 📚 **Literature** | 40 references cited (100% verified) |
 | 💻 **Code** | 2,873 lines of Python (5 files) |
 | 🐳 **Experiment** | 32 min GPU sandbox execution |
@@ -442,7 +442,7 @@ Standard knowledge distillation transfers teacher knowledge assuming train/test 
 
 | | |
 |:---|:---|
-| 🔗 **Stages** | 23 stages + 2 refinement iterations |
+| 🔗 **Stages** | 23 stages + 2 repair iterations |
 | 📚 **Literature** | 37 references cited (97% verified) |
 | 💻 **Code** | 2,231 lines of Python (4 files) |
 | 🐳 **Experiment** | 33 min GPU sandbox execution |

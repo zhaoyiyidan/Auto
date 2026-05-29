@@ -3629,10 +3629,10 @@ class TestCodeGenTopicNeutral:
         assert "ACTUAL experiment" in sp.user or "relevant to the TOPIC" in sp.user
 
 
-class TestRefineTopicAlignment:
-    """R9-2: Refine prompt should include topic-code alignment check."""
+class TestRepairTopicAlignment:
+    """R9-2: Repair prompt should include topic-code alignment check."""
 
-    def test_topic_alignment_in_refine_prompt(self) -> None:
+    def test_topic_alignment_in_repair_prompt(self) -> None:
         from researchclaw.prompts import PromptManager
         pm = PromptManager()
         sp = pm.sub_prompt(

@@ -195,7 +195,7 @@ class TestSkillSchema:
         assert restored.applicable_stages == sample_skill.applicable_stages
 
     def test_stage_name_to_number(self) -> None:
-        assert STAGE_NAME_TO_NUMBER["code_generation"] == 10
+        assert STAGE_NAME_TO_NUMBER["code_agent_implement_or_repair"] == 10
         assert STAGE_NAME_TO_NUMBER["paper_draft"] == 17
         assert len(STAGE_NAME_TO_NUMBER) == 23
 
@@ -401,7 +401,7 @@ class TestMatcher:
         matched = match_skills(
             [sample_skill],
             context="training pytorch gpu",
-            stage="code_generation",  # resolves to 10
+            stage="code_agent_implement_or_repair",  # resolves to 10
         )
         assert len(matched) == 1
         assert matched[0].name == "test-skill-1"
@@ -416,7 +416,7 @@ class TestMatcher:
 
     def test_resolve_stage(self) -> None:
         assert _resolve_stage(10) == 10
-        assert _resolve_stage("code_generation") == 10
+        assert _resolve_stage("code_agent_implement_or_repair") == 10
         assert _resolve_stage("unknown_stage") == -1
 
     def test_match_description_fallback(self) -> None:
@@ -544,7 +544,7 @@ class TestSkillRegistry:
         registry = SkillRegistry()
         matched = registry.match(
             "pytorch training classification",
-            stage="code_generation",
+            stage="code_agent_implement_or_repair",
         )
         assert len(matched) > 0
 

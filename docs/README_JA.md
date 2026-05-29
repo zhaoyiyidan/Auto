@@ -177,7 +177,7 @@ experiment:
 | 機能 | 仕組み |
 |------|--------|
 | **🧑‍✈️ コパイロットモード** | 6つの介入モード — 完全自律からステップバイステップまで。重要な判断（仮説、ベースライン、論文執筆）でAIを導くか、自由に実行させます。SmartPauseが人間の入力が有益な場面を自動検出。 |
-| **🔄 PIVOT / REFINE ループ** | ステージ15が自律的に判定：PROCEED、REFINE（パラメータ調整）、またはPIVOT（新方向）。成果物は自動バージョン管理。 |
+| **🔄 PIVOT / EXTEND ループ** | ステージ15が自律的に判定：PROCEED、EXTEND（パラメータ調整）、またはPIVOT（新方向）。成果物は自動バージョン管理。 |
 | **🤖 マルチエージェント討論** | 仮説生成、結果分析、査読のそれぞれで構造化された多視点討論を実施。 |
 | **🧬 自己学習** | 各実行から教訓を抽出（判定根拠、ランタイム警告、メトリクス異常）、30日の時間減衰付き。将来の実行が過去のミスから学習。 |
 | **📚 知識ベース** | 各実行で6カテゴリ（判定、実験、発見、文献、質問、レビュー）にわたる構造化知識ベースを構築。 |
@@ -285,11 +285,11 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 ```
 フェーズ A: 研究スコーピング          フェーズ E: 実験実行
   1. TOPIC_INIT                      12. EXPERIMENT_RUN
-  2. PROBLEM_DECOMPOSE               13. ITERATIVE_REFINE  ← 自己修復
+  2. PROBLEM_DECOMPOSE               13. EXPERIMENT_ROUTE_DECISION  ← 自己修復
 
 フェーズ B: 文献探索                フェーズ F: 分析と判定
   3. SEARCH_STRATEGY                 14. RESULT_ANALYSIS    ← マルチエージェント
-  4. LITERATURE_COLLECT  ← 実API    15. RESEARCH_DECISION  ← PIVOT/REFINE
+  4. LITERATURE_COLLECT  ← 実API    15. RESEARCH_DECISION  ← PIVOT / EXTEND
   5. LITERATURE_SCREEN   [ゲート]
   6. KNOWLEDGE_EXTRACT               フェーズ G: 論文執筆
                                      16. PAPER_OUTLINE
@@ -308,7 +308,7 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 
 > **コパイロットモード**（`--mode co-pilot`）：ステージ7-8（アイデアワークショップ）、ステージ9（ベースラインナビゲーター）、ステージ16-17（論文コライター）で人間とAIの深い協調を実現。その他のステージはSmartPauseモニタリング下で自動実行。
 
-> **判定ループ**: ステージ15はREFINE（→ ステージ13）またはPIVOT（→ ステージ8）をトリガーでき、成果物のバージョン管理が自動的に行われます。
+> **判定ループ**: ステージ15はEXTEND（→ ステージ8）またはPIVOT（→ ステージ8）をトリガーでき、成果物のバージョン管理が自動的に行われます。
 
 <details>
 <summary>📋 各フェーズの詳細</summary>
@@ -321,7 +321,7 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 | **C: 統合** | 発見事項をクラスタリング、研究ギャップを特定、マルチエージェント討論で検証可能な仮説を生成 |
 | **D: 設計** | 実験計画を設計、ハードウェア対応の実行可能Python（GPUティア→パッケージ選択）を生成、リソース需要を推定 |
 | **E: 実行** | サンドボックスで実験を実行、NaN/Infとランタイムバグを検出、LLMによる的確な修復で自己修復 |
-| **F: 分析** | マルチエージェントによる結果分析；根拠付きの自律的PROCEED / REFINE / PIVOT判定 |
+| **F: 分析** | マルチエージェントによる結果分析；根拠付きの自律的PROCEED / EXTEND / PIVOT判定 |
 | **G: 執筆** | アウトライン → セクション別ドラフト（5,000〜6,500語）→ 査読（手法-証拠の一貫性付き）→ 文字数ガード付き改訂 |
 | **H: 最終処理** | 品質ゲート、知識アーカイブ、学会テンプレート付きLaTeXエクスポート、引用の整合性 + 関連性検証 |
 
@@ -517,11 +517,11 @@ researchclaw run --config config.arc.yaml --topic "Your idea" --auto-approve
 | メトリクス | ベースライン | MetaClaw使用時 | 改善 |
 |-----------|------------|---------------|------|
 | ステージリトライ率 | 10.5% | 7.9% | **-24.8%** |
-| Refineサイクル数 | 2.0 | 1.2 | **-40.0%** |
+| Repairサイクル数 | 2.0 | 1.2 | **-40.0%** |
 | パイプラインステージ完了率 | 18/19 | 19/19 | **+5.3%** |
 | 総合ロバスト性スコア（複合） | 0.714 | 0.845 | **+18.3%** |
 
-> 複合ロバスト性スコアは、ステージ完了率（40%）、リトライ削減（30%）、Refineサイクル効率（30%）の加重平均です。
+> 複合ロバスト性スコアは、ステージ完了率（40%）、リトライ削減（30%）、Repairサイクル効率（30%）の加重平均です。
 
 ### 後方互換性
 

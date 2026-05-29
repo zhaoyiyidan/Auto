@@ -177,7 +177,7 @@ experiment:
 | Capacidade | Como Funciona |
 |-----------|-------------|
 | **🧑‍✈️ Modo Co-Piloto** | 6 modos de intervenção — de totalmente autônomo a passo a passo. Guie a IA em decisões críticas (hipóteses, baselines, escrita do artigo) ou deixe-a executar livremente. SmartPause detecta automaticamente quando a contribuição humana ajudaria. |
-| **🔄 Loop PIVOT / REFINE** | O Estágio 15 decide autonomamente: PROCEED, REFINE (ajustar parâmetros) ou PIVOT (nova direção). Artefatos versionados automaticamente. |
+| **🔄 Loop PIVOT / EXTEND** | O Estágio 15 decide autonomamente: PROCEED, EXTEND (ajustar parâmetros) ou PIVOT (nova direção). Artefatos versionados automaticamente. |
 | **🤖 Debate Multi-Agente** | Geração de hipóteses, análise de resultados e revisão por pares usam debate estruturado com múltiplas perspectivas. |
 | **🧬 Autoaprendizagem** | Lições extraídas por execução (justificativa de decisões, avisos de runtime, anomalias em métricas) com decaimento temporal de 30 dias. Execuções futuras aprendem com erros passados. |
 | **📚 Base de Conhecimento** | Cada execução constrói uma KB estruturada com 6 categorias (decisões, experimentos, descobertas, literatura, questões, revisões). |
@@ -285,11 +285,11 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 ```
 Fase A: Escopo da Pesquisa           Fase E: Execução de Experimentos
   1. TOPIC_INIT                        12. EXPERIMENT_RUN
-  2. PROBLEM_DECOMPOSE                 13. ITERATIVE_REFINE  ← auto-reparo
+  2. PROBLEM_DECOMPOSE                 13. EXPERIMENT_ROUTE_DECISION  ← auto-reparo
 
 Fase B: Descoberta de Literatura     Fase F: Análise & Decisão
   3. SEARCH_STRATEGY                   14. RESULT_ANALYSIS    ← multi-agente
-  4. LITERATURE_COLLECT  ← API real    15. RESEARCH_DECISION  ← PIVOT/REFINE
+  4. LITERATURE_COLLECT  ← API real    15. RESEARCH_DECISION  ← PIVOT / EXTEND
   5. LITERATURE_SCREEN   [gate]
   6. KNOWLEDGE_EXTRACT                 Fase G: Escrita do Artigo
                                        16. PAPER_OUTLINE
@@ -308,7 +308,7 @@ Fase D: Design de Experimentos      Fase H: Finalização
 
 > **Modo Co-Piloto** (`--mode co-pilot`): Colaboração profunda humano-IA nos Estágios 7-8 (Idea Workshop), Estágio 9 (Baseline Navigator) e Estágios 16-17 (Paper Co-Writer). Os outros estágios executam automaticamente com monitoramento SmartPause.
 
-> **Loops de decisão**: O Estágio 15 pode acionar REFINE (→ Estágio 13) ou PIVOT (→ Estágio 8), com versionamento automático de artefatos.
+> **Loops de decisão**: O Estágio 15 pode acionar EXTEND (→ Estágio 8) ou PIVOT (→ Estágio 8), com versionamento automático de artefatos.
 
 <details>
 <summary>📋 O Que Cada Fase Faz</summary>
@@ -321,7 +321,7 @@ Fase D: Design de Experimentos      Fase H: Finalização
 | **C: Síntese** | Agrupa descobertas, identifica lacunas de pesquisa, gera hipóteses testáveis via debate multi-agente |
 | **D: Design** | Projeta plano de experimento, gera Python executável com consciência de hardware (tier de GPU → seleção de pacotes), estima necessidades de recursos |
 | **E: Execução** | Executa experimentos em sandbox, detecta NaN/Inf e bugs de runtime, auto-repara código via reparo direcionado por LLM |
-| **F: Análise** | Análise multi-agente dos resultados; decisão autônoma PROCEED / REFINE / PIVOT com justificativa |
+| **F: Análise** | Análise multi-agente dos resultados; decisão autônoma PROCEED / EXTEND / PIVOT com justificativa |
 | **G: Escrita** | Outline → redação seção por seção (5.000-6.500 palavras) → revisão por pares (com consistência metodologia-evidência) → revisão com guarda de tamanho |
 | **H: Finalização** | Quality gate, arquivamento de conhecimento, exportação LaTeX com template de conferência, verificação de integridade + relevância de citações |
 
@@ -413,7 +413,7 @@ researchclaw guide artifacts/rc-2026-xxx --stage 9 --message "Usar ResNet-50 com
 
 | Funcionalidade | Descrição |
 |---------|------------|
-| **Idea Workshop** | Brainstorm, avalie e refine hipóteses de forma colaborativa (Estágio 7-8) |
+| **Idea Workshop** | Brainstorm, avalie e repair hipóteses de forma colaborativa (Estágio 7-8) |
 | **Baseline Navigator** | IA sugere baselines + humano adiciona/remove + checklist de reprodutibilidade (Estágio 9) |
 | **Paper Co-Writer** | Redação seção por seção com edição humana e polimento por IA (Estágio 16-19) |
 | **SmartPause** | Pausa dinâmica baseada em confiança — detecta automaticamente quando a contribuição humana ajudaria |
@@ -517,11 +517,11 @@ Em experimentos A/B controlados (mesmo tópico, mesmo LLM, mesma configuração)
 | Métrica | Baseline | Com MetaClaw | Melhoria |
 |---------|----------|---------------|----------|
 | Taxa de retentativa por estágio | 10.5% | 7.9% | **-24.8%** |
-| Contagem de ciclos REFINE | 2.0 | 1.2 | **-40.0%** |
+| Contagem de ciclos de reparacion | 2.0 | 1.2 | **-40.0%** |
 | Conclusão de estágios do pipeline | 18/19 | 19/19 | **+5.3%** |
 | Pontuação de robustez geral (composta) | 0.714 | 0.845 | **+18.3%** |
 
-> A pontuação composta de robustez é uma média ponderada da taxa de conclusão de estágios (40%), redução de retentativas (30%) e eficiência de ciclos REFINE (30%).
+> A pontuação composta de robustez é uma média ponderada da taxa de conclusão de estágios (40%), redução de retentativas (30%) e eficiência de ciclos de reparacion (30%).
 
 ### Compatibilidade Retroativa
 

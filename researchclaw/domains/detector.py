@@ -60,7 +60,7 @@ class ExperimentParadigm(str, Enum):
     """High-level experiment structure used by different domains."""
 
     COMPARISON = "comparison"  # A vs B (ML, security)
-    CONVERGENCE = "convergence"  # error vs refinement (math, physics)
+    CONVERGENCE = "convergence"  # error vs resolution (math, physics)
     PROGRESSIVE_SPEC = "progressive_spec"  # OLS → +FE → +IV (economics)
     SIMULATION = "simulation"  # run → observe → analyze (physics)
     ABLATION_STUDY = "ablation_study"  # systematic component removal

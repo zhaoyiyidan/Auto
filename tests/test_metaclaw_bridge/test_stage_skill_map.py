@@ -12,9 +12,10 @@ def test_all_23_stages_mapped():
     expected_stages = [
         "topic_init", "problem_decompose", "search_strategy",
         "literature_collect", "literature_screen", "knowledge_extract",
-        "synthesis", "hypothesis_gen", "experiment_design",
-        "code_generation", "resource_planning", "experiment_run",
-        "iterative_refine", "result_analysis", "research_decision",
+        "synthesis", "hypothesis_gen", "experiment_task_spec",
+        "code_agent_implement_or_repair", "manifest_validate_and_prepare",
+        "harness_submit_and_collect", "experiment_route_decision",
+        "result_analysis", "research_decision",
         "paper_outline", "paper_draft", "peer_review",
         "paper_revision", "quality_gate", "knowledge_archive",
         "export_publish", "citation_verify",

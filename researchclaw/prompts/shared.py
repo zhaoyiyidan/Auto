@@ -820,7 +820,7 @@ _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
             "EXPERIMENT PLAN ANCHOR (CRITICAL — read before making changes):\n"
             "The research topic is: {topic}\n"
             "{exp_plan_anchor}"
-            "RULES FOR REFINEMENT:\n"
+            "RULES FOR REPAIR:\n"
             "- NEVER rename, remove, or replace existing condition names. "
             "The condition names in the code MUST match the experiment plan.\n"
             "- NEVER add new conditions that are not in the experiment plan.\n"

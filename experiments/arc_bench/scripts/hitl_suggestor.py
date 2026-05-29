@@ -44,7 +44,7 @@ weak leaves. Your job: produce a JSON interventions file whose guidance,
 applied at specific pipeline stages, would plausibly fix the flagged gaps.
 
 Do not invent experimental results. Only prescribe actions: literature to
-seek, hypotheses to refine, metrics to add, ablation checks to enforce,
+seek, hypotheses to revise, metrics to add, ablation checks to enforce,
 analysis to demand, limitations to acknowledge. Guidance must be concrete
 and actionable within a CPU-only sklearn/numpy experiment.
 
@@ -54,13 +54,13 @@ stages 10 and 13). Output exactly these two keys:
 
   10 — CODE_GENERATION (post-stage). Guidance applied here is read by
        stages 11 (resource_planning), 12 (experiment_run), 13
-       (iterative_refine), and 14 (result_analysis). Use this slot for:
+       (experiment_route_decision), and 14 (result_analysis). Use this slot for:
          * code-quality directives (variant wiring fingerprints, ablation
            integrity assertions, condition hashing)
          * dataset / seeding requirements (>=5 seeds, paired splits)
          * required metrics + statistical-test scaffolding
          * ablation-check assertions to fail-fast on zero-variance results
-  13 — ITERATIVE_REFINE (post-stage). Guidance here is read by stage 14
+  13 — EXPERIMENT_ROUTE_DECISION (post-stage). Guidance here is read by stage 14
        (result_analysis). Use this slot for:
          * post-experiment analysis checklist (calibration, reliability
            diagrams, paired tests, multiplicity correction)

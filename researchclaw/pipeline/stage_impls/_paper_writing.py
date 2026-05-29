@@ -1271,11 +1271,11 @@ def _execute_paper_draft(
 
     # BUG-222: Read PROMOTED BEST experiment_summary for the paper prompt.
     # Previous code (R21-1) picked the "richest" experiment_summary across
-    # all stage-14* dirs.  After REFINE regression, a later iteration with
+    # all stage-14* dirs.  After a repair regression, a later iteration with
     # more conditions but worse quality could win, feeding the LLM regressed
     # data.  Now: prefer experiment_summary_best.json (written by
     # _promote_best_stage14()), fall back to richest stage-14* for
-    # non-REFINE runs.
+    # single-pass runs.
     exp_summary_text = None
     _best_path = run_dir / "experiment_summary_best.json"
     if _best_path.is_file():
@@ -1685,8 +1685,8 @@ def _execute_paper_draft(
         # BUG-23: If quality rating is ≤ 2, force has_real_metrics = False
         # to prevent fabricated results even if stdout had stray numbers.
         # R5-BUG-05: Skip override when _has_parsed_metrics is True — the
-        # analysis.md may be stale (from pre-refinement Stage 14) while
-        # Stage 13 refinement produced real parsed metrics.
+        # analysis.md may be stale (from an earlier Stage 14) while
+        # Stage 13 repair produced real parsed metrics.
         if _analysis_rating <= 2 and has_real_metrics and not _has_parsed_metrics:
             logger.warning(
                 "BUG-23 guard: Analysis quality %d/10 \u2264 2 — "

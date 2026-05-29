@@ -250,7 +250,7 @@ class VerifiedRegistry:
         best_only:
             BUG-222: When True, use ONLY ``experiment_summary_best.json``
             (the promoted best iteration) as the ground truth.  This prevents
-            regressed REFINE iterations from polluting the verified value set.
+            regressed repair iterations from polluting the verified value set.
             When False (default), merges all ``stage-14*`` data for backward
             compatibility (e.g., pre-built table generation that needs all
             condition names).

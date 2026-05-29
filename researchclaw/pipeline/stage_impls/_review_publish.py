@@ -637,7 +637,7 @@ def _execute_knowledge_archive(
 
 ## Lessons Learned
 - Preserve strict metric reporting protocol.
-- Keep refinement logs aligned with code changes.
+- Keep repair logs aligned with code changes.
 
 ## Reproducibility
 - Include exact experiment script and schedule.
@@ -692,7 +692,7 @@ def _sanitize_fabricated_data(
     import re as _re_san
 
     # --- 1. Build verified values set from experiment_summary.json ---
-    # BUG-222: After REFINE cycles, merging ALL stage-14* data creates a
+    # BUG-222: After repair cycles, merging ALL stage-14* data creates a
     # permissive registry that validates fabricated numbers from regressed
     # iterations.  Use ONLY the promoted best data as ground truth.
     # experiment_summary_best.json is written by _promote_best_stage14() and
@@ -713,7 +713,7 @@ def _sanitize_fabricated_data(
 
     # BUG-222: Prefer experiment_summary_best.json (promoted best iteration).
     # Only fall back to "richest stage-14*" scanning if best.json is missing
-    # (single-iteration runs without REFINE).
+    # (single-iteration runs without repair loops).
     _root_best = run_dir / "experiment_summary_best.json"
     if _root_best.exists() and _richness(_root_best) > 0:
         exp_path = _root_best

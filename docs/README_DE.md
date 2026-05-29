@@ -177,7 +177,7 @@ experiment:
 | Faehigkeit | Funktionsweise |
 |-----------|---------------|
 | **🧑‍✈️ Co-Pilot-Modus** | 6 Interventionsmodi — von vollstaendig autonom bis Schritt-fuer-Schritt. Lenke die KI bei kritischen Entscheidungen (Hypothesen, Baselines, Paper-Erstellung) oder lass sie frei laufen. SmartPause erkennt automatisch, wann menschlicher Input hilfreich waere. |
-| **🔄 PIVOT / REFINE Schleife** | Stufe 15 entscheidet autonom: PROCEED, REFINE (Parameter anpassen) oder PIVOT (neue Richtung). Artefakte automatisch versioniert. |
+| **🔄 PIVOT / EXTEND Schleife** | Stufe 15 entscheidet autonom: PROCEED, EXTEND (follow-up hypotheses) oder PIVOT (neue Richtung). Artefakte automatisch versioniert. |
 | **🤖 Multi-Agenten-Debatte** | Hypothesengenerierung, Ergebnisanalyse und Peer-Review verwenden jeweils strukturierte Multi-Perspektiven-Debatten. |
 | **🧬 Selbstlernen** | Erkenntnisse pro Durchlauf extrahiert (Entscheidungsbegruendungen, Laufzeitwarnungen, Metrikanaomalien) mit 30-Tage-Zeitabklingung. Zukuenftige Durchlaeufe lernen aus vergangenen Fehlern. |
 | **📚 Wissensdatenbank** | Jeder Durchlauf baut eine strukturierte KB ueber 6 Kategorien auf (Entscheidungen, Experimente, Ergebnisse, Literatur, Fragen, Reviews). |
@@ -285,11 +285,11 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 ```
 Phase A: Forschungsplanung            Phase E: Experimentausfuehrung
   1. TOPIC_INIT                          12. EXPERIMENT_RUN
-  2. PROBLEM_DECOMPOSE                   13. ITERATIVE_REFINE  ← Selbstheilung
+  2. PROBLEM_DECOMPOSE                   13. EXPERIMENT_ROUTE_DECISION  ← Selbstheilung
 
 Phase B: Literaturrecherche            Phase F: Analyse & Entscheidung
   3. SEARCH_STRATEGY                     14. RESULT_ANALYSIS    ← Multi-Agent
-  4. LITERATURE_COLLECT  ← echte API     15. RESEARCH_DECISION  ← PIVOT/REFINE
+  4. LITERATURE_COLLECT  ← echte API     15. RESEARCH_DECISION  ← PIVOT / EXTEND
   5. LITERATURE_SCREEN   [Gate]
   6. KNOWLEDGE_EXTRACT                   Phase G: Papiererstellung
                                          16. PAPER_OUTLINE
@@ -308,7 +308,7 @@ Phase D: Experimentdesign             Phase H: Finalisierung
 
 > **Co-Pilot-Modus** (`--mode co-pilot`): Tiefe Mensch-KI-Kollaboration in den Stufen 7-8 (Ideen-Workshop), Stufe 9 (Baseline-Navigator) und Stufen 16-17 (Paper-Co-Writer). Andere Stufen laufen automatisch mit SmartPause-Ueberwachung.
 
-> **Entscheidungsschleifen**: Stufe 15 kann REFINE (→ Stufe 13) oder PIVOT (→ Stufe 8) ausloesen, mit automatischer Artefakt-Versionierung.
+> **Entscheidungsschleifen**: Stufe 15 kann EXTEND (→ Stufe 8) oder PIVOT (→ Stufe 8) ausloesen, mit automatischer Artefakt-Versionierung.
 
 <details>
 <summary>📋 Was jede Phase bewirkt</summary>
@@ -321,7 +321,7 @@ Phase D: Experimentdesign             Phase H: Finalisierung
 | **C: Synthese** | Clustering der Ergebnisse, Identifizierung von Forschungsluecken, Generierung testbarer Hypothesen via Multi-Agenten-Debatte |
 | **D: Design** | Experimentplan entwerfen, hardwarebewussten ausfuehrbaren Python-Code generieren (GPU-Stufe → Paketauswahl), Ressourcenbedarf schaetzen |
 | **E: Ausfuehrung** | Experimente in Sandbox ausfuehren, NaN/Inf und Laufzeitfehler erkennen, Code via gezielter LLM-Reparatur selbst heilen |
-| **F: Analyse** | Multi-Agenten-Analyse der Ergebnisse; autonome PROCEED / REFINE / PIVOT Entscheidung mit Begruendung |
+| **F: Analyse** | Multi-Agenten-Analyse der Ergebnisse; autonome PROCEED / EXTEND / PIVOT Entscheidung mit Begruendung |
 | **G: Schreiben** | Gliederung → abschnittsweises Verfassen (5.000-6.500 Woerter) → Peer-Review (mit Methodik-Evidenz-Konsistenz) → Revision mit Laengenpruefung |
 | **H: Finalisierung** | Qualitaets-Gate, Wissensarchivierung, LaTeX-Export mit Konferenztemplate, Zitationsintegritaets- und Relevanzpruefung |
 
@@ -517,11 +517,11 @@ In kontrollierten A/B-Experimenten (gleiches Thema, gleiches LLM, gleiche Konfig
 | Metrik | Baseline | Mit MetaClaw | Verbesserung |
 |--------|----------|--------------|--------------|
 | Stufen-Wiederholungsrate | 10.5% | 7.9% | **-24.8%** |
-| Anzahl REFINE-Zyklen | 2.0 | 1.2 | **-40.0%** |
+| Anzahl REPAIR-Zyklen | 2.0 | 1.2 | **-40.0%** |
 | Pipeline-Stufenabschluss | 18/19 | 19/19 | **+5.3%** |
 | Gesamtrobustheitswert (Komposit) | 0.714 | 0.845 | **+18.3%** |
 
-> Der Komposit-Robustheitswert ist ein gewichteter Durchschnitt aus Stufenabschlussrate (40%), Wiederholungsreduktion (30%) und REFINE-Zykluseffizienz (30%).
+> Der Komposit-Robustheitswert ist ein gewichteter Durchschnitt aus Stufenabschlussrate (40%), Wiederholungsreduktion (30%) und REPAIR-Zykluseffizienz (30%).
 
 ### Abwaertskompatibilitaet
 

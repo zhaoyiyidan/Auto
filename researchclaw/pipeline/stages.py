@@ -41,7 +41,7 @@ class Stage(IntEnum):
     CODE_AGENT_IMPLEMENT_OR_REPAIR = 10
     MANIFEST_VALIDATE_AND_PREPARE = 11
 
-    # Phase E: Harness execution and code-agent refinement
+    # Phase E: Harness execution and experiment repair routing
     HARNESS_SUBMIT_AND_COLLECT = 12
     EXPERIMENT_ROUTE_DECISION = 13
 

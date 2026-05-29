@@ -177,7 +177,7 @@ experiment:
 | Capacidad | Como funciona |
 |-----------|--------------|
 | **🧑‍✈️ Modo Co-Piloto** | 6 modos de intervencion — desde completamente autonomo hasta paso a paso. Guia a la IA en decisiones criticas (hipotesis, baselines, redaccion del articulo) o dejala correr libre. SmartPause auto-detecta cuando la entrada humana ayudaria. |
-| **🔄 Bucle PIVOT / REFINE** | La etapa 15 decide de forma autonoma: PROCEED, REFINE (ajustar parametros) o PIVOT (nueva direccion). Artefactos auto-versionados. |
+| **🔄 Bucle PIVOT / EXTEND** | La etapa 15 decide de forma autonoma: PROCEED, EXTEND (follow-up hypotheses) o PIVOT (nueva direccion). Artefactos auto-versionados. |
 | **🤖 Debate multi-agente** | La generacion de hipotesis, el analisis de resultados y la revision por pares utilizan cada uno debate estructurado multi-perspectiva. |
 | **🧬 Auto-aprendizaje** | Lecciones extraidas por ejecucion (justificacion de decisiones, advertencias de ejecucion, anomalias de metricas) con decaimiento temporal de 30 dias. Las ejecuciones futuras aprenden de errores pasados. |
 | **📚 Base de conocimiento** | Cada ejecucion construye una KB estructurada en 6 categorias (decisiones, experimentos, hallazgos, literatura, preguntas, revisiones). |
@@ -285,11 +285,11 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 ```
 Fase A: Alcance de investigacion     Fase E: Ejecucion de experimentos
   1. TOPIC_INIT                        12. EXPERIMENT_RUN
-  2. PROBLEM_DECOMPOSE                 13. ITERATIVE_REFINE  ← auto-reparacion
+  2. PROBLEM_DECOMPOSE                 13. EXPERIMENT_ROUTE_DECISION  ← auto-reparacion
 
 Fase B: Descubrimiento de literatura Fase F: Analisis y decision
   3. SEARCH_STRATEGY                   14. RESULT_ANALYSIS    ← multi-agente
-  4. LITERATURE_COLLECT  ← API real    15. RESEARCH_DECISION  ← PIVOT/REFINE
+  4. LITERATURE_COLLECT  ← API real    15. RESEARCH_DECISION  ← PIVOT / EXTEND
   5. LITERATURE_SCREEN   [compuerta]
   6. KNOWLEDGE_EXTRACT                 Fase G: Redaccion del articulo
                                        16. PAPER_OUTLINE
@@ -308,7 +308,7 @@ Fase D: Diseno experimental          Fase H: Finalizacion
 
 > **Modo Co-Piloto** (`--mode co-pilot`): Colaboracion profunda humano-IA en las Etapas 7-8 (Taller de Ideas), Etapa 9 (Navegador de Baselines) y Etapas 16-17 (Co-Escritor de Articulos). Las demas etapas se auto-ejecutan con monitoreo SmartPause.
 
-> **Bucles de decision**: La etapa 15 puede activar REFINE (→ Etapa 13) o PIVOT (→ Etapa 8), con versionado automatico de artefactos.
+> **Bucles de decision**: La etapa 15 puede activar EXTEND (→ Etapa 8) o PIVOT (→ Etapa 8), con versionado automatico de artefactos.
 
 <details>
 <summary>📋 Que hace cada fase</summary>
@@ -321,7 +321,7 @@ Fase D: Diseno experimental          Fase H: Finalizacion
 | **C: Sintesis** | Agrupa hallazgos, identifica brechas de investigacion, genera hipotesis comprobables mediante debate multi-agente |
 | **D: Diseno** | Disena plan experimental, genera Python ejecutable adaptado al hardware (nivel de GPU → seleccion de paquetes), estima necesidades de recursos |
 | **E: Ejecucion** | Ejecuta experimentos en sandbox, detecta NaN/Inf y errores en tiempo de ejecucion, auto-repara codigo mediante reparacion LLM dirigida |
-| **F: Analisis** | Analisis multi-agente de resultados; decision autonoma PROCEED / REFINE / PIVOT con justificacion |
+| **F: Analisis** | Analisis multi-agente de resultados; decision autonoma PROCEED / EXTEND / PIVOT con justificacion |
 | **G: Redaccion** | Esquema → redaccion seccion por seccion (5,000-6,500 palabras) → revision por pares (con consistencia metodologia-evidencia) → revision con guardia de longitud |
 | **H: Finalizacion** | Compuerta de calidad, archivado de conocimiento, exportacion LaTeX con plantilla de conferencia, verificacion de integridad + relevancia de citas |
 
@@ -517,11 +517,11 @@ En experimentos controlados A/B (mismo tema, mismo LLM, misma configuracion):
 | Metrica | Linea base | Con MetaClaw | Mejora |
 |---------|------------|--------------|--------|
 | Tasa de reintento de etapas | 10.5% | 7.9% | **-24.8%** |
-| Conteo de ciclos REFINE | 2.0 | 1.2 | **-40.0%** |
+| Conteo de ciclos de reparacion | 2.0 | 1.2 | **-40.0%** |
 | Completacion de etapas del pipeline | 18/19 | 19/19 | **+5.3%** |
 | Puntuacion de robustez global (compuesta) | 0.714 | 0.845 | **+18.3%** |
 
-> La puntuacion de robustez compuesta es un promedio ponderado de la tasa de completacion de etapas (40%), reduccion de reintentos (30%) y eficiencia de ciclos REFINE (30%).
+> La puntuacion de robustez compuesta es un promedio ponderado de la tasa de completacion de etapas (40%), reduccion de reintentos (30%) y eficiencia de ciclos de reparacion (30%).
 
 ### Retrocompatibilidad
 

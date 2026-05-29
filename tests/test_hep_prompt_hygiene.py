@@ -55,7 +55,7 @@ _STAGE_VARS = {
     "context": "Context placeholder.",
     "plan": "Plan placeholder.",
     "report": "Report placeholder.",
-    "refinement_summary": "Refinement summary body.",
+    "repair_summary": "Repair summary body.",
     "section_label": "Model",
     "section_target": "800 words",
     "section_target_words": "800",

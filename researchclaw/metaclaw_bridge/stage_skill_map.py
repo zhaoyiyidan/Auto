@@ -51,27 +51,27 @@ STAGE_SKILL_MAP: dict[str, dict[str, Any]] = {
         "skills": ["hypothesis-formulation"],
         "top_k": 6,
     },
-    "experiment_design": {
+    "experiment_task_spec": {
         "task_type": "research",
         "skills": ["experiment-design-rigor"],
         "top_k": 6,
     },
-    "code_generation": {
+    "code_agent_implement_or_repair": {
         "task_type": "coding",
         "skills": ["hardware-aware-coding"],
         "top_k": 6,
     },
-    "resource_planning": {
+    "manifest_validate_and_prepare": {
         "task_type": "productivity",
         "skills": [],
         "top_k": 3,
     },
-    "experiment_run": {
+    "harness_submit_and_collect": {
         "task_type": "automation",
         "skills": ["experiment-debugging"],
         "top_k": 4,
     },
-    "iterative_refine": {
+    "experiment_route_decision": {
         "task_type": "coding",
         "skills": ["experiment-debugging"],
         "top_k": 6,

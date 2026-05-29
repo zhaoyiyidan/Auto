@@ -69,7 +69,7 @@ class PhysicsPromptAdapter(PromptAdapter):
             return (
                 "This is a convergence study:\n"
                 "1. Implement the numerical method(s)\n"
-                "2. Run at 5+ refinement levels (e.g., h, h/2, h/4, h/8, h/16)\n"
+                "2. Run at 5+ resolution levels (e.g., h, h/2, h/4, h/8, h/16)\n"
                 "3. Compute error norms at each level (L2, L-inf)\n"
                 "4. Output results.json with convergence data\n"
                 "5. Expected format:\n"

@@ -85,7 +85,7 @@ Phase D: Experiment Design
 
 Phase E: Experiment Execution
   12: EXPERIMENT_RUN      — Execute experiments (sandbox/remote/simulated)
-  13: ITERATIVE_REFINE    — Edit→Run→Evaluate improvement loop
+  13: EXPERIMENT_ROUTE_DECISION    — Edit→Run→Evaluate improvement loop
 
 Phase F: Analysis & Decision
   14: RESULT_ANALYSIS     — Statistical analysis, generate experiment_summary.json + results_table.tex

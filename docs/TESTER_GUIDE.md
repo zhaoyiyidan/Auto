@@ -333,7 +333,7 @@ From your domain expertise:
 #### ⚖️ (c) Pipeline Design Assessment
 
 - Are the 23 stages well-designed? Any redundant or missing steps?
-- Is the iterative experiment refinement effective?
+- Is the iterative experiment repair effective?
 - Is the LLM guidance at each stage appropriate?
 
 #### 🐛 (d) Bug Reports
@@ -426,7 +426,7 @@ Copy the template below, fill it out, and save as `feedback_<your-name>.md`:
 
 ### 3.2 Experiment Execution
 - Is the experiment design sound? (dataset choices, comparison methods, metrics)
-- Is the iterative refinement effective?
+- Is the iterative repair effective?
 
 ### 3.3 LLM Usage
 - How well did the LLM perform at each stage?

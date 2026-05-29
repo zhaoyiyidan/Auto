@@ -248,10 +248,10 @@
         <div class="stage-item" onclick="this.classList.toggle('expanded')">
           <div class="stage-number">13</div>
           <div class="stage-info">
-            <h4>Iterative Refinement</h4>
-            <div class="stage-subtitle">Fix errors and improve experiment code</div>
+            <h4>Experiment Route Decision</h4>
+            <div class="stage-subtitle">Route experiment repair, rerun, or continuation</div>
             <div class="stage-detail">
-              If experiment fails or produces poor results, automatically diagnoses issues and generates refined code. Checks ablation effectiveness (>5% difference from baseline). Up to 3 refinement iterations.
+              If experiment fails or produces poor results, automatically diagnoses issues and generates repaired code. Checks ablation effectiveness (>5% difference from baseline). Up to 3 repair iterations.
               <div class="stage-badges">
                 <span class="stage-badge stage-badge-llm">LLM</span>
                 <span class="stage-badge stage-badge-docker">Docker</span>
@@ -288,9 +288,9 @@
           <div class="stage-number">15</div>
           <div class="stage-info">
             <h4>Research Decision</h4>
-            <div class="stage-subtitle">Pivot, refine, or proceed based on results</div>
+            <div class="stage-subtitle">Pivot, extend, or proceed based on results</div>
             <div class="stage-detail">
-              Evaluates experiment results and decides: <strong>Proceed</strong> (results support hypothesis), <strong>Refine</strong> (re-run with improvements), or <strong>Pivot</strong> (discard hypothesis, generate new one). Max 2 pivots to prevent infinite loops.
+              Evaluates experiment results and decides: <strong>Proceed</strong> (results support hypothesis), <strong>Extend</strong> (generate follow-up hypotheses), or <strong>Pivot</strong> (discard hypothesis, generate new one). Max 2 pivots to prevent infinite loops.
               <div class="stage-badges"><span class="stage-badge stage-badge-llm">LLM</span></div>
             </div>
           </div>

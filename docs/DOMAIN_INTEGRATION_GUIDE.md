@@ -681,12 +681,12 @@ def run_project(self, project_dir, *, entry_point="main.py",
 
 ### Step 10 — Skip stage 13 + stage-14 repair for your mode
 
-For agent-based modes, the python-code refinement loop in stage 13 ITERATIVE_REFINE and the stage-14 repair cycles are dead code: they iterate on python files the agent never executed, then re-spawn the agent atomically anyway. Two one-line edits skip them cleanly:
+For agent-based modes, the python-code repair loop in stage 13 EXPERIMENT_ROUTE_DECISION and the stage-14 repair cycles are dead code: they iterate on python files the agent never executed, then re-spawn the agent atomically anyway. Two one-line edits skip them cleanly:
 
-* `researchclaw/pipeline/stage_impls/_execution.py:519` — extend the existing `if config.experiment.mode == "collider_agent"` guard at the top of `_execute_iterative_refine` to also include `"my_domain_agent"`.
+* `researchclaw/pipeline/stage_impls/_execution.py:519` — extend the existing `if config.experiment.mode == "collider_agent"` guard at the top of `_execute_experiment_route_decision` to also include `"my_domain_agent"`.
 * `researchclaw/pipeline/runner.py:670` — extend the gate above `_run_experiment_diagnosis` / `_run_experiment_repair` so it skips when `config.experiment.mode in ("collider_agent", "biology_agent", "my_domain_agent")`.
 
-After these edits the pipeline reduces to: stage 12 (agent runs, writes `results.json`) → stage 13 (no-op, copies artifacts forward) → stage 14 (reads `results.json`, builds summary) → stage 15 (proceed-or-reject decision based on the summary). No abstract code refinement.
+After these edits the pipeline reduces to: stage 12 (agent runs, writes `results.json`) → stage 13 (no-op, copies artifacts forward) → stage 14 (reads `results.json`, builds summary) → stage 15 (proceed-or-reject decision based on the summary). No abstract code repair.
 
 ### Step 11 — Declare requirements + plug into the LLM gate
 
@@ -708,7 +708,7 @@ Mechanics:
    - reads the most recent `experiment_summary.json` and the agent's canonical `results.json` (with the same fallback chain as the sandbox: `analysis/summary.json`, `analysis/flux_analysis_summary.json`, `output/data/results.json`)
    - calls `researchclaw.pipeline.requirements_judge.judge_requirements()` — LLM produces `{verdict: proceed|reject|partial, per_requirement: [...], delta_feedback}`
    - normalizes verdict from `per_requirement.met` (defends against LLM envelope inconsistency)
-3. **On `reject` AND retry budget remains** (default 1 retry): writes `REPAIR_PROMPT.md` to the stage-12 sandbox workspace listing the unmet must_pass items, sets `decision = "refine"`. Runner-side override at `runner.py:718` redirects `refine` → `EXPERIMENT_RUN` for agent modes (not the python-refine `ITERATIVE_REFINE`), so the agent re-runs atomically. The sandbox's `_prepare_workspace()` consumes `REPAIR_PROMPT.md` (deletes it) and prepends it as a **FOLLOWUP DELTA** section ahead of the original plan.
+3. **On `reject` AND retry budget remains** (default 1 retry): writes `REPAIR_PROMPT.md` to the stage-12 sandbox workspace listing the unmet must_pass items, sets `decision = "rerun"`. Runner-side routing redirects `rerun` → `EXPERIMENT_RUN` for agent modes (not the python-repair `EXPERIMENT_ROUTE_DECISION`), so the agent re-runs atomically. The sandbox's `_prepare_workspace()` consumes `REPAIR_PROMPT.md` (deletes it) and prepends it as a **FOLLOWUP DELTA** section ahead of the original plan.
 4. **On `reject` with retry exhausted**, `proceed`, or `partial`: sets `decision = "proceed"`. The `requirements_unmet` flag (when present) flows into `requirements_verdict.json` at run root and downstream stages can surface caveats.
 
 To raise the retry budget, change `_REQUIREMENTS_MAX_RETRIES` (default 1) in `_analysis.py`. To gate ML modes the same way, drop the `experiment.mode in ("collider_agent", "biology_agent")` guard at the top of `_execute_research_decision`.

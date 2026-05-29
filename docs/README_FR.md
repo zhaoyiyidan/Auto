@@ -177,7 +177,7 @@ experiment:
 | Capacite | Fonctionnement |
 |----------|---------------|
 | **🧑‍✈️ Mode Co-Pilote** | 6 modes d'intervention — du mode entierement autonome au pas-a-pas. Guidez l'IA aux decisions critiques (hypotheses, references, redaction) ou laissez-la faire. SmartPause detecte automatiquement quand une intervention humaine serait utile. |
-| **🔄 Boucle PIVOT / REFINE** | L'etape 15 decide de maniere autonome : PROCEED, REFINE (ajuster les parametres) ou PIVOT (nouvelle direction). Artefacts auto-versionnes. |
+| **🔄 Boucle PIVOT / EXTEND** | L'etape 15 decide de maniere autonome : PROCEED, EXTEND (follow-up hypotheses) ou PIVOT (nouvelle direction). Artefacts auto-versionnes. |
 | **🤖 Debat multi-agents** | La generation d'hypotheses, l'analyse de resultats et la relecture par les pairs utilisent chacune un debat structure multi-perspectives. |
 | **🧬 Auto-apprentissage** | Lecons extraites a chaque execution (justification des decisions, avertissements d'execution, anomalies de metriques) avec decroissance temporelle a 30 jours. Les executions futures apprennent des erreurs passees. |
 | **📚 Base de connaissances** | Chaque execution construit une KB structuree couvrant 6 categories (decisions, experiences, resultats, litterature, questions, relectures). |
@@ -285,11 +285,11 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 ```
 Phase A : Cadrage de la recherche     Phase E : Execution des experiences
   1. TOPIC_INIT                         12. EXPERIMENT_RUN
-  2. PROBLEM_DECOMPOSE                  13. ITERATIVE_REFINE  ← auto-reparation
+  2. PROBLEM_DECOMPOSE                  13. EXPERIMENT_ROUTE_DECISION  ← auto-reparation
 
 Phase B : Decouverte de litterature   Phase F : Analyse et decision
   3. SEARCH_STRATEGY                    14. RESULT_ANALYSIS    ← multi-agents
-  4. LITERATURE_COLLECT  ← API reelle   15. RESEARCH_DECISION  ← PIVOT/REFINE
+  4. LITERATURE_COLLECT  ← API reelle   15. RESEARCH_DECISION  ← PIVOT / EXTEND
   5. LITERATURE_SCREEN   [porte]
   6. KNOWLEDGE_EXTRACT                  Phase G : Redaction de l'article
                                         16. PAPER_OUTLINE
@@ -308,7 +308,7 @@ Phase D : Conception experimentale    Phase H : Finalisation
 
 > **Mode Co-Pilote** (`--mode co-pilot`) : Collaboration profonde humain-IA aux etapes 7-8 (Atelier d'Idees), etape 9 (Navigateur de References), et etapes 16-17 (Co-Redacteur d'Article). Les autres etapes s'executent automatiquement avec surveillance SmartPause.
 
-> **Boucles de decision** : l'etape 15 peut declencher REFINE (→ etape 13) ou PIVOT (→ etape 8), avec versionnement automatique des artefacts.
+> **Boucles de decision** : l'etape 15 peut declencher EXTEND (→ etape 8) ou PIVOT (→ etape 8), avec versionnement automatique des artefacts.
 
 <details>
 <summary>📋 Ce que fait chaque phase</summary>
@@ -321,7 +321,7 @@ Phase D : Conception experimentale    Phase H : Finalisation
 | **C : Synthese** | Regroupement des resultats, identification des lacunes de recherche, generation d'hypotheses testables via debat multi-agents |
 | **D : Conception** | Conception du plan experimental, generation de Python executable adapte au materiel (niveau GPU → selection de packages), estimation des besoins en ressources |
 | **E : Execution** | Execution des experiences en sandbox, detection de NaN/Inf et bugs d'execution, auto-reparation du code via reparation ciblee par LLM |
-| **F : Analyse** | Analyse multi-agents des resultats ; decision autonome PROCEED / REFINE / PIVOT avec justification |
+| **F : Analyse** | Analyse multi-agents des resultats ; decision autonome PROCEED / EXTEND / PIVOT avec justification |
 | **G : Redaction** | Plan → redaction section par section (5 000-6 500 mots) → relecture (avec verification de coherence methodologie-preuves) → revision avec controle de longueur |
 | **H : Finalisation** | Porte qualite, archivage des connaissances, export LaTeX avec template de conference, verification d'integrite et de pertinence des citations |
 
@@ -517,11 +517,11 @@ Dans des experiences controlees A/B (meme sujet, meme LLM, meme configuration) :
 | Metrique | Reference | Avec MetaClaw | Amelioration |
 |----------|-----------|---------------|--------------|
 | Taux de relance des etapes | 10.5% | 7.9% | **-24.8%** |
-| Nombre de cycles REFINE | 2.0 | 1.2 | **-40.0%** |
+| Nombre de cycles de reparation | 2.0 | 1.2 | **-40.0%** |
 | Completion des etapes du pipeline | 18/19 | 19/19 | **+5.3%** |
 | Score de robustesse global (composite) | 0.714 | 0.845 | **+18.3%** |
 
-> Le score de robustesse composite est une moyenne ponderee du taux de completion des etapes (40%), de la reduction des tentatives (30%) et de l'efficacite des cycles REFINE (30%).
+> Le score de robustesse composite est une moyenne ponderee du taux de completion des etapes (40%), de la reduction des tentatives (30%) et de l'efficacite des cycles de reparation (30%).
 
 ### Retrocompatibilite
 

@@ -71,7 +71,7 @@ paper_keywords:
 
 compute_budget_guidance: |
   Numerical methods are typically fast. Focus on accuracy:
-  - Use 5-8 refinement levels for clear convergence plots
+  - Use 5-8 resolution levels for clear convergence plots
   - Step sizes: geometric sequence (e.g., h, h/2, h/4, h/8, ...)
 
 dataset_guidance: |
@@ -85,6 +85,6 @@ code_generation_hints: |
   Numerical methods code:
   1. Implement methods from scratch (not just calling scipy)
   2. Use test problems with KNOWN exact solutions
-  3. Compute error at multiple refinement levels
+  3. Compute error at multiple resolution levels
   4. Report convergence order: p = log(e_h / e_{h/2}) / log(2)
   5. Output results.json with convergence data

@@ -65,7 +65,7 @@ class TestRender:
 
 class TestPromptManagerDefaults:
     def test_all_stages_present(self) -> None:
-        """20 stages have for_stage() prompts; iterative_refine uses sub_prompts only."""
+        """20 stages have for_stage() prompts; repair prompts use sub_prompts only."""
         pm = PromptManager()
         names = pm.stage_names()
         assert len(names) >= 20

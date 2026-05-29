@@ -176,7 +176,7 @@ experiment:
 | Capability | How It Works |
 |-----------|-------------|
 | **🧑‍✈️ Co-Pilot Mode** | 6 intervention modes — from fully autonomous to step-by-step. Guide the AI at critical decisions (hypotheses, baselines, paper writing) or let it run free. SmartPause auto-detects when human input would help. |
-| **🔄 PIVOT / REFINE Loop** | Stage 15 autonomously decides: PROCEED, REFINE (tweak params), or PIVOT (new direction). Artifacts auto-versioned. |
+| **🔄 PIVOT / EXTEND Loop** | Stage 15 autonomously decides: PROCEED, EXTEND (follow-up hypotheses), or PIVOT (new direction). Artifacts auto-versioned. |
 | **🤖 Multi-Agent Debate** | Hypothesis generation, result analysis, and peer review each use structured multi-perspective debate. |
 | **🧬 Self-Learning** | Lessons extracted per run (decision rationale, runtime warnings, metric anomalies) with 30-day time-decay. Future runs learn from past mistakes. |
 | **📚 Knowledge Base** | Every run builds structured KB across 6 categories (decisions, experiments, findings, literature, questions, reviews). |
@@ -283,12 +283,12 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 
 ```
 Phase A: Research Scoping          Phase E: Experiment Execution
-  1. TOPIC_INIT                      12. EXPERIMENT_RUN
-  2. PROBLEM_DECOMPOSE               13. ITERATIVE_REFINE  ← self-healing
+  1. TOPIC_INIT                      12. HARNESS_SUBMIT_AND_COLLECT
+  2. PROBLEM_DECOMPOSE               13. EXPERIMENT_ROUTE_DECISION  ← self-healing
 
 Phase B: Literature Discovery      Phase F: Analysis & Decision
   3. SEARCH_STRATEGY                 14. RESULT_ANALYSIS    ← multi-agent
-  4. LITERATURE_COLLECT  ← real API  15. RESEARCH_DECISION  ← PIVOT/REFINE
+  4. LITERATURE_COLLECT  ← real API  15. RESEARCH_DECISION  ← PIVOT / EXTEND
   5. LITERATURE_SCREEN   [gate]
   6. KNOWLEDGE_EXTRACT               Phase G: Paper Writing
                                      16. PAPER_OUTLINE
@@ -296,10 +296,10 @@ Phase C: Knowledge Synthesis         17. PAPER_DRAFT
   7. SYNTHESIS                       18. PEER_REVIEW        ← evidence check
   8. HYPOTHESIS_GEN    ← debate      19. PAPER_REVISION
 
-Phase D: Experiment Design         Phase H: Finalization
-  9. EXPERIMENT_DESIGN   [gate]      20. QUALITY_GATE      [gate]
- 10. CODE_GENERATION                 21. KNOWLEDGE_ARCHIVE
- 11. RESOURCE_PLANNING               22. EXPORT_PUBLISH     ← LaTeX
+Phase D: Experiment Prep           Phase H: Finalization
+  9. EXPERIMENT_TASK_SPEC [gate]     20. QUALITY_GATE      [gate]
+ 10. CODE_AGENT_IMPLEMENT_OR_REPAIR  21. KNOWLEDGE_ARCHIVE
+ 11. MANIFEST_VALIDATE_AND_PREPARE   22. EXPORT_PUBLISH     ← LaTeX
                                      23. CITATION_VERIFY    ← relevance check
 ```
 
@@ -307,7 +307,7 @@ Phase D: Experiment Design         Phase H: Finalization
 
 > **Co-Pilot mode** (`--mode co-pilot`): Deep human-AI collaboration at Stages 7-8 (Idea Workshop), Stage 9 (Baseline Navigator), and Stages 16-17 (Paper Co-Writer). Other stages auto-execute with SmartPause monitoring.
 
-> **Decision loops**: Stage 15 can trigger REFINE (→ Stage 13) or PIVOT (→ Stage 8), with automatic artifact versioning.
+> **Decision loops**: Stage 15 can trigger EXTEND (→ Stage 8, child hypothesis) or PIVOT (→ Stage 8, new direction), with automatic artifact versioning.
 
 <details>
 <summary>📋 What Each Phase Does</summary>
@@ -320,7 +320,7 @@ Phase D: Experiment Design         Phase H: Finalization
 | **C: Synthesis** | Clusters findings, identifies research gaps, generates testable hypotheses via multi-agent debate |
 | **D: Design** | Designs experiment plan, generates hardware-aware runnable Python (GPU tier → package selection), estimates resource needs |
 | **E: Execution** | Runs experiments in sandbox, detects NaN/Inf and runtime bugs, self-heals code via targeted LLM repair |
-| **F: Analysis** | Multi-agent analysis of results; autonomous PROCEED / REFINE / PIVOT decision with rationale |
+| **F: Analysis** | Multi-agent analysis of results; autonomous PROCEED / EXTEND / PIVOT decision with rationale |
 | **G: Writing** | Outlines → section-by-section drafting (5,000-6,500 words) → peer reviews (with methodology-evidence consistency) → revises with length guard |
 | **H: Finalization** | Quality gate, knowledge archival, LaTeX export with conference template, citation integrity + relevance verification |
 
@@ -336,7 +336,7 @@ Phase D: Experiment Design         Phase H: Finalization
 | **🔍 4-Layer Citation Verification** | arXiv ID check → CrossRef/DataCite DOI → Semantic Scholar title match → LLM relevance scoring. Hallucinated refs auto-removed. |
 | **🖥️ Hardware-Aware Execution** | Auto-detects GPU (NVIDIA CUDA / Apple MPS / CPU-only) and adapts code generation, imports, and experiment scale accordingly |
 | **🦾 OpenCode Beast Mode** | Complex experiments auto-routed to [OpenCode](https://github.com/anomalyco/opencode) — generates multi-file projects with custom architectures, training loops, and ablation studies. Install via `researchclaw setup`. |
-| **🧪 Sandbox Experiments** | AST-validated code, immutable harness, NaN/Inf fast-fail, self-healing repair, iterative refinement (up to 10 rounds), partial result capture |
+| **🧪 Sandbox Experiments** | AST-validated code, immutable harness, NaN/Inf fast-fail, self-healing repair, iterative repair (up to 10 rounds), partial result capture |
 | **📝 Conference-Grade Writing** | NeurIPS/ICML/ICLR templates, section-by-section drafting (5,000-6,500 words), anti-fabrication guard, revision length guard, anti-disclaimer enforcement |
 | **📐 Template Switching** | `neurips_2025`, `iclr_2026`, `icml_2026` — Markdown → LaTeX with math, tables, figures, cross-refs, `\cite{}` |
 | **🛡️ Anti-Fabrication** | VerifiedRegistry enforces ground-truth experiment data in papers. Auto-diagnoses failed experiments and repairs them before writing. Unverified numbers sanitized. |
@@ -386,7 +386,7 @@ You: Hypothesis 3 is interesting but needs Dropout/Label Smoothing as baselines
 AI:  Updated — added Dropout, Label Smoothing, MixUp, CutMix as baselines...
 You: approve
 
-Pipeline continues with your refined hypothesis...
+Pipeline continues with your revised hypothesis...
 ```
 
 ### CLI Commands
@@ -413,7 +413,7 @@ researchclaw guide artifacts/rc-2026-xxx --stage 9 --message "Use ResNet-50 as p
 
 | Feature | Description |
 |---------|------------|
-| **Idea Workshop** | Brainstorm, evaluate, and refine hypotheses collaboratively (Stage 7-8) |
+| **Idea Workshop** | Brainstorm, evaluate, and revise hypotheses collaboratively (Stage 7-8) |
 | **Baseline Navigator** | AI suggests baselines + human adds/removes + reproducibility checklist (Stage 9) |
 | **Paper Co-Writer** | Section-by-section drafting with human editing and AI polishing (Stage 16-19) |
 | **SmartPause** | Confidence-driven dynamic pausing — auto-detects when human input would help |
@@ -517,11 +517,11 @@ In controlled A/B experiments (same topic, same LLM, same configuration):
 | Metric | Baseline | With MetaClaw | Improvement |
 |--------|----------|---------------|-------------|
 | Stage retry rate | 10.5% | 7.9% | **-24.8%** |
-| Refine cycle count | 2.0 | 1.2 | **-40.0%** |
+| Repair cycle count | 2.0 | 1.2 | **-40.0%** |
 | Pipeline stage completion | 18/19 | 19/19 | **+5.3%** |
 | Overall robustness score (composite) | 0.714 | 0.845 | **+18.3%** |
 
-> Composite robustness score is a weighted average of stage completion rate (40%), retry reduction (30%), and refine cycle efficiency (30%).
+> Composite robustness score is a weighted average of stage completion rate (40%), retry reduction (30%), and repair cycle efficiency (30%).
 
 ### Backward Compatibility
 
@@ -661,7 +661,7 @@ experiment:
     enabled: true                    # Enable 5-agent figure pipeline (Planner→CodeGen→Renderer→Critic→Integrator)
     min_figures: 3                   # Minimum figures to generate
     max_figures: 8                   # Maximum figures
-    max_iterations: 3                # Critic-driven refinement iterations
+    max_iterations: 3                # Critic-driven repair iterations
     dpi: 300                         # Output resolution
     strict_mode: false               # Fail pipeline if figure generation fails
   repair:                            # Anti-fabrication experiment repair

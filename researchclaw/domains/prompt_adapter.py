@@ -206,7 +206,7 @@ class GenericPromptAdapter(PromptAdapter):
         if paradigm == "convergence":
             hints += (
                 "This is a convergence study. The code should:\n"
-                "1. Run the method at multiple refinement levels (e.g., grid sizes, timesteps)\n"
+                "1. Run the method at multiple resolution levels (e.g., grid sizes, timesteps)\n"
                 "2. Compute error norms at each level\n"
                 "3. Report results in a format suitable for convergence analysis\n"
                 "4. Output results as JSON to results.json\n"

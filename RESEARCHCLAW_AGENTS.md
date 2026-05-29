@@ -36,7 +36,7 @@ researchclaw run --topic "Your topic" --auto-approve
 | B: Literature Discovery | 3-6 | Search strategy, collect papers, screen [GATE@5], extract knowledge |
 | C: Knowledge Synthesis | 7-8 | Cluster topics, generate hypotheses |
 | D: Experiment Design | 9-11 | Design experiments [GATE@9], generate code, plan resources |
-| E: Experiment Execution | 12-13 | Run experiments, iterative refinement |
+| E: Experiment Execution | 12-13 | Run experiments, iterative repair |
 | F: Analysis & Decision | 14-15 | Analyze results, decide proceed/pivot/iterate |
 | G: Paper Writing | 16-19 | Outline, draft, peer review, revision |
 | H: Finalization | 20-23 | Quality gate [GATE@20], archive, export with charts, citation verification |

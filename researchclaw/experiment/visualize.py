@@ -382,7 +382,7 @@ def plot_ablation_deltas(
 
 
 # ---------------------------------------------------------------------------
-# 4. Metric trajectory — line chart across refinement iterations
+# 4. Metric trajectory — line chart across repair iterations
 # ---------------------------------------------------------------------------
 
 
@@ -432,7 +432,7 @@ def plot_metric_trajectory(
         )
 
     metric_label = metric_key.replace("_", " ").title()
-    ax.set_xlabel("Refinement Iteration")
+    ax.set_xlabel("Repair Iteration")
     ax.set_ylabel(metric_label)
     ax.set_title(title or f"{metric_label} Across Iterations")
     ax.set_xticks(list(x))

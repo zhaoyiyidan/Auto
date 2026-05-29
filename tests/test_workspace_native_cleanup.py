@@ -5,12 +5,10 @@ from pathlib import Path
 
 LEGACY_STAGE_9_14_TOKENS = (
     "experiment_final",
-    "refinement_log",
     "_extract_multi_file_blocks",
     "create_sandbox",
     "collider_agent",
     "EXPERIMENT_RUN",
-    "ITERATIVE_REFINE",
     "exp_plan.yaml",
 )
 

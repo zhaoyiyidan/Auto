@@ -167,7 +167,7 @@ Derived from `goal.md` for topic: {config.research.topic}
                         "content": (
                             "Evaluate this research topic for a top ML conference paper. "
                             "Score 1-10 on: (a) novelty, (b) specificity, (c) feasibility. "
-                            "If overall score < 5, suggest a refined topic.\n\n"
+                            "If overall score < 5, suggest a revised topic.\n\n"
                             f"Topic: {config.research.topic}\n\n"
                             "Reply as JSON: {\"novelty\": N, \"specificity\": N, "
                             "\"feasibility\": N, \"overall\": N, \"suggestion\": \"...\"}"
@@ -185,7 +185,7 @@ Derived from `goal.md` for topic: {config.research.topic}
                 overall = _eval_data.get("overall", 10)
                 if isinstance(overall, (int, float)) and overall < 5:
                     logger.warning(
-                        "IMP-35: Topic quality score %s/10 — consider refining: %s",
+                        "IMP-35: Topic quality score %s/10 — consider revising: %s",
                         overall,
                         _eval_data.get("suggestion", ""),
                     )

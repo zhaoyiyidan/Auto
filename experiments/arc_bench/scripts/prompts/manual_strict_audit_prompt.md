@@ -43,7 +43,7 @@ For the cell `<framework>_<topic_id>`:
    - `submission/README.md` — agent-written writeup
    - `submission/claims.json` — per-hypothesis verdicts
    - `stage-14/experiment_summary.json` — bridge-built canonical summary
-   - `stage-13/` — refinement sandbox (autoclaw)
+   - `stage-13/` — repair sandbox (autoclaw)
    - `native/` — adapter raw outputs (baselines)
 2. **Workspace artifacts** (per-framework):
    - AIDE: `/playpen2/.../aide_ml/workspaces/<run_tag>/working/*.csv`

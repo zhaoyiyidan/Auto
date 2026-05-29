@@ -136,7 +136,7 @@ class TestExtractLessons:
         results = [
             self._make_result(4, "failed", error="timeout"),
             self._make_result(5, "blocked_approval"),
-            self._make_result(15, "done", decision="refine"),
+            self._make_result(15, "done", decision="extend"),
         ]
         lessons = extract_lessons(results)
         assert len(lessons) == 3
@@ -159,9 +159,9 @@ class TestExtractLessons:
         stage_dir.mkdir(parents=True)
         (stage_dir / "decision_structured.json").write_text(
             json.dumps({
-                "decision": "refine",
+                "decision": "extend",
                 "raw_text_excerpt": (
-                    "## Decision\n**REFINE**\n\n"
+                    "## Decision\n**EXTEND**\n\n"
                     "## Justification\n"
                     "The analysis provides promising evidence but lacks statistical rigor."
                 ),
@@ -169,7 +169,7 @@ class TestExtractLessons:
             }),
             encoding="utf-8",
         )
-        results = [self._make_result(15, "done", decision="refine")]
+        results = [self._make_result(15, "done", decision="extend")]
         lessons = extract_lessons(results, run_id="test", run_dir=run_dir)
         assert any("statistical rigor" in l.description for l in lessons)
 

@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from researchclaw.config import LarkNotifyConfig, LarkTargetConfig
 
@@ -28,6 +29,17 @@ class LarkNotifyResult:
     @property
     def ok(self) -> bool:
         return all(target.status != "error" for target in self.targets)
+
+
+@dataclass(frozen=True)
+class LarkMessage:
+    message_id: str
+    msg_type: str
+    text: str
+    sender_id: str
+    sender_type: str
+    create_time_ms: int
+    chat_id: str
 
 
 class LarkNotifier:
@@ -161,6 +173,76 @@ def _build_command(
         "--format",
         "json",
     ]
+
+
+def _build_list_command(
+    config: LarkNotifyConfig,
+    *,
+    chat_id: str,
+    start_time: int,
+    page_size: int = 50,
+    page_token: str = "",
+) -> list[str]:
+    params = {
+        "container_id_type": "chat",
+        "container_id": chat_id,
+        "start_time": str(start_time),
+        "sort_type": "ByCreateTimeAsc",
+        "page_size": str(page_size),
+    }
+    if page_token:
+        params["page_token"] = page_token
+
+    return [
+        config.command,
+        "api",
+        "GET",
+        "/open-apis/im/v1/messages",
+        "--params",
+        json.dumps(params, ensure_ascii=False),
+        "--format",
+        "json",
+    ]
+
+
+class LarkMessageReader:
+    def __init__(self, config: LarkNotifyConfig) -> None:
+        self.config = config
+
+    def list_messages(
+        self,
+        *,
+        chat_id: str,
+        since_iso: str,
+        max_pages: int = 5,
+    ) -> list[LarkMessage]:
+        start_time = _iso_to_unix_seconds(since_iso)
+        command = _build_list_command(
+            self.config,
+            chat_id=chat_id,
+            start_time=start_time,
+        )
+        kwargs = {
+            "capture_output": True,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "timeout": self.config.timeout_sec,
+            "check": False,
+        }
+        env = _build_env(self.config)
+        if env is not None:
+            kwargs["env"] = env
+
+        subprocess.run(command, **kwargs)
+        return []
+
+
+def _iso_to_unix_seconds(value: str) -> int:
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
 
 
 def _build_env(config: LarkNotifyConfig) -> dict[str, str] | None:

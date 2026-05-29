@@ -193,6 +193,91 @@ class SubmitResult:
 
 
 @dataclass(frozen=True)
+class ExecutionRecord:
+    """Stage 12 execution summary produced by the harness."""
+
+    stage: int
+    code_commit: str
+    submitter: str
+    job_id: str
+    submit_status: str
+    final_status: str
+    log_path: str
+    result_paths: list[str]
+    result_hashes: dict[str, str]
+    metrics: dict[str, Any]
+    elapsed_sec: float
+    waited: bool
+    recorded_at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ExecutionRecord:
+        return cls(
+            stage=int(data["stage"]),
+            code_commit=str(data["code_commit"]),
+            submitter=str(data["submitter"]),
+            job_id=str(data["job_id"]),
+            submit_status=str(data["submit_status"]),
+            final_status=str(data["final_status"]),
+            log_path=str(data.get("log_path", "")),
+            result_paths=list(data.get("result_paths") or []),
+            result_hashes=dict(data.get("result_hashes") or {}),
+            metrics=dict(data.get("metrics") or {}),
+            elapsed_sec=float(data.get("elapsed_sec", 0.0)),
+            waited=bool(data.get("waited", False)),
+            recorded_at=str(data["recorded_at"]),
+        )
+
+
+@dataclass(frozen=True)
+class ResultArtifact:
+    """Hashed result artifact collected after a submitted run."""
+
+    path: str
+    sha256: str
+    size_bytes: int
+    exists: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ResultArtifact:
+        return cls(
+            path=str(data["path"]),
+            sha256=str(data.get("sha256", "")),
+            size_bytes=int(data.get("size_bytes", 0)),
+            exists=bool(data.get("exists", False)),
+        )
+
+
+@dataclass(frozen=True)
+class ResultArtifacts:
+    """Collection of result artifact hashes for one code commit."""
+
+    code_commit: str
+    artifacts: list[ResultArtifact]
+    collected_at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ResultArtifacts:
+        return cls(
+            code_commit=str(data["code_commit"]),
+            artifacts=[
+                ResultArtifact.from_dict(item)
+                for item in list(data.get("artifacts") or [])
+            ],
+            collected_at=str(data["collected_at"]),
+        )
+
+
+@dataclass(frozen=True)
 class ExperimentRecord:
     """ResearchClaw-owned provenance record for a workspace experiment."""
 

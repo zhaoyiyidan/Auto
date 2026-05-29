@@ -5,16 +5,19 @@ import subprocess
 from pathlib import Path
 
 from researchclaw.experiment.workspace import (
+    ExecutionRecord,
     LaunchCommand,
     RunManifest,
     SubmitRequest,
     SubmitResult,
+    ResultArtifacts,
     WorkspaceAgentResult,
 )
 from researchclaw.experiment.workspace_agent_ledger import WorkspaceAgentLedger
 from researchclaw.pipeline.workspace_orchestrator import (
     run_workspace_agent_implement,
     run_workspace_agent_task,
+    submit_and_collect,
     wait_for_completion,
 )
 
@@ -110,6 +113,17 @@ class PollingDummySubmitter:
         return "running"
 
 
+class PollingDummySubmitterWithResults(DummySubmitter):
+    def __init__(self, states: list[str]) -> None:
+        super().__init__()
+        self.states = states
+
+    def poll(self, result: SubmitResult) -> str:
+        if self.states:
+            return self.states.pop(0)
+        return "completed"
+
+
 def test_wait_for_completion_polls_until_terminal_state() -> None:
     submitter = PollingDummySubmitter(["running", "running", "completed"])
     result = SubmitResult(job_id="job-1", submitter_name="polling", status="submitted")
@@ -188,6 +202,52 @@ def test_run_workspace_agent_implement_records_provenance_without_submitting(
     assert not (stage_dir / "registry_record.json").exists()
     assert not (run_dir / "workspace_experiment_registry.jsonl").exists()
     assert not (run_dir / "execution_record.json").exists()
+
+
+def test_submit_and_collect_waits_hashes_and_records_provenance(tmp_path: Path) -> None:
+    workspace = _tmp_git_repo(tmp_path)
+    run_dir = tmp_path / "stage-12"
+    manifest = RunManifest(
+        code_commit=_git(workspace, "rev-parse", "HEAD"),
+        launch=LaunchCommand(command="python train.py"),
+        result_paths=["outputs/metrics.json", "outputs/missing.json"],
+    )
+    submitter = PollingDummySubmitterWithResults(["running", "completed"])
+
+    execution = submit_and_collect(
+        manifest=manifest,
+        submitter=submitter,
+        workspace_path=workspace,
+        run_dir=run_dir,
+        stage=12,
+        wait=True,
+        timeout_sec=5,
+        poll_interval_sec=0,
+        base_sha="base",
+        agent_commit_sha=manifest.code_commit,
+        provider="acp",
+        session_name="researchclaw-code-run-1",
+    )
+
+    assert isinstance(execution, ExecutionRecord)
+    assert execution.final_status == "completed"
+    assert execution.waited is True
+    assert execution.result_hashes["outputs/metrics.json"]
+    artifacts = ResultArtifacts.from_dict(
+        json.loads((run_dir / "result_artifacts.json").read_text(encoding="utf-8"))
+    )
+    assert [artifact.exists for artifact in artifacts.artifacts] == [True, False]
+    assert json.loads((run_dir / "submit_result.json").read_text(encoding="utf-8"))[
+        "job_id"
+    ] == "job-1"
+    assert json.loads((run_dir / "execution_record.json").read_text(encoding="utf-8"))[
+        "final_status"
+    ] == "completed"
+    registry_lines = (run_dir / "workspace_experiment_registry.jsonl").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert len(registry_lines) == 1
+    assert json.loads(registry_lines[0])["session_name"] == "researchclaw-code-run-1"
 
 
 def test_run_workspace_agent_task_writes_ledger_registry_and_hashes(tmp_path: Path) -> None:

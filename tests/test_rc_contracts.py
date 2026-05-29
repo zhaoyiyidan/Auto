@@ -45,7 +45,7 @@ def test_max_retries_is_non_negative_for_all_contracts(contract: StageContract):
 
 def test_gate_stages_have_expected_max_retries():
     assert CONTRACTS[Stage.LITERATURE_SCREEN].max_retries == 0
-    assert CONTRACTS[Stage.EXPERIMENT_DESIGN].max_retries == 0
+    assert CONTRACTS[Stage.EXPERIMENT_TASK_SPEC].max_retries == 0
     assert CONTRACTS[Stage.QUALITY_GATE].max_retries == 0
 
 
@@ -65,6 +65,66 @@ def test_export_publish_contract_has_expected_outputs():
     contract = CONTRACTS[Stage.EXPORT_PUBLISH]
 
     assert contract.output_files == ("paper_final.md", "code/")
+
+
+def test_workspace_native_stage_contracts_are_exact():
+    expected = {
+        Stage.EXPERIMENT_TASK_SPEC: (
+            ("hypotheses.md",),
+            ("task_spec.yaml",),
+            "E09_TASKSPEC_REJECT",
+            0,
+        ),
+        Stage.CODE_AGENT_IMPLEMENT: (
+            ("task_spec.yaml",),
+            ("stage-10-workspace-agent-result.json", "run_manifest.json"),
+            "E10_CODE_AGENT_FAIL",
+            2,
+        ),
+        Stage.MANIFEST_VALIDATE_AND_PREPARE: (
+            ("run_manifest.json",),
+            ("manifest_validation.json", "run_manifest.json"),
+            "E11_MANIFEST_INVALID",
+            1,
+        ),
+        Stage.HARNESS_SUBMIT_AND_COLLECT: (
+            ("manifest_validation.json",),
+            ("execution_record.json", "submit_result.json", "result_artifacts.json"),
+            "E12_HARNESS_FAIL",
+            2,
+        ),
+        Stage.CODE_AGENT_REFINE: (
+            ("execution_record.json",),
+            ("refine_record.json", "run_manifest.json"),
+            "E13_REFINE_FAIL",
+            2,
+        ),
+        Stage.RESULT_ANALYSIS: (
+            ("execution_record.json",),
+            ("analysis.md", "experiment_summary.json", "provenance.json"),
+            "E14_ANALYSIS_ERR",
+            1,
+        ),
+    }
+    for stage, (inputs, outputs, error_code, max_retries) in expected.items():
+        contract = CONTRACTS[stage]
+        assert contract.input_files == inputs
+        assert contract.output_files == outputs
+        assert contract.error_code == error_code
+        assert contract.max_retries == max_retries
+
+
+def test_stage_contract_has_no_collider_output_files_field():
+    assert "collider_output_files" not in StageContract.__dataclass_fields__
+
+
+def test_select_output_files_returns_contract_outputs_unconditionally():
+    from researchclaw.pipeline.executor import _select_output_files
+
+    contract = CONTRACTS[Stage.CODE_AGENT_IMPLEMENT]
+
+    assert _select_output_files(contract, object()) == contract.output_files
+    assert _select_output_files(None, object()) == ()
 
 
 @pytest.mark.parametrize("contract", tuple(CONTRACTS.values()))

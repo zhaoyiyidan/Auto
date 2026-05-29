@@ -630,7 +630,7 @@ class TestWorkspaceAgentStageWiring:
             "code_commit"
         ] == head
 
-    def test_stage11_invalid_manifest_prompts_agent_to_fix(
+    def test_stage11_invalid_manifest_emits_repair_request_no_agent(
         self,
         tmp_path: Path,
         run_dir: Path,
@@ -648,42 +648,25 @@ class TestWorkspaceAgentStageWiring:
             result_paths=[],
         )
         _write_prior_artifact(run_dir, 10, "run_manifest.json", bad_manifest.to_json())
-        agent = object()
-        prompts_seen: list[str] = []
+        called: list[int] = []
 
         monkeypatch.setattr(
             "researchclaw.experiment.workspace_agent.create_workspace_agent",
-            lambda *args, **kwargs: agent,
+            lambda *args, **kwargs: called.append(1) or object(),
         )
 
         def fake_implement(**kwargs: Any):
             from researchclaw.experiment.workspace import WorkspaceAgentResult
 
-            prompts_seen.append(kwargs["prompt"])
-            fixed = RunManifest(
-                code_commit=head,
-                launch=LaunchCommand(command="python train.py"),
-                result_paths=["outputs/metrics.json"],
-            )
-            (workspace / "run_manifest.json").write_text(
-                fixed.to_json(),
-                encoding="utf-8",
-            )
-            subprocess.run(["git", "add", "run_manifest.json"], cwd=workspace, check=True)
-            subprocess.run(
-                ["git", "commit", "-m", "fix manifest"],
-                cwd=workspace,
-                check=True,
-                capture_output=True,
-            )
             return WorkspaceAgentResult(
                 base_sha=head,
-                agent_commit_sha=_git_head(workspace),
-                manifest_path="run_manifest.json",
+                agent_commit_sha=head,
+                manifest_path=None,
                 diff_stat="",
-                raw_log="fixed manifest",
+                raw_log="should not be called",
                 provider_name="acp",
                 elapsed_sec=0.1,
+                error="unexpected agent call",
             )
 
         monkeypatch.setattr(
@@ -701,13 +684,19 @@ class TestWorkspaceAgentStageWiring:
             llm=None,
         )
 
-        assert result.status is StageStatus.DONE
-        assert prompts_seen
-        assert "result_paths" in prompts_seen[0]
+        assert called == []
+        assert result.status is StageStatus.FAILED
+        assert result.decision == "fix_code"
+        repair_request = run_dir / "repair_request.json"
+        assert repair_request.is_file()
+        payload = json.loads(repair_request.read_text(encoding="utf-8"))
+        assert payload["schema_version"] == "researchclaw.repair_request.v1"
+        assert payload["origin_stage"] == 11
+        assert payload["errors"]
         validation = json.loads(
             (stage_dir / "manifest_validation.json").read_text(encoding="utf-8")
         )
-        assert validation["ok"] is True
+        assert validation["ok"] is False
 
     def test_stage12_submits_waits_collects_hashed_results(
         self,

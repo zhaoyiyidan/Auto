@@ -165,12 +165,48 @@ class RuntimeConfig:
 
 
 @dataclass(frozen=True)
+class LarkTargetConfig:
+    name: str = ""
+    kind: str = "user"
+    receive_id_type: str = "open_id"
+    receive_id: str = ""
+
+
+@dataclass(frozen=True)
+class LarkHITLConfig:
+    enabled: bool = False
+    chat_id: str = ""
+    poll_interval_sec: float = 2.0
+    reply_timeout_sec: int = 0
+    allowed_actions: tuple[str, ...] = ()
+    allowed_senders: tuple[str, ...] = ()
+    notify: bool = True
+    read_replies: bool = True
+
+
+@dataclass(frozen=True)
+class LarkNotifyConfig:
+    enabled: bool = False
+    backend: str = "cli"
+    command: str = "lark-cli"
+    app_id: str = ""
+    app_secret: str = ""
+    app_id_env: str = "LARK_APP_ID"
+    app_secret_env: str = "LARK_APP_SECRET"
+    targets: tuple[LarkTargetConfig, ...] = ()
+    timeout_sec: int = 15
+    dry_run: bool = False
+    hitl: LarkHITLConfig = field(default_factory=LarkHITLConfig)
+
+
+@dataclass(frozen=True)
 class NotificationsConfig:
     channel: str
     target: str = ""
     on_stage_start: bool = False
     on_stage_fail: bool = False
     on_gate_required: bool = True
+    lark: LarkNotifyConfig = field(default_factory=LarkNotifyConfig)
 
 
 @dataclass(frozen=True)
@@ -954,6 +990,7 @@ class RCConfig:
                 on_stage_start=bool(notifications.get("on_stage_start", False)),
                 on_stage_fail=bool(notifications.get("on_stage_fail", False)),
                 on_gate_required=bool(notifications.get("on_gate_required", True)),
+                lark=_parse_lark_config(notifications.get("lark") or {}),
             ),
             knowledge_base=KnowledgeBaseConfig(
                 backend=knowledge_base.get("backend", "markdown"),
@@ -1547,6 +1584,74 @@ def _parse_servers_config(data: dict[str, Any]) -> ServersConfig:
         prefer_free=bool(data.get("prefer_free", True)),
         failover=bool(data.get("failover", True)),
         monitor_interval_sec=int(data.get("monitor_interval_sec", 60)),
+    )
+
+
+def _parse_str_tuple(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(item) for item in value)
+
+
+def _parse_lark_hitl_config(data: dict[str, Any]) -> LarkHITLConfig:
+    if not isinstance(data, dict) or not data:
+        return LarkHITLConfig()
+
+    return LarkHITLConfig(
+        enabled=bool(data.get("enabled", False)),
+        chat_id=str(data.get("chat_id", "") or ""),
+        poll_interval_sec=_safe_float(data.get("poll_interval_sec"), 2.0),
+        reply_timeout_sec=_safe_int(data.get("reply_timeout_sec"), 0),
+        allowed_actions=_parse_str_tuple(data.get("allowed_actions")),
+        allowed_senders=_parse_str_tuple(data.get("allowed_senders")),
+        notify=bool(data.get("notify", True)),
+        read_replies=bool(data.get("read_replies", True)),
+    )
+
+
+def _parse_lark_config(data: dict[str, Any]) -> LarkNotifyConfig:
+    if not isinstance(data, dict) or not data:
+        return LarkNotifyConfig()
+
+    raw_targets = data.get("targets") or ()
+    if isinstance(raw_targets, dict):
+        target_entries = raw_targets.items()
+    elif isinstance(raw_targets, (list, tuple)):
+        target_entries = (
+            (entry.get("name", ""), entry)
+            for entry in raw_targets
+            if isinstance(entry, dict)
+        )
+    else:
+        target_entries = ()
+
+    targets = tuple(
+        LarkTargetConfig(
+            name=str(name or ""),
+            kind=str(entry.get("kind", "user") or "user"),
+            receive_id_type=str(
+                entry.get("receive_id_type", "open_id") or "open_id"
+            ),
+            receive_id=str(entry.get("receive_id", "") or ""),
+        )
+        for name, entry in target_entries
+        if isinstance(entry, dict)
+    )
+
+    return LarkNotifyConfig(
+        enabled=bool(data.get("enabled", False)),
+        backend=str(data.get("backend", "cli") or "cli"),
+        command=str(data.get("command", "lark-cli") or "lark-cli"),
+        app_id=str(data.get("app_id", "") or ""),
+        app_secret=str(data.get("app_secret", "") or ""),
+        app_id_env=str(data.get("app_id_env", "LARK_APP_ID") or "LARK_APP_ID"),
+        app_secret_env=str(
+            data.get("app_secret_env", "LARK_APP_SECRET") or "LARK_APP_SECRET"
+        ),
+        targets=targets,
+        timeout_sec=_safe_int(data.get("timeout_sec"), 15),
+        dry_run=bool(data.get("dry_run", False)),
+        hitl=_parse_lark_hitl_config(data.get("hitl") or {}),
     )
 
 

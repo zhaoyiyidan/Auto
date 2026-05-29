@@ -173,6 +173,17 @@ class LarkTargetConfig:
 
 
 @dataclass(frozen=True)
+class LarkHITLConfig:
+    enabled: bool = False
+    chat_id: str = ""
+    poll_interval_sec: float = 2.0
+    reply_timeout_sec: int = 0
+    allowed_actions: tuple[str, ...] = ()
+    allowed_senders: tuple[str, ...] = ()
+    notify: bool = True
+
+
+@dataclass(frozen=True)
 class LarkNotifyConfig:
     enabled: bool = False
     backend: str = "cli"
@@ -184,6 +195,7 @@ class LarkNotifyConfig:
     targets: tuple[LarkTargetConfig, ...] = ()
     timeout_sec: int = 15
     dry_run: bool = False
+    hitl: LarkHITLConfig = field(default_factory=LarkHITLConfig)
 
 
 @dataclass(frozen=True)
@@ -1574,6 +1586,27 @@ def _parse_servers_config(data: dict[str, Any]) -> ServersConfig:
     )
 
 
+def _parse_str_tuple(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(item) for item in value)
+
+
+def _parse_lark_hitl_config(data: dict[str, Any]) -> LarkHITLConfig:
+    if not isinstance(data, dict) or not data:
+        return LarkHITLConfig()
+
+    return LarkHITLConfig(
+        enabled=bool(data.get("enabled", False)),
+        chat_id=str(data.get("chat_id", "") or ""),
+        poll_interval_sec=_safe_float(data.get("poll_interval_sec"), 2.0),
+        reply_timeout_sec=_safe_int(data.get("reply_timeout_sec"), 0),
+        allowed_actions=_parse_str_tuple(data.get("allowed_actions")),
+        allowed_senders=_parse_str_tuple(data.get("allowed_senders")),
+        notify=bool(data.get("notify", True)),
+    )
+
+
 def _parse_lark_config(data: dict[str, Any]) -> LarkNotifyConfig:
     if not isinstance(data, dict) or not data:
         return LarkNotifyConfig()
@@ -1616,6 +1649,7 @@ def _parse_lark_config(data: dict[str, Any]) -> LarkNotifyConfig:
         targets=targets,
         timeout_sec=_safe_int(data.get("timeout_sec"), 15),
         dry_run=bool(data.get("dry_run", False)),
+        hitl=_parse_lark_hitl_config(data.get("hitl") or {}),
     )
 
 

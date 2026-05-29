@@ -550,6 +550,211 @@ class TestWorkspaceAgentStageWiring:
         )
         assert validation["ok"] is True
 
+    def test_stage12_submits_waits_collects_hashed_results(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from researchclaw.experiment.workspace import (
+            LaunchCommand,
+            ManifestValidation,
+            RunManifest,
+        )
+        from tests.test_workspace_orchestrator import DummySubmitter
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        workspace = Path(cfg.experiment.workspace_agent.workspace_path)
+        head = _init_workspace_git(workspace)
+        manifest = RunManifest(
+            code_commit=head,
+            launch=LaunchCommand(command="python train.py"),
+            result_paths=["outputs/metrics.json"],
+        )
+        _write_prior_artifact(run_dir, 11, "run_manifest.json", manifest.to_json())
+        _write_prior_artifact(
+            run_dir,
+            11,
+            "manifest_validation.json",
+            json.dumps(
+                ManifestValidation(
+                    ok=True,
+                    schema_version=manifest.schema_version,
+                    code_commit=head,
+                    commit_exists=True,
+                    workspace_dirty=False,
+                    launch_command=manifest.launch.command,
+                    launch_cwd=manifest.launch.cwd,
+                    result_paths=manifest.result_paths,
+                ).to_dict()
+            ),
+        )
+        monkeypatch.setattr(
+            "researchclaw.experiment.submitter.create_submitter",
+            lambda *args, **kwargs: DummySubmitter(),
+        )
+        stage_dir = run_dir / "stage-12"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_experiment_run(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.DONE
+        assert result.artifacts == (
+            "execution_record.json",
+            "submit_result.json",
+            "result_artifacts.json",
+        )
+        assert json.loads((stage_dir / "submit_result.json").read_text(encoding="utf-8"))[
+            "job_id"
+        ] == "job-1"
+        assert json.loads(
+            (stage_dir / "execution_record.json").read_text(encoding="utf-8")
+        )["result_hashes"]["outputs/metrics.json"]
+        artifacts = json.loads(
+            (stage_dir / "result_artifacts.json").read_text(encoding="utf-8")
+        )
+        assert artifacts["artifacts"][0]["exists"] is True
+
+    def test_stage12_submitter_exception_fails(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from researchclaw.experiment.workspace import (
+            LaunchCommand,
+            ManifestValidation,
+            RunManifest,
+        )
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        workspace = Path(cfg.experiment.workspace_agent.workspace_path)
+        head = _init_workspace_git(workspace)
+        manifest = RunManifest(
+            code_commit=head,
+            launch=LaunchCommand(command="python train.py"),
+            result_paths=["outputs/metrics.json"],
+        )
+        _write_prior_artifact(run_dir, 11, "run_manifest.json", manifest.to_json())
+        _write_prior_artifact(
+            run_dir,
+            11,
+            "manifest_validation.json",
+            json.dumps(
+                ManifestValidation(
+                    ok=True,
+                    schema_version=manifest.schema_version,
+                    code_commit=head,
+                    commit_exists=True,
+                    workspace_dirty=False,
+                    launch_command=manifest.launch.command,
+                    launch_cwd=manifest.launch.cwd,
+                    result_paths=manifest.result_paths,
+                ).to_dict()
+            ),
+        )
+
+        class RaisingSubmitter:
+            name = "raising"
+
+            def submit(self, request: object) -> object:
+                raise RuntimeError("cluster down")
+
+        monkeypatch.setattr(
+            "researchclaw.experiment.submitter.create_submitter",
+            lambda *args, **kwargs: RaisingSubmitter(),
+        )
+        stage_dir = run_dir / "stage-12"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_experiment_run(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.FAILED
+        assert "E12_HARNESS_FAIL" in (result.error or "")
+
+    def test_stage12_all_missing_results_fails(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from researchclaw.experiment.workspace import (
+            LaunchCommand,
+            ManifestValidation,
+            RunManifest,
+            SubmitResult,
+        )
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        workspace = Path(cfg.experiment.workspace_agent.workspace_path)
+        head = _init_workspace_git(workspace)
+        manifest = RunManifest(
+            code_commit=head,
+            launch=LaunchCommand(command="python train.py"),
+            result_paths=["outputs/missing.json"],
+        )
+        _write_prior_artifact(run_dir, 11, "run_manifest.json", manifest.to_json())
+        _write_prior_artifact(
+            run_dir,
+            11,
+            "manifest_validation.json",
+            json.dumps(
+                ManifestValidation(
+                    ok=True,
+                    schema_version=manifest.schema_version,
+                    code_commit=head,
+                    commit_exists=True,
+                    workspace_dirty=False,
+                    launch_command=manifest.launch.command,
+                    launch_cwd=manifest.launch.cwd,
+                    result_paths=manifest.result_paths,
+                ).to_dict()
+            ),
+        )
+
+        class NoopSubmitter:
+            name = "noop"
+
+            def submit(self, request: object) -> SubmitResult:
+                return SubmitResult("job-1", self.name, "submitted")
+
+        monkeypatch.setattr(
+            "researchclaw.experiment.submitter.create_submitter",
+            lambda *args, **kwargs: NoopSubmitter(),
+        )
+        stage_dir = run_dir / "stage-12"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_experiment_run(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.FAILED
+        assert "E12_HARNESS_FAIL" in (result.error or "")
+        artifacts = json.loads(
+            (stage_dir / "result_artifacts.json").read_text(encoding="utf-8")
+        )
+        assert artifacts["artifacts"][0]["exists"] is False
+
     def test_stage13_calls_workspace_agent_task(
         self,
         tmp_path: Path,

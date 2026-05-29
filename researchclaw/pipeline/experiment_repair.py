@@ -1,76 +1,21 @@
-"""Experiment Repair Loop — diagnose and delegate fixes to the workspace agent.
-
-Orchestrates the cycle:
-  1. Diagnose failures (``experiment_diagnosis.py``)
-  2. Send a targeted repair prompt to the persistent workspace code agent
-  3. Let the normal manifest validation and submitter stages execute results
-
-Integrates between Stage 14 (result_analysis) and Stage 15 (research_decision).
-"""
+"""Experiment diagnosis prompt and summary helpers."""
 
 from __future__ import annotations
 
 import json
 import logging
-import time as _time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from researchclaw.pipeline.experiment_diagnosis import (
     DeficiencyType,
     ExperimentDiagnosis,
-    ExperimentQualityAssessment,
-    PaperMode,
-    assess_experiment_quality,
-    diagnose_experiment,
 )
 from researchclaw.pipeline._helpers import _parse_metrics_from_stdout
 
 logger = logging.getLogger(__name__)
 
 MAX_REPAIR_CYCLES = 3
-
-
-@dataclass
-class RepairCycleResult:
-    """Result of one repair cycle."""
-
-    cycle: int
-    diagnosis: ExperimentDiagnosis
-    repair_applied: bool = False
-    repair_description: str = ""
-    new_assessment: ExperimentQualityAssessment | None = None
-    error: str = ""
-
-
-@dataclass
-class ExperimentRepairResult:
-    """Final result of the entire repair loop."""
-
-    success: bool  # True if experiment is now sufficient for full_paper
-    total_cycles: int
-    final_mode: PaperMode
-    final_assessment: ExperimentQualityAssessment | None = None
-    cycle_history: list[RepairCycleResult] = field(default_factory=list)
-    best_experiment_summary: dict | None = None
-
-    def to_dict(self) -> dict:
-        return {
-            "success": self.success,
-            "total_cycles": self.total_cycles,
-            "final_mode": self.final_mode.value,
-            "cycle_history": [
-                {
-                    "cycle": cr.cycle,
-                    "repair_applied": cr.repair_applied,
-                    "repair_description": cr.repair_description,
-                    "error": cr.error,
-                    "diagnosis_summary": cr.diagnosis.summary if cr.diagnosis else "",
-                }
-                for cr in self.cycle_history
-            ],
-        }
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +123,7 @@ def build_repair_prompt(
 
 def select_best_results(
     run_dir: Path,
-    cycle_history: list[RepairCycleResult],
+    cycle_history: list[Any],
 ) -> dict | None:
     """Select the best experiment_summary across all repair cycles.
 
@@ -250,146 +195,6 @@ def _summary_quality_score(summary: dict) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Full repair loop
-# ---------------------------------------------------------------------------
-
-
-def run_repair_loop(
-    run_dir: Path,
-    config: Any,
-    run_id: str = "",
-) -> ExperimentRepairResult:
-    """Execute a workspace-native repair request.
-
-    After Stage 14 diagnosis finds quality issues, this function builds one
-    targeted prompt for the persistent workspace code agent. It does not parse
-    generated code, copy experiment directories, or execute jobs; the normal
-    manifest validation and harness stages own those steps.
-
-    Parameters
-    ----------
-    run_dir:
-        Path to the pipeline run directory (contains stage-* subdirs).
-    config:
-        RCConfig instance with experiment and workspace-agent settings.
-    run_id:
-        Pipeline run ID for logging.
-
-    Returns
-    -------
-    ExperimentRepairResult
-    """
-    repair_cfg = config.experiment.repair
-
-    # Load initial experiment summary
-    summary = _load_experiment_summary(run_dir)
-    if not summary:
-        logger.warning("[%s] Repair loop: no experiment_summary.json found", run_id)
-        return ExperimentRepairResult(
-            success=False, total_cycles=0, final_mode=PaperMode.TECHNICAL_REPORT,
-        )
-
-    # Initial quality assessment — pass user-configured thresholds
-    _min_cond = getattr(repair_cfg, "min_conditions", 3)
-    plan = _load_experiment_plan(run_dir)
-    qa = assess_experiment_quality(summary, experiment_plan=plan, min_conditions=_min_cond)
-    if qa.sufficient:
-        logger.info("[%s] Repair loop: experiment already sufficient (%s)", run_id, qa.mode.value)
-        return ExperimentRepairResult(
-            success=True, total_cycles=0, final_mode=qa.mode,
-            final_assessment=qa, best_experiment_summary=summary,
-        )
-
-    workspace_enabled = getattr(
-        getattr(config.experiment, "workspace_agent", None),
-        "enabled",
-        False,
-    )
-
-    # Load manifest snapshots only as extra context for the repair prompt.
-    code = _load_experiment_code(run_dir)
-    if not code and not workspace_enabled:
-        logger.warning("[%s] Repair loop: no experiment code found", run_id)
-        return ExperimentRepairResult(
-            success=False, total_cycles=0, final_mode=qa.mode,
-        )
-
-    # Collect stdout/stderr for diagnosis
-    stdout, stderr = _collect_experiment_output(run_dir)
-
-    cycle_history: list[RepairCycleResult] = []
-    best_summary = summary
-    best_mode = qa.mode
-    max_cycles = min(repair_cfg.max_cycles, MAX_REPAIR_CYCLES)
-    loop_start = _time.monotonic()
-    prior_diagnoses: list[dict] = []
-
-    for cycle in range(1, max_cycles + 1):
-        logger.info("[%s] Repair cycle %d/%d starting...", run_id, cycle, max_cycles)
-        print(f"[{run_id}] Repair cycle {cycle}/{max_cycles}...")
-
-        # 1. Diagnose current state
-        diag = diagnose_experiment(
-            experiment_summary=summary,
-            experiment_plan=plan,
-            stdout=stdout,
-            stderr=stderr,
-            prior_diagnoses=prior_diagnoses or None,
-        )
-        prior_diagnoses.append(diag.to_dict() if hasattr(diag, "to_dict") else {})
-
-        # 2. Build repair prompt
-        repair_prompt = build_repair_prompt(
-            diag, code, experiment_plan=plan,
-            time_budget_sec=config.experiment.time_budget_sec,
-        )
-
-        # 3. Ask the workspace code agent to modify the repository.
-        fixed_code = _get_repaired_code(
-            repair_prompt, code, None, config, run_dir, cycle,
-        )
-
-        if not fixed_code:
-            cycle_result = RepairCycleResult(
-                cycle=cycle, diagnosis=diag,
-                repair_applied=False,
-                error="Failed to generate repaired code",
-            )
-            cycle_history.append(cycle_result)
-            logger.warning("[%s] Repair cycle %d: code generation failed", run_id, cycle)
-            break
-
-        cycle_result = RepairCycleResult(
-            cycle=cycle,
-            diagnosis=diag,
-            repair_applied=True,
-            repair_description="Workspace agent repair requested; rerun stages 11-14 to evaluate results",
-        )
-        cycle_history.append(cycle_result)
-
-        logger.info(
-            "[%s] Repair cycle %d: workspace agent accepted repair request",
-            run_id, cycle,
-        )
-        print(f"[{run_id}] Repair cycle {cycle}: workspace agent repair requested")
-        break
-
-    elapsed = _time.monotonic() - loop_start
-    logger.info(
-        "[%s] Repair loop completed: %d cycles in %.1fs, current mode=%s",
-        run_id, len(cycle_history), elapsed, best_mode.value,
-    )
-
-    return ExperimentRepairResult(
-        success=False,
-        total_cycles=len(cycle_history),
-        final_mode=best_mode,
-        cycle_history=cycle_history,
-        best_experiment_summary=best_summary,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Helper: load experiment artifacts
 # ---------------------------------------------------------------------------
 
@@ -408,7 +213,7 @@ def _load_experiment_code(run_dir: Path) -> dict[str, str]:
     """Load workspace manifest context from the most recent stage directory."""
     code: dict[str, str] = {}
 
-    for manifest in sorted(run_dir.glob("stage-1[03]*/run_manifest.json"), reverse=True):
+    for manifest in sorted(run_dir.glob("stage-10*/run_manifest.json"), reverse=True):
         try:
             code[str(manifest.relative_to(run_dir))] = manifest.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -468,95 +273,6 @@ def _collect_experiment_output(run_dir: Path) -> tuple[str, str]:
                 continue
 
     return "\n".join(stdout_parts).strip(), "\n".join(stderr_parts).strip()
-
-
-# ---------------------------------------------------------------------------
-# Helper: request workspace-native repair
-# ---------------------------------------------------------------------------
-
-
-def _get_repaired_code(
-    repair_prompt: str,
-    current_code: dict[str, str],
-    llm: Any,
-    config: Any,
-    run_dir: Path,
-    cycle: int,
-) -> dict[str, str] | None:
-    """Get repaired code via the workspace-native code agent.
-
-    Returns merged code dict (current + repaired files) or None on failure.
-    """
-    if getattr(getattr(config.experiment, "workspace_agent", None), "enabled", False):
-        result = _repair_via_workspace_agent(
-            repair_prompt, current_code, llm, config, run_dir, cycle,
-        )
-        if result:
-            return result
-        logger.info("Workspace-native repair unavailable")
-
-    return None
-
-
-def _repair_via_workspace_agent(
-    repair_prompt: str,
-    current_code: dict[str, str],
-    llm: Any,
-    config: Any,
-    run_dir: Path,
-    cycle: int,
-) -> dict[str, str] | None:
-    """Attempt repair through the workspace-native agent implement path."""
-    try:
-        from researchclaw.experiment.workspace_agent import create_workspace_agent
-        from researchclaw.pipeline.workspace_orchestrator import run_workspace_agent_implement
-
-        workspace_cfg = config.experiment.workspace_agent
-        stage_dir = run_dir / f"stage-14-workspace-repair-v{cycle}"
-        prompt = (
-            "You are a workspace-native code agent repairing an existing git "
-            "repository. Apply the requested repair in place, commit your code "
-            "changes with git, and write the run manifest for ResearchClaw's "
-            "submitter. Do not submit the job yourself.\n\n"
-            f"MANIFEST FILENAME: {workspace_cfg.manifest_filename}\n\n"
-            f"REPAIR TASK:\n{repair_prompt}\n\n"
-            f"CURRENT RESEARCHCLAW CODE SNAPSHOT FILES:\n{sorted(current_code.keys())}\n"
-        )
-        agent = create_workspace_agent(config, llm=llm)
-        result = run_workspace_agent_implement(
-            workspace_path=Path(workspace_cfg.workspace_path),
-            run_dir=stage_dir,
-            stage=14,
-            agent=agent,
-            prompt=prompt,
-            timeout_sec=workspace_cfg.timeout_sec,
-            iteration=cycle,
-            close_policy=getattr(workspace_cfg, "close_policy", "keep"),
-        )
-        if not result.ok:
-            logger.warning("Workspace-native repair failed: %s", result.error)
-            return None
-        merged = dict(current_code)
-        merged.update(_collect_workspace_text_files(Path(workspace_cfg.workspace_path)))
-        return merged
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Workspace-native repair failed: %s", exc)
-        return None
-
-
-def _collect_workspace_text_files(workspace: Path) -> dict[str, str]:
-    """Collect root-level text files for legacy repair-loop compatibility."""
-    files: dict[str, str] = {}
-    for path in sorted(workspace.iterdir()):
-        if not path.is_file() or path.name.startswith("."):
-            continue
-        if path.suffix not in (".py", ".txt", ".yaml", ".yml", ".json", ".cfg", ".ini", ".sh"):
-            continue
-        try:
-            files[path.name] = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-    return files
 
 
 def _build_experiment_summary_from_run(

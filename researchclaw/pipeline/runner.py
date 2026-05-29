@@ -211,7 +211,6 @@ def _run_experiment_diagnosis(run_dir: Path, config: RCConfig, run_id: str) -> N
 
     Produces:
     - ``run_dir/experiment_diagnosis.json`` — structured diagnosis + quality assessment
-    - ``run_dir/repair_prompt.txt`` — repair instructions (if quality is insufficient)
     """
     try:
         from researchclaw.pipeline.experiment_diagnosis import (
@@ -292,27 +291,8 @@ def _run_experiment_diagnosis(run_dir: Path, config: RCConfig, run_id: str) -> N
         )
 
         if not qa.sufficient:
-            # Generate repair prompt for the REFINE loop
-            from researchclaw.pipeline.experiment_repair import build_repair_prompt
-
-            code: dict[str, str] = {}
-            for _glob_pat in ("stage-13*/run_manifest.json", "stage-10*/run_manifest.json"):
-                for candidate in sorted(run_dir.glob(_glob_pat)):
-                    try:
-                        code[candidate.name] = candidate.read_text(encoding="utf-8")
-                    except (OSError, UnicodeDecodeError):
-                        pass
-                if code:
-                    break
-
-            repair_prompt = build_repair_prompt(
-                diag, code, time_budget_sec=config.experiment.time_budget_sec
-            )
-            (run_dir / "repair_prompt.txt").write_text(
-                repair_prompt, encoding="utf-8"
-            )
             logger.info(
-                "[%s] Experiment diagnosis: mode=%s, deficiencies=%d — repair prompt saved",
+                "[%s] Experiment diagnosis: mode=%s, deficiencies=%d — repair needed",
                 run_id, qa.mode.value, len(diag.deficiencies),
             )
             print(
@@ -331,88 +311,9 @@ def _run_experiment_diagnosis(run_dir: Path, config: RCConfig, run_id: str) -> N
 
 
 def _run_experiment_repair(run_dir: Path, config: RCConfig, run_id: str) -> None:
-    """Execute the experiment repair loop when diagnosis finds quality issues.
-
-    Calls the repair loop from ``experiment_repair.py`` which:
-    1. Loads workspace manifest context and diagnosis
-    2. Gets fixes from the workspace agent
-    3. Re-runs through the harness submitter
-    4. Re-assesses quality
-    5. Repeats up to max_cycles
-    """
-    try:
-        from researchclaw.pipeline.experiment_repair import run_repair_loop
-
-        repair_result = run_repair_loop(
-            run_dir=run_dir,
-            config=config,
-            run_id=run_id,
-        )
-
-        # Save repair result
-        (run_dir / "experiment_repair_result.json").write_text(
-            json.dumps(repair_result.to_dict(), indent=2), encoding="utf-8"
-        )
-
-        # BUG-186: Promote best experiment summary to stage-14/ so
-        # downstream stages (sanitizer, paper_verifier) see it.
-        # BUG-198: Only promote if the repair summary is RICHER than
-        # the existing stage-14 summary.  The repair loop can produce
-        # empty summaries (metrics: {}, 0 conditions) which would
-        # overwrite enriched data from the analysis stage.
-        if repair_result.best_experiment_summary:
-            from researchclaw.pipeline.experiment_repair import (
-                _summary_quality_score,
-            )
-
-            best_path = run_dir / "stage-14" / "experiment_summary.json"
-            existing_score = 0.0
-            if best_path.exists():
-                try:
-                    existing = json.loads(
-                        best_path.read_text(encoding="utf-8")
-                    )
-                    existing_score = _summary_quality_score(existing)
-                except (json.JSONDecodeError, OSError):
-                    pass
-
-            repair_score = _summary_quality_score(
-                repair_result.best_experiment_summary
-            )
-
-            if repair_score > existing_score:
-                best_path.write_text(
-                    json.dumps(
-                        repair_result.best_experiment_summary, indent=2
-                    ),
-                    encoding="utf-8",
-                )
-                logger.info(
-                    "[%s] Promoted repair results to stage-14 "
-                    "(score %.1f > %.1f, success=%s)",
-                    run_id, repair_score, existing_score,
-                    repair_result.success,
-                )
-            else:
-                logger.info(
-                    "[%s] Kept existing stage-14 summary (score %.1f >= "
-                    "repair score %.1f)",
-                    run_id, existing_score, repair_score,
-                )
-
-        if repair_result.success:
-            # Re-run diagnosis with updated results
-            _run_experiment_diagnosis(run_dir, config, run_id)
-        else:
-            logger.info(
-                "[%s] Repair loop completed without reaching full_paper quality "
-                "(best mode: %s, %d cycles)",
-                run_id, repair_result.final_mode.value, repair_result.total_cycles,
-            )
-
-    except Exception as exc:
-        logger.warning("[%s] Experiment repair failed: %s", run_id, exc)
-        print(f"[{run_id}] Experiment repair failed: {exc}")
+    """Compatibility no-op until the Stage 10-13 loop driver owns repairs."""
+    _ = run_dir, config
+    logger.info("[%s] Experiment repair loop is handled by Stage 10-13 routing", run_id)
 
 
 def execute_pipeline(

@@ -977,6 +977,7 @@ class RCConfig:
                 on_stage_start=bool(notifications.get("on_stage_start", False)),
                 on_stage_fail=bool(notifications.get("on_stage_fail", False)),
                 on_gate_required=bool(notifications.get("on_gate_required", True)),
+                lark=_parse_lark_config(notifications.get("lark") or {}),
             ),
             knowledge_base=KnowledgeBaseConfig(
                 backend=knowledge_base.get("backend", "markdown"),
@@ -1570,6 +1571,51 @@ def _parse_servers_config(data: dict[str, Any]) -> ServersConfig:
         prefer_free=bool(data.get("prefer_free", True)),
         failover=bool(data.get("failover", True)),
         monitor_interval_sec=int(data.get("monitor_interval_sec", 60)),
+    )
+
+
+def _parse_lark_config(data: dict[str, Any]) -> LarkNotifyConfig:
+    if not isinstance(data, dict) or not data:
+        return LarkNotifyConfig()
+
+    raw_targets = data.get("targets") or ()
+    if isinstance(raw_targets, dict):
+        target_entries = raw_targets.items()
+    elif isinstance(raw_targets, (list, tuple)):
+        target_entries = (
+            (entry.get("name", ""), entry)
+            for entry in raw_targets
+            if isinstance(entry, dict)
+        )
+    else:
+        target_entries = ()
+
+    targets = tuple(
+        LarkTargetConfig(
+            name=str(name or ""),
+            kind=str(entry.get("kind", "user") or "user"),
+            receive_id_type=str(
+                entry.get("receive_id_type", "open_id") or "open_id"
+            ),
+            receive_id=str(entry.get("receive_id", "") or ""),
+        )
+        for name, entry in target_entries
+        if isinstance(entry, dict)
+    )
+
+    return LarkNotifyConfig(
+        enabled=bool(data.get("enabled", False)),
+        backend=str(data.get("backend", "cli") or "cli"),
+        command=str(data.get("command", "lark-cli") or "lark-cli"),
+        app_id=str(data.get("app_id", "") or ""),
+        app_secret=str(data.get("app_secret", "") or ""),
+        app_id_env=str(data.get("app_id_env", "LARK_APP_ID") or "LARK_APP_ID"),
+        app_secret_env=str(
+            data.get("app_secret_env", "LARK_APP_SECRET") or "LARK_APP_SECRET"
+        ),
+        targets=targets,
+        timeout_sec=_safe_int(data.get("timeout_sec"), 15),
+        dry_run=bool(data.get("dry_run", False)),
     )
 
 

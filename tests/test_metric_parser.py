@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import inspect
 import pytest
 from pathlib import Path
 
@@ -169,6 +170,11 @@ class TestCSVParsing:
 
 
 class TestStdoutParsing:
+    def test_stdout_parser_has_no_legacy_sandbox_import(self):
+        source = inspect.getsource(UniversalMetricParser._parse_stdout)
+
+        assert "researchclaw.experiment.sandbox" not in source
+
     def test_parse_plain_metrics(self, parser, tmp_run_dir):
         result = parser.parse(tmp_run_dir, stdout="accuracy: 0.95\nloss: 0.32\n")
         assert result.source == "stdout"

@@ -510,9 +510,16 @@ class TestWorkspaceAgentStageWiring:
                 fixed.to_json(),
                 encoding="utf-8",
             )
+            subprocess.run(["git", "add", "run_manifest.json"], cwd=workspace, check=True)
+            subprocess.run(
+                ["git", "commit", "-m", "fix manifest"],
+                cwd=workspace,
+                check=True,
+                capture_output=True,
+            )
             return WorkspaceAgentResult(
                 base_sha=head,
-                agent_commit_sha=head,
+                agent_commit_sha=_git_head(workspace),
                 manifest_path="run_manifest.json",
                 diff_stat="",
                 raw_log="fixed manifest",
@@ -634,6 +641,17 @@ def _init_workspace_git(workspace: Path) -> str:
         check=True,
         capture_output=True,
     )
+    proc = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return proc.stdout.strip()
+
+
+def _git_head(workspace: Path) -> str:
     proc = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=workspace,

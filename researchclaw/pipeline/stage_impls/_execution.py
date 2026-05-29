@@ -6,17 +6,20 @@ import json
 import logging
 import math
 import re
+import shutil
 import time as _time
 from pathlib import Path
 from typing import Any
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
+from researchclaw.experiment.manifest_validation import validate_manifest
 from researchclaw.experiment.validator import (
     CodeValidation,
     format_issues_for_llm,
     validate_code,
 )
+from researchclaw.experiment.workspace import RunManifest
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._domain import _detect_domain
 from researchclaw.pipeline._helpers import (
@@ -87,55 +90,125 @@ def _execute_resource_planning(
     llm: LLMClient | None = None,
     prompts: PromptManager | None = None,
 ) -> StageResult:
-    exp_plan = _read_prior_artifact(run_dir, "exp_plan.yaml") or ""
-    schedule: dict[str, Any] | None = None
-    if llm is not None:
-        _pm = prompts or PromptManager()
-        _overlay = _get_evolution_overlay(run_dir, "resource_planning")
-        sp = _pm.for_stage("resource_planning", evolution_overlay=_overlay, exp_plan=exp_plan)
-        resp = _chat_with_prompt(
-            llm,
-            sp.system,
-            sp.user,
-            json_mode=sp.json_mode,
-            max_tokens=sp.max_tokens,
+    _ = adapters, llm, prompts
+    manifest_text = _read_prior_artifact(run_dir, "run_manifest.json")
+    if not manifest_text:
+        return StageResult(
+            stage=Stage.RESOURCE_PLANNING,
+            status=StageStatus.FAILED,
+            artifacts=(),
+            error="E11_MANIFEST_INVALID: missing run_manifest.json",
         )
-        parsed = _safe_json_loads(resp.content, {})
-        if isinstance(parsed, dict):
-            schedule = parsed
-    if schedule is None:
-        schedule = {
-            "tasks": [
-                {
-                    "id": "baseline",
-                    "name": "Run baseline",
-                    "depends_on": [],
-                    "gpu_count": 1,
-                    "estimated_minutes": 20,
-                    "priority": "high",
-                },
-                {
-                    "id": "proposed",
-                    "name": "Run proposed method",
-                    "depends_on": ["baseline"],
-                    "gpu_count": 1,
-                    "estimated_minutes": 30,
-                    "priority": "high",
-                },
-            ],
-            "total_gpu_budget": 1,
-            "generated": _utcnow_iso(),
-        }
-    schedule.setdefault("generated", _utcnow_iso())
-    (stage_dir / "schedule.json").write_text(
-        json.dumps(schedule, indent=2), encoding="utf-8"
+    try:
+        manifest = RunManifest.from_json(manifest_text)
+    except Exception as exc:  # noqa: BLE001
+        return StageResult(
+            stage=Stage.RESOURCE_PLANNING,
+            status=StageStatus.FAILED,
+            artifacts=(),
+            error=f"E11_MANIFEST_INVALID: invalid run_manifest.json: {exc}",
+        )
+
+    workspace = Path(config.experiment.workspace_agent.workspace_path).resolve()
+    validation = validate_manifest(manifest, workspace, allow_dirty=False)
+    if not validation.ok:
+        manifest = _ask_agent_to_fix_manifest(
+            config=config,
+            run_dir=run_dir,
+            stage_dir=stage_dir,
+            workspace=workspace,
+            errors=validation.errors,
+            manifest=manifest,
+        ) or manifest
+        validation = validate_manifest(manifest, workspace, allow_dirty=False)
+
+    (stage_dir / "manifest_validation.json").write_text(
+        json.dumps(validation.to_dict(), indent=2, sort_keys=True),
+        encoding="utf-8",
     )
+    if validation.ok:
+        (stage_dir / "run_manifest.json").write_text(
+            manifest.to_json(),
+            encoding="utf-8",
+        )
+        return StageResult(
+            stage=Stage.RESOURCE_PLANNING,
+            status=StageStatus.DONE,
+            artifacts=("manifest_validation.json", "run_manifest.json"),
+            evidence_refs=(
+                "stage-11/manifest_validation.json",
+                "stage-11/run_manifest.json",
+            ),
+        )
     return StageResult(
         stage=Stage.RESOURCE_PLANNING,
-        status=StageStatus.DONE,
-        artifacts=("schedule.json",),
-        evidence_refs=("stage-11/schedule.json",),
+        status=StageStatus.FAILED,
+        artifacts=("manifest_validation.json",),
+        error="E11_MANIFEST_INVALID: " + "; ".join(validation.errors),
     )
+
+
+def _ask_agent_to_fix_manifest(
+    *,
+    config: RCConfig,
+    run_dir: Path,
+    stage_dir: Path,
+    workspace: Path,
+    errors: list[str],
+    manifest: RunManifest,
+) -> RunManifest | None:
+    from researchclaw.experiment import workspace_agent as workspace_agent_factory
+    from researchclaw.pipeline import workspace_orchestrator
+
+    prompt = (
+        "The current run_manifest.json failed ResearchClaw validation.\n"
+        "Fix only the manifest and any minimal supporting files required for it. "
+        "Do not submit the job.\n\n"
+        "Validation errors:\n"
+        + "\n".join(f"- {error}" for error in errors)
+        + "\n\nCurrent manifest:\n"
+        + manifest.to_json()
+    )
+    agent = workspace_agent_factory.create_workspace_agent(config)
+    result = workspace_orchestrator.run_workspace_agent_implement(
+        workspace_path=workspace,
+        run_dir=stage_dir,
+        stage=11,
+        agent=agent,
+        prompt=prompt,
+        timeout_sec=int(getattr(config.experiment.workspace_agent, "timeout_sec", 600)),
+        close_policy="keep",
+    )
+    manifest_path = _manifest_source(
+        workspace,
+        result.manifest_path,
+        str(getattr(config.experiment.workspace_agent, "manifest_filename", "run_manifest.json")),
+    )
+    if manifest_path is None:
+        return None
+    shutil.copy2(manifest_path, stage_dir / "run_manifest.json")
+    return RunManifest.from_path(manifest_path)
+
+
+def _manifest_source(
+    workspace: Path,
+    manifest_path: str | None,
+    manifest_filename: str,
+) -> Path | None:
+    candidates: list[Path] = []
+    if manifest_path:
+        path = Path(manifest_path)
+        candidates.append(path if path.is_absolute() else workspace / path)
+    candidates.extend(
+        [
+            workspace / manifest_filename,
+            workspace / ".researchclaw" / manifest_filename,
+        ]
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _estimate_stage12_footprint_bytes(run_dir: Path) -> int:

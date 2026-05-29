@@ -123,6 +123,7 @@ class LarkNotifier:
                 command=command,
             )
 
+        result = _redact_result(result, self.config, env)
         if result.status == "error":
             logger.warning(
                 "Lark notification to %s failed: %s",
@@ -176,6 +177,48 @@ def _build_env(config: LarkNotifyConfig) -> dict[str, str] | None:
     if config.app_secret_env:
         env[config.app_secret_env] = app_secret
     return env
+
+
+def _redact_result(
+    result: LarkTargetResult,
+    config: LarkNotifyConfig,
+    env: dict[str, str] | None,
+) -> LarkTargetResult:
+    detail = _redact_secrets(result.detail, config, env)
+    if detail == result.detail:
+        return result
+    return LarkTargetResult(
+        name=result.name,
+        status=result.status,
+        detail=detail,
+        command=result.command,
+    )
+
+
+def _redact_secrets(
+    text: str,
+    config: LarkNotifyConfig,
+    env: dict[str, str] | None,
+) -> str:
+    if not text:
+        return text
+
+    candidates = {
+        config.app_secret,
+        os.environ.get("LARK_APP_SECRET", ""),
+    }
+    if config.app_secret_env:
+        candidates.add(os.environ.get(config.app_secret_env, ""))
+    if env is not None:
+        candidates.add(env.get("LARK_APP_SECRET", ""))
+        if config.app_secret_env:
+            candidates.add(env.get(config.app_secret_env, ""))
+
+    redacted = text
+    for secret in candidates:
+        if secret:
+            redacted = redacted.replace(secret, "[redacted]")
+    return redacted
 
 
 def _result_from_completed(

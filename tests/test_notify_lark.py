@@ -421,12 +421,13 @@ def test_secret_not_present_in_argv():
 def test_secret_not_logged(caplog: pytest.LogCaptureFixture):
     secret = "logged-secret-value"
     with patch("researchclaw.notify.lark.subprocess.run") as mock_run:
-        mock_run.return_value = _completed(returncode=1, stderr="failed")
+        mock_run.return_value = _completed(returncode=1, stderr=f"failed {secret}")
 
         with caplog.at_level("DEBUG", logger="researchclaw.notify.lark"):
-            LarkNotifier(_config(app_secret=secret)).send("Title", "Body")
+            result = LarkNotifier(_config(app_secret=secret)).send("Title", "Body")
 
     assert secret not in caplog.text
+    assert secret not in result.targets[0].detail
 
 
 def test_timeout_sec_forwarded_to_subprocess():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -48,8 +49,29 @@ class LarkHITLListener:
         self._feedback_sent: set[str] = set()
 
     def poll_once(self) -> PollResult:
+        try:
+            return self._poll_once()
+        except Exception:
+            logger.warning("Lark HITL listener poll failed", exc_info=True)
+            return PollResult.ERROR
+
+    def run(self, max_iterations: int | None = None) -> None:
+        iterations = 0
+        try:
+            while max_iterations is None or iterations < max_iterations:
+                self.poll_once()
+                iterations += 1
+                if max_iterations is not None and iterations >= max_iterations:
+                    break
+                time.sleep(self.config.poll_interval_sec)
+        except KeyboardInterrupt:
+            return
+
+    def _poll_once(self) -> PollResult:
         data = self.store.load_waiting()
         if data is None:
+            if (self.run_dir / "hitl" / "waiting.json").exists():
+                return PollResult.ERROR
             return PollResult.NO_WAITING
 
         waiting = WaitingState.from_dict(data)

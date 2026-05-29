@@ -13,6 +13,7 @@ from researchclaw.experiment.workspace import (
 )
 from researchclaw.experiment.workspace_agent_ledger import WorkspaceAgentLedger
 from researchclaw.pipeline.workspace_orchestrator import (
+    run_workspace_agent_implement,
     run_workspace_agent_task,
     wait_for_completion,
 )
@@ -148,6 +149,45 @@ def test_wait_for_completion_without_poll_returns_unknown() -> None:
     )
 
     assert final_status == "unknown"
+
+
+def test_run_workspace_agent_implement_records_provenance_without_submitting(
+    tmp_path: Path,
+) -> None:
+    workspace = _tmp_git_repo(tmp_path)
+    run_dir = tmp_path / "run"
+    agent = DummyWorkspaceAgent()
+    ledger = WorkspaceAgentLedger(run_dir)
+
+    result = run_workspace_agent_implement(
+        workspace_path=workspace,
+        run_dir=run_dir,
+        stage=10,
+        agent=agent,
+        prompt="implement the experiment",
+        timeout_sec=120,
+        ledger=ledger,
+        close_policy="keep",
+    )
+
+    assert result.ok is True
+    assert agent.prompts == ["implement the experiment"]
+    stage_dir = run_dir / ".researchclaw" / "workspace-agent" / "stage-10"
+    assert (stage_dir / "prompt.md").read_text(encoding="utf-8") == "implement the experiment"
+    assert (stage_dir / "base_sha.txt").read_text(encoding="utf-8") == f"{result.base_sha}\n"
+    assert json.loads((stage_dir / "agent_result.json").read_text(encoding="utf-8"))[
+        "agent_commit_sha"
+    ] == result.agent_commit_sha
+    assert json.loads((stage_dir / "run_manifest.json").read_text(encoding="utf-8"))[
+        "code_commit"
+    ] == result.agent_commit_sha
+    assert json.loads(
+        (run_dir / "stage-10-workspace-agent-result.json").read_text(encoding="utf-8")
+    )["agent_commit_sha"] == result.agent_commit_sha
+    assert not (stage_dir / "submit_result.json").exists()
+    assert not (stage_dir / "registry_record.json").exists()
+    assert not (run_dir / "workspace_experiment_registry.jsonl").exists()
+    assert not (run_dir / "execution_record.json").exists()
 
 
 def test_run_workspace_agent_task_writes_ledger_registry_and_hashes(tmp_path: Path) -> None:

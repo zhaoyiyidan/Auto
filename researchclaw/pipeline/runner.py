@@ -716,18 +716,6 @@ def execute_pipeline(
                 _promote_best_stage14(run_dir, config)
             elif pivot_count < MAX_DECISION_PIVOTS:
                 rollback_target = DECISION_ROLLBACK[result.decision]
-                # Agent-based modes: REFINE means re-run the agent atomically.
-                # Stage 13 CODE_AGENT_REFINE is a no-op for these modes (it
-                # would refine python files the agent never executed), so
-                # routing REFINE there wastes a pipeline cycle.  Send REFINE
-                # straight back to HARNESS_SUBMIT_AND_COLLECT so the sandbox re-spawns
-                # claude with the REPAIR_PROMPT.md the requirements gate
-                # just wrote.
-                if (
-                    config.experiment.mode in ("collider_agent", "biology_agent", "stat_agent")
-                    and result.decision == "refine"
-                ):
-                    rollback_target = Stage.HARNESS_SUBMIT_AND_COLLECT
                 _record_decision_history(
                     run_dir, result.decision, rollback_target, pivot_count + 1
                 )
@@ -743,20 +731,25 @@ def execute_pipeline(
                     f"rollback to {rollback_target.name} "
                     f"(attempt {pivot_count + 1}/{MAX_DECISION_PIVOTS})"
                 )
+                if result.decision == "refine":
+                    pivot_results = _run_refine_iteration(
+                        run_dir=run_dir,
+                        run_id=run_id,
+                        config=config,
+                        adapters=adapters,
+                        attempt=pivot_count + 1,
+                        auto_approve_gates=auto_approve_gates,
+                        stop_on_gate=stop_on_gate,
+                        skip_noncritical=skip_noncritical,
+                        kb_root=kb_root,
+                        cancel_event=cancel_event,
+                    )
+                    results.extend(pivot_results)
+                    _promote_best_stage14(run_dir, config)
+                    break
                 # Version existing stage directories before overwriting.
-                # Agent-mode REFINE preserves the stage-12 workspace via
-                # incremental snapshot (copytree, not rename) so the
-                # rerunning sandbox can read prior model files / CSVs / KO
-                # tables instead of starting from a blank workspace.  This
-                # is what makes the requirements-gate retry usefully
-                # incremental rather than just a stochastic resample.
-                _agent_refine = (
-                    config.experiment.mode in ("collider_agent", "biology_agent", "stat_agent")
-                    and result.decision == "refine"
-                )
                 _version_rollback_stages(
                     run_dir, rollback_target, pivot_count + 1,
-                    incremental=_agent_refine,
                 )
                 # Recurse from rollback target
                 pivot_results = execute_pipeline(
@@ -1274,6 +1267,50 @@ def _version_rollback_stages(
             logger.debug(
                 "Versioned (rename) %s → %s", stage_dir.name, version_dir.name
             )
+
+
+def _run_refine_iteration(
+    *,
+    run_dir: Path,
+    run_id: str,
+    config: RCConfig,
+    adapters: AdapterBundle,
+    attempt: int,
+    auto_approve_gates: bool,
+    stop_on_gate: bool,
+    skip_noncritical: bool,
+    kb_root: Path | None,
+    cancel_event: threading.Event | None,
+) -> list[StageResult]:
+    _ = skip_noncritical, kb_root
+    _version_rollback_stages(
+        run_dir,
+        Stage.MANIFEST_VALIDATE_AND_PREPARE,
+        attempt,
+    )
+    results: list[StageResult] = []
+    for stage in (
+        Stage.CODE_AGENT_REFINE,
+        Stage.MANIFEST_VALIDATE_AND_PREPARE,
+        Stage.HARNESS_SUBMIT_AND_COLLECT,
+        Stage.RESULT_ANALYSIS,
+    ):
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        result = execute_stage(
+            stage,
+            run_dir=run_dir,
+            run_id=run_id,
+            config=config,
+            adapters=adapters,
+            auto_approve_gates=auto_approve_gates,
+        )
+        results.append(result)
+        if result.status is StageStatus.BLOCKED_APPROVAL and stop_on_gate:
+            break
+        if result.status is not StageStatus.DONE:
+            break
+    return results
 
 
 def _consecutive_empty_metrics(run_dir: Path, pivot_count: int) -> bool:

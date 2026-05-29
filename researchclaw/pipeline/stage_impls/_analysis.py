@@ -934,13 +934,13 @@ Generated: {_utcnow_iso()}
 
 
 def _parse_decision(text: str) -> str:
-    """Extract PROCEED/PIVOT/REFINE from decision text.
+    """Extract PROCEED/PIVOT from decision text.
 
     Looks for the first standalone keyword on its own line after a
     ``## Decision`` heading.  Falls back to a keyword scan of the first
     few lines after the heading, but only matches the keyword itself
     (not mentions inside explanatory prose like "PIVOT is not warranted").
-    Returns lowercase ``"proceed"`` / ``"pivot"`` / ``"refine"``.
+    Returns lowercase ``"proceed"`` / ``"pivot"``.
     Defaults to ``"proceed"`` if nothing matches.
     """
     import re as _re
@@ -959,12 +959,12 @@ def _parse_decision(text: str) -> str:
     # whitespace / markdown bold / trailing punctuation).
     for line in search_text.splitlines():
         stripped = line.strip().strip("*").strip("#").strip()
-        if stripped.upper() in ("PROCEED", "PIVOT", "REFINE"):
+        if stripped.upper() in ("PROCEED", "PIVOT"):
             return stripped.lower()
 
     # Fallback: regex for standalone word boundaries so that
     # "PIVOT is not warranted" does NOT match as a decision.
-    for kw in ("PIVOT", "REFINE", "PROCEED"):
+    for kw in ("PIVOT", "PROCEED"):
         # Only match if the keyword appears as the FIRST keyword-class token
         # on its own (not embedded in a sentence saying "not PIVOT").
         pattern = _re.compile(
@@ -973,33 +973,21 @@ def _parse_decision(text: str) -> str:
         if pattern.search(search_text):
             return kw.lower()
 
-    # Last resort: position-based — prefer whichever keyword appears LAST
-    # (the final conclusion after deliberation is more reliable than early mentions)
-    # BUG-DA8-08: Old code always returned "refine" when both keywords present
+    # Last resort: position-based for pivot only. Experiment routing happens
+    # before Stage 15.
     search_upper = search_text.upper()
-    last_refine = search_upper.rfind("REFINE")
     last_pivot = search_upper.rfind("PIVOT")
-    if last_refine >= 0 and (last_pivot < 0 or last_refine > last_pivot):
-        return "refine"
-    if last_pivot >= 0 and (last_refine < 0 or last_pivot > last_refine):
+    if last_pivot >= 0:
         return "pivot"
     return "proceed"
 
 
 # ---------------------------------------------------------------------------
 # Requirements gate. Reads the manifest's optional `requirements:` list, calls
-# the LLM judge, persists the verdict, and either:
-#   * verdict=reject AND retry budget remains → write REPAIR_PROMPT.md and
-#     decide REFINE (the runner-side rollback override sends us back to
-#     HARNESS_SUBMIT_AND_COLLECT, where the harness consumes the repair prompt).
-#   * otherwise → decide PROCEED (with a `requirements_unmet` flag if any
-#     must_pass remains failing after the retry budget is exhausted).
+# the LLM judge, persists the verdict, and decides PROCEED with a
+# `requirements_unmet` flag when any must_pass item remains failing.
 # ---------------------------------------------------------------------------
 
-# Max number of agent reruns the requirements gate is allowed to trigger
-# (per pipeline run).  This is the "1 retry max" rule.  Independent of
-# MAX_DECISION_PIVOTS (which counts ALL pivot/refine cycles).
-_REQUIREMENTS_MAX_RETRIES = 1
 _REQUIREMENTS_RETRY_FILE = "requirements_retry_count.txt"
 
 
@@ -1122,64 +1110,6 @@ def _read_retry_count(run_dir: Path) -> int:
         return 0
 
 
-def _bump_retry_count(run_dir: Path) -> int:
-    n = _read_retry_count(run_dir) + 1
-    (run_dir / _REQUIREMENTS_RETRY_FILE).write_text(str(n), encoding="utf-8")
-    return n
-
-
-def _write_repair_prompt(run_dir: Path, delta_feedback: str, verdict: dict[str, object]) -> Path:
-    """Write a REPAIR_PROMPT.md so the next stage-12 sandbox run consumes it.
-
-    Critical placement note: the runner's ``_version_rollback_stages`` renames
-    ``run_dir/stage-12/`` to ``stage-12_v{N}/`` before the agent re-runs, which
-    means anything written under stage-12/ is archived (not seen by the fresh
-    workspace).  We therefore write the repair prompt at the **run-dir root**
-    (``run_dir/REPAIR_PROMPT.md``) which is preserved across all rollbacks.
-
-    The agent sandboxes look for this file BOTH at their own workspace and at
-    ``self.workdir.parents[3]`` (which equals ``run_dir`` for the standard
-    ``run_dir/stage-12/runs/workspace/sandbox`` layout) — see
-    ``BiologyAgentSandbox._prepare_workspace`` and the ColliderAgent equivalent.
-    """
-    body = (
-        "# REPAIR PROMPT — follow-up rerun requested by requirements judge\n\n"
-        "Your previous run did not satisfy one or more must_pass requirements. "
-        "Re-run the experiment, focusing on the items below.  Your existing "
-        "workspace artifacts (under stage-12_v{N}/runs/workspace/sandbox/) are "
-        "preserved as a snapshot you can reference — reuse what you already "
-        "produced and only redo what is needed to satisfy the missing "
-        "requirements.\n\n"
-        "## Missing requirements (must_pass)\n\n"
-        f"{delta_feedback or '(no feedback provided)'}\n\n"
-        "## Per-requirement audit\n\n"
-        "```json\n"
-        f"{json.dumps(verdict.get('per_requirement', []), indent=2)}\n"
-        "```\n\n"
-        "## What to do\n\n"
-        "1. Read each missing requirement above.\n"
-        "2. Update results.json so that each must_pass requirement is satisfied — "
-        "add the missing numbers, fix the artifacts, write the discussion text.\n"
-        "3. Keep the canonical results.json schema unchanged "
-        "(primary_metric, metrics, hypotheses, summary, structured_results).\n"
-        "4. After this rerun, the requirements judge will fire ONE more time. "
-        "If must_pass items are still unmet, the pipeline proceeds to "
-        "paper-writing with a `requirements_unmet` flag.\n"
-    )
-    out = run_dir / "REPAIR_PROMPT.md"
-    out.write_text(body, encoding="utf-8")
-    # Also drop a copy into the live stage-12 workspace as a backup for runs
-    # that don't go through the rollback machinery (e.g. if a future code path
-    # invokes the gate without triggering ``_version_rollback_stages``).
-    sandbox_ws = run_dir / "stage-12" / "runs" / "workspace" / "sandbox"
-    if sandbox_ws.is_dir():
-        try:
-            (sandbox_ws / "REPAIR_PROMPT.md").write_text(body, encoding="utf-8")
-        except OSError:
-            pass
-    return out
-
-
 def _format_agent_decision_md(
     verdict: dict[str, object],
     decision: str,
@@ -1195,14 +1125,7 @@ def _format_agent_decision_md(
         f"(retry_count={retry_count}, rerun_triggered={rerun_triggered})",
         "",
     ]
-    if rerun_triggered:
-        lines += [
-            "Requirements unmet — REPAIR_PROMPT.md written to stage-12 sandbox "
-            "workspace; pipeline rolls back to HARNESS_SUBMIT_AND_COLLECT to give the agent "
-            "a final chance to satisfy must_pass items.",
-            "",
-        ]
-    elif verdict.get("verdict") == "partial":
+    if verdict.get("verdict") == "partial":
         lines += [
             "All must_pass requirements met; some optional requirements remain "
             "unmet.  Proceeding to paper-writing.",
@@ -1210,7 +1133,7 @@ def _format_agent_decision_md(
         ]
     elif verdict.get("verdict") == "reject":
         lines += [
-            "Requirements unmet AND retry budget exhausted — proceeding to "
+            "Requirements unmet — proceeding to "
             "paper-writing with `requirements_unmet=true` flag.  Downstream "
             "stages should surface this caveat in the writeup.",
             "",
@@ -1250,8 +1173,7 @@ def _agent_requirements_decision(
     Returns ``None`` when there are no manifest requirements, when the LLM
     is unavailable, or when the gate decides to fall through to the
     standard decision logic.  Otherwise returns a fully-formed
-    :class:`StageResult` with ``decision`` set to ``refine`` (rerun) or
-    ``proceed``.
+    :class:`StageResult` with ``decision`` set to ``proceed``.
     """
     requirements = _read_requirements_from_manifest(run_dir)
     if not requirements:
@@ -1269,13 +1191,8 @@ def _agent_requirements_decision(
 
     retry_count = _read_retry_count(run_dir)
     rerun_triggered = False
-    if verdict.get("verdict") == "reject" and retry_count < _REQUIREMENTS_MAX_RETRIES:
-        _write_repair_prompt(run_dir, str(verdict.get("delta_feedback") or ""), verdict)
-        retry_count = _bump_retry_count(run_dir)
-        rerun_triggered = True
-        decision = "refine"
-    else:
-        decision = "proceed"
+    decision = "proceed"
+    requirements_unmet = verdict.get("verdict") == "reject"
 
     decision_md = _format_agent_decision_md(verdict, decision, retry_count, rerun_triggered)
     (stage_dir / "decision.md").write_text(decision_md, encoding="utf-8")
@@ -1284,7 +1201,7 @@ def _agent_requirements_decision(
         "verdict": verdict,
         "retry_count": retry_count,
         "rerun_triggered": rerun_triggered,
-        "max_retries": _REQUIREMENTS_MAX_RETRIES,
+        "requirements_unmet": requirements_unmet,
         "generated": _utcnow_iso(),
         "source": "agent_requirements_gate",
     }
@@ -1296,9 +1213,8 @@ def _agent_requirements_decision(
         json.dumps(verdict, indent=2), encoding="utf-8"
     )
     logger.info(
-        "Agent requirements gate: verdict=%s, decision=%s, retry=%d/%d, rerun=%s",
-        verdict.get("verdict"), decision, retry_count, _REQUIREMENTS_MAX_RETRIES,
-        rerun_triggered,
+        "Agent requirements gate: verdict=%s, decision=%s, requirements_unmet=%s",
+        verdict.get("verdict"), decision, requirements_unmet,
     )
     return StageResult(
         stage=Stage.RESEARCH_DECISION,
@@ -1345,10 +1261,9 @@ def _execute_research_decision(
                     f"Sufficient for full paper: NO\n"
                     f"Issues found: {', '.join(_deficiency_types)}\n\n"
                     "IMPORTANT: The experiment has significant issues. "
-                    "If REFINE is chosen, a structured repair prompt is available "
-                    "at repair_prompt.txt with specific fixes for identified issues.\n"
-                    "If the same issues persist after 2+ REFINE cycles, choose PROCEED "
-                    "with appropriate quality caveats.\n"
+                    "Stage 15 may choose PIVOT for paper-level hypothesis changes "
+                    "or PROCEED with appropriate quality caveats. Experiment-level "
+                    "repair routing is handled before this stage.\n"
                 )
                 logger.info(
                     "Stage 15: Injected experiment diagnosis — mode=%s, issues=%s",
@@ -1357,8 +1272,8 @@ def _execute_research_decision(
         except (json.JSONDecodeError, OSError):
             pass
 
-    # Improvement C: Check ablation quality — if >50% trivial, push REFINE
-    _ablation_refine_hint = ""
+    # Improvement C: Check ablation quality and surface caveats to Stage 15.
+    _ablation_quality_hint = ""
     # BUG-DA8-16: Prefer experiment_summary_best.json (promoted best) over
     # alphabetically-last stage-14* (which could be a stale versioned dir)
     _exp_sum_path = run_dir / "experiment_summary_best.json"
@@ -1376,14 +1291,19 @@ def _execute_research_decision(
                 _trivial_count = sum(1 for w in _abl_warnings if "ineffective" in w.lower() or "trivial" in w.lower())
                 _total_abl = max(1, len(_abl_warnings))
                 if _trivial_count / _total_abl > 0.5:
-                    _ablation_refine_hint = (
+                    _ablation_quality_hint = (
                         "\n\n## ABLATION QUALITY ASSESSMENT (CRITICAL)\n"
-                        f"STRONG RECOMMENDATION: Choose REFINE.\n"
                         f"{_trivial_count}/{_total_abl} ablations show <2% difference from baseline "
                         f"(trivially similar). This means the ablation design is broken.\n"
+                        "Surface this limitation in the paper decision: PIVOT if the "
+                        "hypothesis is unsupported, otherwise PROCEED with caveats.\n"
                         "Warnings:\n" + "\n".join(f"- {w}" for w in _abl_warnings) + "\n"
                     )
-                    logger.warning("C: %d/%d ablations trivial → recommending REFINE", _trivial_count, _total_abl)
+                    logger.warning(
+                        "C: %d/%d ablations trivial; surfacing Stage 15 quality caveat",
+                        _trivial_count,
+                        _total_abl,
+                    )
         except Exception:  # noqa: BLE001
             pass
 
@@ -1391,7 +1311,7 @@ def _execute_research_decision(
         _pm = prompts or PromptManager()
         _overlay = _get_evolution_overlay(run_dir, "research_decision")
         sp = _pm.for_stage("research_decision", evolution_overlay=_overlay, analysis=analysis)
-        _user = sp.user + _degenerate_hint + _diagnosis_hint + _ablation_refine_hint
+        _user = sp.user + _degenerate_hint + _diagnosis_hint + _ablation_quality_hint
         resp = _chat_with_prompt(llm, sp.system, _user)
         decision_md = resp.content
     else:

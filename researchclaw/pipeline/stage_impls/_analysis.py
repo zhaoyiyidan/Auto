@@ -31,6 +31,130 @@ from researchclaw.prompts import PromptManager
 logger = logging.getLogger(__name__)
 
 
+def _load_execution_records(run_dir: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for path in sorted(run_dir.glob("stage-*/execution_record.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            records.append(payload)
+    return records
+
+
+def _load_workspace_registry(run_dir: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for path in sorted(run_dir.glob("stage-*/workspace_experiment_registry.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                records.append(payload)
+    return records
+
+
+def _best_execution(
+    records: list[dict[str, Any]],
+    *,
+    primary_metric: str,
+    metric_direction: str,
+) -> dict[str, Any]:
+    best: dict[str, Any] = {}
+    best_value: float | None = None
+    for record in records:
+        metrics = record.get("metrics", {})
+        value = _numeric_metric(metrics.get(primary_metric) if isinstance(metrics, dict) else None)
+        if value is None:
+            continue
+        if best_value is None:
+            best = record
+            best_value = value
+        elif metric_direction == "maximize" and value > best_value:
+            best = record
+            best_value = value
+        elif metric_direction == "minimize" and value < best_value:
+            best = record
+            best_value = value
+    return best or (records[0] if records else {})
+
+
+def _numeric_metric(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _metrics_summary(records: list[dict[str, Any]]) -> dict[str, dict[str, float | int]]:
+    values: dict[str, list[float]] = {}
+    for record in records:
+        metrics = record.get("metrics", {})
+        if not isinstance(metrics, dict):
+            continue
+        for key, value in metrics.items():
+            numeric = _numeric_metric(value)
+            if numeric is not None:
+                values.setdefault(str(key), []).append(numeric)
+    return {
+        key: {
+            "min": min(items),
+            "max": max(items),
+            "mean": sum(items) / len(items),
+            "count": len(items),
+        }
+        for key, items in sorted(values.items())
+    }
+
+
+def _merge_result_hashes(
+    execution_records: list[dict[str, Any]],
+    registry_records: list[dict[str, Any]],
+) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for record in [*registry_records, *execution_records]:
+        payload = record.get("result_hashes", {})
+        if isinstance(payload, dict):
+            hashes.update({str(k): str(v) for k, v in payload.items()})
+    return hashes
+
+
+def _unique_commits(
+    execution_records: list[dict[str, Any]],
+    registry_records: list[dict[str, Any]],
+) -> list[str]:
+    commits: list[str] = []
+    for record in [*registry_records, *execution_records]:
+        for key in ("agent_commit_sha", "code_commit"):
+            value = str(record.get(key, ""))
+            if value and value not in commits:
+                commits.append(value)
+    return commits
+
+
+def _workspace_analysis_markdown(
+    summary: dict[str, Any],
+    provenance: dict[str, Any],
+) -> str:
+    metric = summary.get("primary_metric", "primary_metric")
+    best = summary.get("best_metric")
+    commit = summary.get("best_commit", "")
+    return (
+        "# Result Analysis\n\n"
+        f"- Primary metric: `{metric}`\n"
+        f"- Best metric: `{best}`\n"
+        f"- Best commit: `{commit}`\n"
+        f"- Runs analyzed: `{summary.get('n_runs', 0)}`\n"
+        f"- Result artifacts hashed: `{len(provenance.get('result_hashes', {}))}`\n"
+    )
+
+
 def _execute_result_analysis(
     stage_dir: Path,
     run_dir: Path,
@@ -40,6 +164,60 @@ def _execute_result_analysis(
     llm: LLMClient | None = None,
     prompts: PromptManager | None = None,
 ) -> StageResult:
+    _ = adapters, llm, prompts
+    execution_records = _load_execution_records(run_dir)
+    registry_records = _load_workspace_registry(run_dir)
+    result_hashes = _merge_result_hashes(execution_records, registry_records)
+    primary_metric = config.experiment.metric_key
+    metric_direction = config.experiment.metric_direction
+    best_execution = _best_execution(
+        execution_records,
+        primary_metric=primary_metric,
+        metric_direction=metric_direction,
+    )
+    best_metric = (
+        _numeric_metric(best_execution.get("metrics", {}).get(primary_metric))
+        if best_execution
+        else None
+    )
+    best_commit = str(best_execution.get("code_commit", "")) if best_execution else ""
+    metrics_summary = _metrics_summary(execution_records)
+    summary = {
+        "primary_metric": primary_metric,
+        "metric_direction": metric_direction,
+        "best_metric": best_metric,
+        "best_commit": best_commit,
+        "metrics_summary": metrics_summary,
+        "iterations": len([r for r in registry_records if int(r.get("stage", 0)) == 13]),
+        "n_runs": len(execution_records),
+        "best_run": best_execution,
+        "runs": execution_records,
+        "condition_summaries": {},
+    }
+    provenance = {
+        "base_sha": str(registry_records[0].get("base_sha", "")) if registry_records else "",
+        "commits": _unique_commits(execution_records, registry_records),
+        "session_name": str(registry_records[0].get("session_name", "")) if registry_records else "",
+        "result_hashes": result_hashes,
+        "registry_records": registry_records,
+    }
+    analysis_md = _workspace_analysis_markdown(summary, provenance)
+    (stage_dir / "analysis.md").write_text(analysis_md, encoding="utf-8")
+    (stage_dir / "experiment_summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    (stage_dir / "provenance.json").write_text(
+        json.dumps(provenance, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return StageResult(
+        stage=Stage.RESULT_ANALYSIS,
+        status=StageStatus.DONE,
+        artifacts=("analysis.md", "experiment_summary.json", "provenance.json"),
+        evidence_refs=("stage-14/analysis.md", "stage-14/provenance.json"),
+    )
+
     # --- Collect experiment data ---
     exp_data = _collect_experiment_results(
         run_dir,

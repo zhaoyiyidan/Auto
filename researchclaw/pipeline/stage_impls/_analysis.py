@@ -1187,6 +1187,17 @@ def _agent_requirements_decision(
         verdict.get("verdict"), decision, retry_count, _REQUIREMENTS_MAX_RETRIES,
         rerun_triggered,
     )
+    try:
+        from researchclaw.pipeline.hypothesis_tree import record_stage15_decision
+
+        record_stage15_decision(
+            run_dir, decision, decision_md, human_edited=False
+        )
+    except Exception:
+        logger.warning(
+            "Failed to record hypothesis tree decision (agent gate)",
+            exc_info=True,
+        )
     return StageResult(
         stage=Stage.RESEARCH_DECISION,
         status=StageStatus.DONE,
@@ -1346,6 +1357,14 @@ Generated: {_utcnow_iso()}
         logger.warning("T3.1: Decision quality warnings: %s", _quality_warnings)
 
     logger.info("Research decision: %s", decision)
+    try:
+        from researchclaw.pipeline.hypothesis_tree import record_stage15_decision
+
+        record_stage15_decision(
+            run_dir, decision, decision_md, human_edited=False
+        )
+    except Exception:
+        logger.warning("Failed to record hypothesis tree decision", exc_info=True)
 
     return StageResult(
         stage=Stage.RESEARCH_DECISION,

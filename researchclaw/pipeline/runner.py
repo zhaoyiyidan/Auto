@@ -659,6 +659,49 @@ def execute_pipeline(
 
         if result.status == StageStatus.DONE:
             _write_checkpoint(run_dir, stage, run_id, adapters=adapters)
+            if stage == Stage.HYPOTHESIS_GEN:
+                try:
+                    from researchclaw.pipeline.hypothesis_tree import (
+                        finalize_after_stage8,
+                    )
+
+                    hypotheses_md = _read_stage_artifact(
+                        run_dir, Stage.HYPOTHESIS_GEN, "hypotheses.md"
+                    )
+                    new_node_id = finalize_after_stage8(run_dir, hypotheses_md)
+                    if new_node_id:
+                        logger.info(
+                            "Hypothesis tree: created node %s", new_node_id
+                        )
+                except Exception:
+                    logger.warning(
+                        "Hypothesis tree finalize failed (non-blocking)",
+                        exc_info=True,
+                    )
+                try:
+                    from researchclaw.pipeline.hypothesis_node_tree import (
+                        rebuild_node_tree,
+                    )
+
+                    rebuild_node_tree(run_dir)
+                except Exception:
+                    logger.warning(
+                        "Hypothesis node_tree rebuild failed (non-blocking)",
+                        exc_info=True,
+                    )
+
+        if stage == Stage.RESEARCH_DECISION and result.status == StageStatus.DONE:
+            try:
+                from researchclaw.pipeline.hypothesis_cycle_archive import (
+                    archive_current_hypothesis_cycle,
+                )
+
+                archive_current_hypothesis_cycle(run_dir, decision=result.decision)
+            except Exception:
+                logger.warning(
+                    "Hypothesis cycle archive failed (non-blocking)",
+                    exc_info=True,
+                )
 
         # ── Stop after to_stage if specified ──
         if to_stage is not None and stage == to_stage:
@@ -715,6 +758,17 @@ def execute_pipeline(
                 # empty data — an earlier iteration may have real metrics.
                 _clear_extension_context(run_dir)
                 _promote_best_stage14(run_dir, config)
+                try:
+                    from researchclaw.pipeline.hypothesis_tree import (
+                        record_forced_proceed,
+                    )
+
+                    record_forced_proceed(run_dir, reason="empty_metrics")
+                except Exception:
+                    logger.warning(
+                        "Hypothesis tree forced-PROCEED update failed",
+                        exc_info=True,
+                    )
             elif pivot_count < MAX_DECISION_PIVOTS:
                 rollback_target = DECISION_ROLLBACK[result.decision]
                 # Agent-based modes: REFINE means re-run the agent atomically.
@@ -818,6 +872,17 @@ def execute_pipeline(
                 # BUG-205: After forced PROCEED, promote the BEST stage-14
                 # experiment summary across all REFINE iterations.
                 _promote_best_stage14(run_dir, config)
+                try:
+                    from researchclaw.pipeline.hypothesis_tree import (
+                        record_forced_proceed,
+                    )
+
+                    record_forced_proceed(run_dir, reason="max_pivots")
+                except Exception:
+                    logger.warning(
+                        "Hypothesis tree forced-PROCEED update failed",
+                        exc_info=True,
+                    )
 
         # --- HITL: Handle abort decision ---
         if result.decision == "abort":

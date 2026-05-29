@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 
 @dataclass(frozen=True)
 class ResourceSpec:
@@ -152,6 +154,77 @@ class ManifestValidation:
             errors=list(data.get("errors") or []),
             checked_at=str(data.get("checked_at", "")),
         )
+
+
+@dataclass(frozen=True)
+class TaskSpec:
+    """Stage 9 code-agent task specification."""
+
+    workspace: str
+    objective: str
+    constraints: list[str]
+    primary_metric: str
+    metric_direction: str
+    allowed_scope: list[str]
+    forbidden_scope: list[str]
+    expected_outputs: list[str]
+    schema_version: str = "researchclaw.task_spec.v1"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.workspace, str) or not self.workspace.strip():
+            raise TypeError("TaskSpec.workspace must be a non-empty string")
+        if not isinstance(self.objective, str) or not self.objective.strip():
+            raise TypeError("TaskSpec.objective must be a non-empty string")
+        if self.metric_direction not in {"maximize", "minimize"}:
+            raise ValueError("TaskSpec.metric_direction must be 'maximize' or 'minimize'")
+        for name in (
+            "constraints",
+            "allowed_scope",
+            "forbidden_scope",
+            "expected_outputs",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, list) or not all(
+                isinstance(item, str) for item in value
+            ):
+                raise TypeError(f"TaskSpec.{name} must be a list[str]")
+
+    def to_yaml(self) -> str:
+        payload = {
+            "schema_version": self.schema_version,
+            "workspace": self.workspace,
+            "objective": self.objective,
+            "constraints": self.constraints,
+            "primary_metric": self.primary_metric,
+            "metric_direction": self.metric_direction,
+            "allowed_scope": self.allowed_scope,
+            "forbidden_scope": self.forbidden_scope,
+            "expected_outputs": self.expected_outputs,
+        }
+        return yaml.safe_dump(payload, sort_keys=False)
+
+    @classmethod
+    def from_yaml(cls, text: str) -> TaskSpec:
+        data = yaml.safe_load(text) or {}
+        if not isinstance(data, dict):
+            raise TypeError("TaskSpec YAML must contain an object")
+        return cls(
+            workspace=str(data.get("workspace", "")),
+            objective=str(data.get("objective", "")),
+            constraints=list(data.get("constraints") or []),
+            primary_metric=str(data.get("primary_metric", "primary_metric")),
+            metric_direction=str(data.get("metric_direction", "maximize")),
+            allowed_scope=list(data.get("allowed_scope") or []),
+            forbidden_scope=list(data.get("forbidden_scope") or []),
+            expected_outputs=list(data.get("expected_outputs") or []),
+            schema_version=str(
+                data.get("schema_version") or "researchclaw.task_spec.v1"
+            ),
+        )
+
+    @classmethod
+    def from_path(cls, path: Path) -> TaskSpec:
+        return cls.from_yaml(path.read_text(encoding="utf-8"))
 
 
 @dataclass(frozen=True)

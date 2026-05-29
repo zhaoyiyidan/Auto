@@ -51,6 +51,7 @@ notifications:
   #     allowed_actions: ["approve", "reject", "abort", "skip", "inject"]
   #     allowed_senders: []
   #     notify: true
+  #     read_replies: true
 
 knowledge_base:
   backend: "markdown"

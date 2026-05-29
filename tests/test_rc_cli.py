@@ -307,6 +307,45 @@ def test_lark_listen_missing_run_dir_returns_one(
     assert "run directory not found" in captured.err
 
 
+def test_lark_listen_read_replies_false_does_not_require_chat_id(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir()
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+project:
+  name: demo
+research:
+  topic: Synthetic benchmark research
+runtime:
+  timezone: UTC
+notifications:
+  channel: lark
+  lark:
+    enabled: true
+    hitl:
+      enabled: true
+      read_replies: false
+knowledge_base:
+  backend: markdown
+  root: kb
+openclaw_bridge: {}
+llm:
+  provider: acp
+  acp:
+    agent: codex
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    code = rc_cli.cmd_lark_listen(
+        argparse.Namespace(run_dir=str(run_dir), config=str(config_path), once=True)
+    )
+
+    assert code == 0
+
+
 def test_lark_listen_dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     captured = {}
 

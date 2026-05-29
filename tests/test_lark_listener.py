@@ -58,6 +58,7 @@ class _RaisingReader:
 def _config(
     *,
     notify: bool = True,
+    read_replies: bool = True,
     allowed_actions: tuple[str, ...] = (),
     allowed_senders: tuple[str, ...] = (),
 ) -> LarkHITLConfig:
@@ -65,6 +66,7 @@ def _config(
         enabled=True,
         chat_id="oc_abc123",
         notify=notify,
+        read_replies=read_replies,
         allowed_actions=allowed_actions,
         allowed_senders=allowed_senders,
     )
@@ -183,6 +185,41 @@ def test_notify_false_skips_notification(tmp_path: Path):
     assert listener.poll_once() is PollResult.NO_REPLY
     assert notifier.calls == []
     assert reader.calls == [("oc_abc123", "2026-05-29T12:00:00+00:00")]
+
+
+def test_read_replies_false_sends_notification_without_reading_messages(tmp_path: Path):
+    _write_waiting(tmp_path)
+    reader = _FakeReader([[_message("approve")]])
+    notifier = _FakeNotifier()
+    listener = LarkHITLListener(
+        reader=reader,
+        notifier=notifier,
+        run_dir=tmp_path,
+        config=_config(read_replies=False),
+        run_id="run-1",
+    )
+
+    assert listener.poll_once() is PollResult.NOTIFIED_ONLY
+    assert len(notifier.calls) == 1
+    assert reader.calls == []
+    assert not (tmp_path / "hitl" / "response.json").exists()
+
+
+def test_read_replies_false_does_not_respond_on_later_poll(tmp_path: Path):
+    _write_waiting(tmp_path)
+    reader = _FakeReader([[_message("approve")], [_message("approve")]])
+    listener = LarkHITLListener(
+        reader=reader,
+        notifier=_FakeNotifier(),
+        run_dir=tmp_path,
+        config=_config(read_replies=False),
+        run_id="run-1",
+    )
+
+    assert listener.poll_once() is PollResult.NOTIFIED_ONLY
+    assert listener.poll_once() is PollResult.NO_REPLY
+    assert reader.calls == []
+    assert not (tmp_path / "hitl" / "response.json").exists()
 
 
 def test_valid_approve_writes_response(tmp_path: Path):

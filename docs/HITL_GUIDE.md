@@ -573,6 +573,7 @@ notifications:
       allowed_actions: [approve, reject, abort, skip, inject]
       allowed_senders: []
       notify: true
+      read_replies: true
 ```
 
 Reply grammar:
@@ -594,6 +595,9 @@ Security notes:
 - Use `allowed_senders` to restrict who can resume a run from a group chat.
 - Use `allowed_actions` to narrow chat-driven actions even when the waiting
   state allows more.
+- Set `read_replies: false` to send Feishu notifications only. In that mode the
+  listener does not poll chat messages, and the paused pipeline must be resumed
+  with `researchclaw approve <run_dir>` or `researchclaw attach <run_dir>`.
 - Direct 1:1 DM support is not included in this listener; use a group `chat_id`
   that contains the bot.
 

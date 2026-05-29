@@ -2168,7 +2168,7 @@ def cmd_lark_listen(args: argparse.Namespace) -> int:
 
     lark_config = rc_config.notifications.lark
     hitl_config = lark_config.hitl
-    if not hitl_config.chat_id:
+    if hitl_config.read_replies and not hitl_config.chat_id:
         print("Error: notifications.lark.hitl.chat_id is required", file=sys.stderr)
         return 1
 

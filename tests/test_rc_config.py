@@ -488,6 +488,7 @@ def test_lark_hitl_defaults_when_absent(tmp_path: Path):
     assert hitl.allowed_actions == ()
     assert hitl.allowed_senders == ()
     assert hitl.notify is True
+    assert hitl.read_replies is True
 
 
 def test_lark_hitl_parsed_from_yaml(tmp_path: Path):
@@ -501,6 +502,7 @@ def test_lark_hitl_parsed_from_yaml(tmp_path: Path):
             "allowed_actions": ["approve", "reject", "abort"],
             "allowed_senders": ["ou_reviewer"],
             "notify": False,
+            "read_replies": False,
         },
     }
 
@@ -514,6 +516,7 @@ def test_lark_hitl_parsed_from_yaml(tmp_path: Path):
     assert hitl.allowed_actions == ("approve", "reject", "abort")
     assert hitl.allowed_senders == ("ou_reviewer",)
     assert hitl.notify is False
+    assert hitl.read_replies is False
 
 
 def test_lark_hitl_allowed_actions_and_senders_coerced_to_tuple(tmp_path: Path):

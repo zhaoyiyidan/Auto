@@ -181,6 +181,7 @@ class LarkHITLConfig:
     allowed_actions: tuple[str, ...] = ()
     allowed_senders: tuple[str, ...] = ()
     notify: bool = True
+    read_replies: bool = True
 
 
 @dataclass(frozen=True)
@@ -1604,6 +1605,7 @@ def _parse_lark_hitl_config(data: dict[str, Any]) -> LarkHITLConfig:
         allowed_actions=_parse_str_tuple(data.get("allowed_actions")),
         allowed_senders=_parse_str_tuple(data.get("allowed_senders")),
         notify=bool(data.get("notify", True)),
+        read_replies=bool(data.get("read_replies", True)),
     )
 
 

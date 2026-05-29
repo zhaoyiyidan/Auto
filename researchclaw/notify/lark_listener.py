@@ -99,6 +99,9 @@ class LarkHITLListener:
             self._notified_keys.add(key)
             notified_this_tick = True
 
+        if not self.config.read_replies:
+            return PollResult.NOTIFIED_ONLY if notified_this_tick else PollResult.NO_REPLY
+
         if self.config.notify and key not in self._reply_after_ms:
             return PollResult.NOTIFIED_ONLY if notified_this_tick else PollResult.NO_REPLY
 

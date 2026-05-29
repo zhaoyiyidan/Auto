@@ -255,7 +255,6 @@ class ExperimentRepairConfig:
     max_cycles: int = 3
     min_completion_rate: float = 0.5  # At least 50% conditions must complete
     min_conditions: int = 2  # At least 2 conditions for a valid experiment
-    use_opencode: bool = True  # Use OpenCode agent for repairs (vs LLM prompt)
     timeout_sec_per_cycle: int = 600  # Max time per repair cycle
 
 
@@ -967,7 +966,6 @@ def _parse_experiment_repair_config(data: dict[str, Any]) -> ExperimentRepairCon
         max_cycles=_safe_int(data.get("max_cycles"), 3),
         min_completion_rate=_safe_float(data.get("min_completion_rate"), 0.5),
         min_conditions=_safe_int(data.get("min_conditions"), 2),
-        use_opencode=bool(data.get("use_opencode", True)),
         timeout_sec_per_cycle=_safe_int(data.get("timeout_sec_per_cycle"), 600),
     )
 

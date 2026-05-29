@@ -72,8 +72,6 @@ from researchclaw.pipeline._helpers import (  # noqa: E402
     _default_quality_report,
     _detect_runtime_issues,
     _ensure_sandbox_deps,
-    _extract_code_block,
-    _extract_multi_file_blocks,
     _extract_paper_title,
     _extract_topic_keywords,
     _extract_yaml_block,

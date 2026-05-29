@@ -103,11 +103,12 @@ class TestBuildRepairPrompt:
         prompt = build_repair_prompt(diag, original_code={"big.py": long_code})
         assert "truncated" in prompt
 
-    def test_output_format_section(self):
+    def test_workspace_agent_instruction_section(self):
         diag = ExperimentDiagnosis()
         prompt = build_repair_prompt(diag, original_code={"main.py": "pass"})
-        assert "OUTPUT FORMAT" in prompt
-        assert "filename.py" in prompt
+        assert "WORKSPACE AGENT INSTRUCTIONS" in prompt
+        assert "run_manifest.json" in prompt
+        assert "Do not submit" in prompt
 
 
 class TestWorkspaceAgentRepairWiring:

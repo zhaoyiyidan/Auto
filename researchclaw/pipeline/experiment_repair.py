@@ -1,11 +1,9 @@
-"""Experiment Repair Loop — diagnose, fix, and re-run experiments.
+"""Experiment Repair Loop — diagnose and delegate fixes to the workspace agent.
 
 Orchestrates the cycle:
   1. Diagnose failures (``experiment_diagnosis.py``)
-  2. Generate fixes via OpenCode or LLM
-  3. Re-run experiment in sandbox/Docker
-  4. Re-assess quality
-  5. Repeat until sufficient or max cycles reached
+  2. Send a targeted repair prompt to the persistent workspace code agent
+  3. Let the normal manifest validation and submitter stages execute results
 
 Integrates between Stage 14 (result_analysis) and Stage 15 (research_decision).
 """
@@ -14,7 +12,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import time as _time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,21 +25,11 @@ from researchclaw.pipeline.experiment_diagnosis import (
     assess_experiment_quality,
     diagnose_experiment,
 )
+from researchclaw.pipeline._helpers import _parse_metrics_from_stdout
 
 logger = logging.getLogger(__name__)
 
 MAX_REPAIR_CYCLES = 3
-
-# Regex for extracting ```python filename.py\n...\n``` blocks from LLM output
-_CODE_BLOCK_RE = re.compile(
-    r"```(?:python)?\s*([\w./\\-]+\.(?:py|txt))\s*\n(.*?)```",
-    re.DOTALL,
-)
-# Fallback: unnamed python blocks
-_UNNAMED_BLOCK_RE = re.compile(
-    r"```python\s*\n(.*?)```",
-    re.DOTALL,
-)
 
 
 @dataclass
@@ -97,7 +84,7 @@ def build_repair_prompt(
     experiment_plan: dict | None = None,
     time_budget_sec: int = 2400,
 ) -> str:
-    """Build a structured repair prompt for OpenCode or LLM.
+    """Build a structured repair prompt for the workspace code agent.
 
     Parameters
     ----------
@@ -113,7 +100,7 @@ def build_repair_prompt(
     Returns
     -------
     str
-        A formatted prompt suitable for OpenCode or code-generation LLM.
+        A formatted prompt suitable for the persistent workspace code agent.
     """
     sections: list[str] = []
 
@@ -171,18 +158,14 @@ def build_repair_prompt(
         f"- The code must run without errors for at least 1 seed per condition\n"
     )
 
-    # Output format instruction
+    # Workspace-agent instructions
     sections.append(
-        "\n## OUTPUT FORMAT\n"
-        "Output each fixed file using this format:\n"
-        "```python filename.py\n"
-        "<fixed code>\n"
-        "```\n"
-        "Include ALL files (main.py, requirements.txt, setup.py if needed).\n"
-        "For requirements.txt, use:\n"
-        "```python requirements.txt\n"
-        "<package list>\n"
-        "```\n"
+        "\n## WORKSPACE AGENT INSTRUCTIONS\n"
+        "- Modify the configured workspace repository directly.\n"
+        "- Commit the code changes with git.\n"
+        "- Update run_manifest.json so the harness can submit the experiment.\n"
+        "- Do not submit the job yourself; the ResearchClaw harness owns submission.\n"
+        "- Do not return pasted source files as markdown code blocks.\n"
     )
 
     return "\n".join(sections)
@@ -276,20 +259,19 @@ def run_repair_loop(
     config: Any,
     run_id: str = "",
 ) -> ExperimentRepairResult:
-    """Execute the full experiment repair loop.
+    """Execute a workspace-native repair request.
 
-    After Stage 14 diagnosis finds quality issues:
-    1. Load current experiment code
-    2. For each cycle: diagnose → LLM/OpenCode fix → re-run in sandbox → re-assess
-    3. Select best results across all cycles
-    4. Return structured result
+    After Stage 14 diagnosis finds quality issues, this function builds one
+    targeted prompt for the persistent workspace code agent. It does not parse
+    generated code, copy experiment directories, or execute jobs; the normal
+    manifest validation and harness stages own those steps.
 
     Parameters
     ----------
     run_dir:
         Path to the pipeline run directory (contains stage-* subdirs).
     config:
-        RCConfig instance with experiment and LLM settings.
+        RCConfig instance with experiment and workspace-agent settings.
     run_id:
         Pipeline run ID for logging.
 
@@ -318,9 +300,15 @@ def run_repair_loop(
             final_assessment=qa, best_experiment_summary=summary,
         )
 
-    # Load experiment code
+    workspace_enabled = getattr(
+        getattr(config.experiment, "workspace_agent", None),
+        "enabled",
+        False,
+    )
+
+    # Load legacy code snapshot only as extra context for the repair prompt.
     code = _load_experiment_code(run_dir)
-    if not code:
+    if not code and not workspace_enabled:
         logger.warning("[%s] Repair loop: no experiment code found", run_id)
         return ExperimentRepairResult(
             success=False, total_cycles=0, final_mode=qa.mode,
@@ -332,20 +320,9 @@ def run_repair_loop(
     # Load experiment plan
     plan = _load_experiment_plan(run_dir)
 
-    # Create LLM client
-    try:
-        from researchclaw.llm import create_llm_client
-        llm = create_llm_client(config)
-    except Exception as exc:
-        logger.error("[%s] Repair loop: cannot create LLM client: %s", run_id, exc)
-        return ExperimentRepairResult(
-            success=False, total_cycles=0, final_mode=qa.mode,
-        )
-
     cycle_history: list[RepairCycleResult] = []
     best_summary = summary
     best_mode = qa.mode
-    best_updated = False
     max_cycles = min(repair_cfg.max_cycles, MAX_REPAIR_CYCLES)
     loop_start = _time.monotonic()
     prior_diagnoses: list[dict] = []
@@ -371,9 +348,9 @@ def run_repair_loop(
             time_budget_sec=config.experiment.time_budget_sec,
         )
 
-        # 3. Get fixed code via LLM (with OpenCode fallback)
+        # 3. Ask the workspace code agent to modify the repository.
         fixed_code = _get_repaired_code(
-            repair_prompt, code, llm, config, run_dir, cycle,
+            repair_prompt, code, None, config, run_dir, cycle,
         )
 
         if not fixed_code:
@@ -386,105 +363,26 @@ def run_repair_loop(
             logger.warning("[%s] Repair cycle %d: code generation failed", run_id, cycle)
             break
 
-        # 4. Save fixed code to versioned directory
-        repair_dir = run_dir / f"stage-14_repair_v{cycle}"
-        repair_dir.mkdir(parents=True, exist_ok=True)
-        exp_dir = repair_dir / "experiment"
-        exp_dir.mkdir(parents=True, exist_ok=True)
-
-        for fname, content in fixed_code.items():
-            (exp_dir / fname).write_text(content, encoding="utf-8")
-        logger.info(
-            "[%s] Repair cycle %d: saved %d files to %s",
-            run_id, cycle, len(fixed_code), exp_dir,
-        )
-
-        # 5. Re-run experiment in sandbox
-        sandbox_result = _run_experiment_in_sandbox(
-            exp_dir, config, repair_dir,
-            timeout_sec=repair_cfg.timeout_sec_per_cycle,
-        )
-
-        if sandbox_result is None:
-            cycle_result = RepairCycleResult(
-                cycle=cycle, diagnosis=diag,
-                repair_applied=True,
-                repair_description=f"Fixed {len(fixed_code)} files",
-                error="Sandbox execution failed",
-            )
-            cycle_history.append(cycle_result)
-            logger.warning("[%s] Repair cycle %d: sandbox execution failed", run_id, cycle)
-            continue
-
-        # 6. Build new experiment summary from sandbox results
-        new_summary = _build_experiment_summary_from_run(sandbox_result, fixed_code)
-        (repair_dir / "experiment_summary.json").write_text(
-            json.dumps(new_summary, indent=2), encoding="utf-8"
-        )
-
-        # 7. Re-assess quality
-        new_qa = assess_experiment_quality(new_summary, min_conditions=_min_cond)
-        new_score = _summary_quality_score(new_summary)
-        old_score = _summary_quality_score(best_summary)
-
         cycle_result = RepairCycleResult(
             cycle=cycle,
             diagnosis=diag,
             repair_applied=True,
-            repair_description=(
-                f"Fixed {len(fixed_code)} files; "
-                f"score {old_score:.1f} → {new_score:.1f}; "
-                f"mode: {new_qa.mode.value}"
-            ),
-            new_assessment=new_qa,
+            repair_description="Workspace agent repair requested; rerun stages 11-14 to evaluate results",
         )
         cycle_history.append(cycle_result)
 
-        # Track best
-        if new_score > _summary_quality_score(best_summary):
-            best_summary = new_summary
-            best_mode = new_qa.mode
-            best_updated = True
-
         logger.info(
-            "[%s] Repair cycle %d: score %.1f → %.1f, mode=%s, sufficient=%s",
-            run_id, cycle, old_score, new_score, new_qa.mode.value, new_qa.sufficient,
+            "[%s] Repair cycle %d: workspace agent accepted repair request",
+            run_id, cycle,
         )
-        print(
-            f"[{run_id}] Repair cycle {cycle}: "
-            f"score {old_score:.1f} → {new_score:.1f}, "
-            f"mode={new_qa.mode.value}"
-        )
+        print(f"[{run_id}] Repair cycle {cycle}: workspace agent repair requested")
+        break
 
-        if new_qa.sufficient:
-            logger.info("[%s] Repair successful after %d cycles!", run_id, cycle)
-            print(f"[{run_id}] Experiment repair successful! Mode: {new_qa.mode.value}")
-            return ExperimentRepairResult(
-                success=True,
-                total_cycles=cycle,
-                final_mode=new_qa.mode,
-                final_assessment=new_qa,
-                cycle_history=cycle_history,
-                best_experiment_summary=best_summary,
-            )
-
-        # Update for next cycle
-        code = fixed_code
-        summary = new_summary
-        stdout = sandbox_result.get("stdout", "")
-        stderr = sandbox_result.get("stderr", "")
-
-    # Exhausted all cycles — use best available
     elapsed = _time.monotonic() - loop_start
     logger.info(
-        "[%s] Repair loop completed: %d cycles in %.1fs, best mode=%s",
+        "[%s] Repair loop completed: %d cycles in %.1fs, current mode=%s",
         run_id, len(cycle_history), elapsed, best_mode.value,
     )
-
-    # Promote best summary only if a repair cycle actually improved it
-    if best_updated and best_summary is not summary:
-        best_path = run_dir / "experiment_summary_best.json"
-        best_path.write_text(json.dumps(best_summary, indent=2), encoding="utf-8")
 
     return ExperimentRepairResult(
         success=False,
@@ -609,7 +507,7 @@ def _collect_experiment_output(run_dir: Path) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Helper: get repaired code from LLM or OpenCode
+# Helper: request workspace-native repair
 # ---------------------------------------------------------------------------
 
 
@@ -621,29 +519,19 @@ def _get_repaired_code(
     run_dir: Path,
     cycle: int,
 ) -> dict[str, str] | None:
-    """Get repaired code via OpenCode (if available) or LLM fallback.
+    """Get repaired code via the workspace-native code agent.
 
     Returns merged code dict (current + repaired files) or None on failure.
     """
-    repair_cfg = config.experiment.repair
-
     if getattr(getattr(config.experiment, "workspace_agent", None), "enabled", False):
         result = _repair_via_workspace_agent(
             repair_prompt, current_code, llm, config, run_dir, cycle,
         )
         if result:
             return result
-        logger.info("Workspace-native repair unavailable, falling back to OpenCode/LLM")
+        logger.info("Workspace-native repair unavailable")
 
-    # Try OpenCode first if enabled
-    if repair_cfg.use_opencode and config.experiment.opencode.enabled:
-        result = _repair_via_opencode(repair_prompt, current_code, config, run_dir, cycle)
-        if result:
-            return result
-        logger.info("OpenCode repair unavailable, falling back to LLM")
-
-    # LLM repair
-    return _repair_via_llm(repair_prompt, current_code, llm)
+    return None
 
 
 def _repair_via_workspace_agent(
@@ -654,11 +542,10 @@ def _repair_via_workspace_agent(
     run_dir: Path,
     cycle: int,
 ) -> dict[str, str] | None:
-    """Attempt repair through the workspace-native agent + submitter path."""
+    """Attempt repair through the workspace-native agent implement path."""
     try:
-        from researchclaw.experiment.submitter import create_submitter
         from researchclaw.experiment.workspace_agent import create_workspace_agent
-        from researchclaw.pipeline.workspace_orchestrator import run_workspace_agent_task
+        from researchclaw.pipeline.workspace_orchestrator import run_workspace_agent_implement
 
         workspace_cfg = config.experiment.workspace_agent
         stage_dir = run_dir / f"stage-14-workspace-repair-v{cycle}"
@@ -672,13 +559,11 @@ def _repair_via_workspace_agent(
             f"CURRENT RESEARCHCLAW CODE SNAPSHOT FILES:\n{sorted(current_code.keys())}\n"
         )
         agent = create_workspace_agent(config, llm=llm)
-        submitter = create_submitter(config)
-        result = run_workspace_agent_task(
+        result = run_workspace_agent_implement(
             workspace_path=Path(workspace_cfg.workspace_path),
             run_dir=stage_dir,
             stage=14,
             agent=agent,
-            submitter=submitter,
             prompt=prompt,
             timeout_sec=workspace_cfg.timeout_sec,
             iteration=cycle,
@@ -710,179 +595,11 @@ def _collect_workspace_text_files(workspace: Path) -> dict[str, str]:
     return files
 
 
-def _repair_via_opencode(
-    repair_prompt: str,
-    current_code: dict[str, str],
-    config: Any,
-    run_dir: Path,
-    cycle: int,
-) -> dict[str, str] | None:
-    """Attempt repair via OpenCode agent."""
-    try:
-        from researchclaw.pipeline.opencode_bridge import OpenCodeBridge
-
-        _oc_cfg = config.experiment.opencode
-        bridge = OpenCodeBridge(
-            model=getattr(_oc_cfg, "model", "") or "",
-            llm_base_url=getattr(config.llm, "base_url", "") or "",
-            api_key_env=getattr(config.llm, "api_key_env", "") or "",
-            llm_provider=getattr(config.llm, "provider", "openai-compatible") or "openai-compatible",
-            timeout_sec=getattr(_oc_cfg, "timeout_sec", 600),
-            max_retries=getattr(_oc_cfg, "max_retries", 1),
-            workspace_cleanup=getattr(_oc_cfg, "workspace_cleanup", True),
-        )
-        workspace = run_dir / f"_repair_opencode_v{cycle}"
-        workspace.mkdir(parents=True, exist_ok=True)
-
-        result = bridge.generate(
-            stage_dir=workspace,
-            topic="experiment repair",
-            exp_plan=repair_prompt,
-            metric=getattr(config.experiment, "metric_key", "primary_metric"),
-            time_budget_sec=getattr(config.experiment, "time_budget_sec", 2400),
-        )
-
-        if result.success and result.files:
-            # Merge with current code
-            merged = dict(current_code)
-            merged.update(result.files)
-            logger.info(
-                "OpenCode repair: %d files generated (%d total after merge)",
-                len(result.files), len(merged),
-            )
-            return merged
-
-    except Exception as exc:
-        logger.warning("OpenCode repair failed: %s", exc)
-
-    return None
-
-
-def _repair_via_llm(
-    repair_prompt: str,
-    current_code: dict[str, str],
-    llm: Any,
-) -> dict[str, str] | None:
-    """Repair experiment code via LLM chat."""
-    system = (
-        "You are an expert experiment repair assistant. "
-        "Fix the experiment code based on the diagnosis below. "
-        "Output ONLY the fixed files. For each file, use this exact format:\n\n"
-        "```python filename.py\n"
-        "<complete fixed code>\n"
-        "```\n\n"
-        "Include ALL files that need changes (main.py, requirements.txt, etc.). "
-        "Output the COMPLETE file content, not just the changed parts."
-    )
-
-    try:
-        resp = llm.chat(
-            [{"role": "user", "content": repair_prompt}],
-            system=system,
-        )
-        content = resp.content
-    except Exception as exc:
-        logger.warning("LLM repair call failed: %s", exc)
-        return None
-
-    if not content or not content.strip():
-        logger.warning("LLM repair returned empty response")
-        return None
-
-    # Extract code blocks from response
-    files = _extract_code_blocks(content)
-
-    if not files:
-        logger.warning("LLM repair: no code blocks found in response")
-        return None
-
-    # Merge with current code (only update files that were fixed)
-    merged = dict(current_code)
-    merged.update(files)
-    logger.info(
-        "LLM repair: extracted %d files (%d total after merge)",
-        len(files), len(merged),
-    )
-    return merged
-
-
-def _extract_code_blocks(text: str) -> dict[str, str]:
-    """Extract named code blocks from LLM response.
-
-    Matches patterns like:
-        ```python main.py
-        <code>
-        ```
-    """
-    files: dict[str, str] = {}
-
-    # Try named blocks first
-    for match in _CODE_BLOCK_RE.finditer(text):
-        fname = match.group(1).strip()
-        code = match.group(2).strip()
-        if fname and code:
-            # Normalize filename — strip path prefixes
-            fname = Path(fname).name
-            files[fname] = code
-
-    # If no named blocks, try unnamed and assume main.py
-    if not files:
-        for match in _UNNAMED_BLOCK_RE.finditer(text):
-            code = match.group(1).strip()
-            if code and len(code) > 50:  # Skip tiny snippets
-                files["main.py"] = code
-                break
-
-    return files
-
-
-# ---------------------------------------------------------------------------
-# Helper: run experiment in sandbox
-# ---------------------------------------------------------------------------
-
-
-def _run_experiment_in_sandbox(
-    exp_dir: Path,
-    config: Any,
-    work_dir: Path,
-    timeout_sec: int = 600,
-) -> dict | None:
-    """Run experiment code in Docker/sandbox and return results dict.
-
-    Returns a dict with keys: stdout, stderr, returncode, metrics, elapsed_sec, timed_out.
-    Returns None if sandbox creation fails.
-    """
-    try:
-        from researchclaw.experiment.factory import create_sandbox
-
-        sandbox_dir = work_dir / "sandbox"
-        sandbox_dir.mkdir(parents=True, exist_ok=True)
-        sandbox = create_sandbox(config.experiment, sandbox_dir)
-
-        result = sandbox.run_project(
-            exp_dir,
-            timeout_sec=timeout_sec,
-        )
-
-        return {
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "returncode": result.returncode,
-            "metrics": dict(result.metrics) if result.metrics else {},
-            "elapsed_sec": result.elapsed_sec,
-            "timed_out": result.timed_out,
-        }
-
-    except Exception as exc:
-        logger.warning("Sandbox execution failed: %s", exc)
-        return None
-
-
 def _build_experiment_summary_from_run(
     run_result: dict,
     code: dict[str, str],
 ) -> dict:
-    """Build an experiment_summary.json from a single sandbox run.
+    """Build an experiment_summary.json from a single execution result.
 
     Parses condition-level metrics from stdout and builds the standard
     summary format expected by ``assess_experiment_quality()``.
@@ -890,13 +607,9 @@ def _build_experiment_summary_from_run(
     metrics = run_result.get("metrics", {})
     stdout = run_result.get("stdout", "")
 
-    # Also parse metrics from stdout if sandbox didn't capture them
+    # Also parse metrics from stdout if the submitter did not capture them.
     if not metrics and stdout:
-        try:
-            from researchclaw.experiment.sandbox import parse_metrics
-            metrics = parse_metrics(stdout)
-        except ImportError:
-            pass
+        metrics = _parse_metrics_from_stdout(stdout)
 
     # Group metrics by condition
     condition_summaries: dict[str, dict] = {}

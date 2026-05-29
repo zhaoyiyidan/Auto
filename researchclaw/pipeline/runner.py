@@ -457,7 +457,7 @@ def execute_pipeline(
     except Exception:  # noqa: BLE001
         pass
 
-    # ── Integration hooks: EventLog, ExperimentMemory, CostTracker ──
+    # ── Integration hooks: EventLog, ExperimentMemory ──
     event_log = None
     try:
         from researchclaw.pipeline.event_log import EventLog, EventType, create_event
@@ -477,8 +477,6 @@ def execute_pipeline(
         exp_memory = ExperimentMemory(store_dir=str(_mem_dir))
     except Exception:
         logger.debug("Experiment memory initialisation skipped")
-
-    cost_budget = getattr(config.experiment.cli_agent, "max_budget_usd", 0.0) or 0.0
 
     for stage in STAGE_SEQUENCE:
         started = _should_start(stage, from_stage, started)
@@ -501,17 +499,6 @@ def execute_pipeline(
                 event_log.append(create_event(
                     EventType.STAGE_START, run_id=run_id, stage=stage.name,
                 ))
-            except Exception:
-                pass
-
-        # ── Cost budget check ──
-        if cost_budget > 0:
-            try:
-                from researchclaw.cost_tracker import get_global_tracker
-                if not get_global_tracker().check_budget(cost_budget):
-                    logger.warning("Cost budget $%.2f exceeded — pausing pipeline", cost_budget)
-                    print(f"{prefix} BUDGET EXCEEDED ($%.2f) — stopping" % cost_budget)
-                    break
             except Exception:
                 pass
 

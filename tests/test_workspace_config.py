@@ -64,6 +64,9 @@ def test_submitter_config_defaults() -> None:
     assert cfg.ssh_user == ""
     assert cfg.ssh_port == 22
     assert cfg.ssh_key_path == ""
+    assert cfg.wait_for_completion is True
+    assert cfg.poll_interval_sec == 15
+    assert cfg.wait_timeout_sec == 0
 
 
 def test_submitter_config_from_dict() -> None:
@@ -75,6 +78,9 @@ def test_submitter_config_from_dict() -> None:
             "ssh_user": "alice",
             "ssh_port": 2222,
             "ssh_key_path": "~/.ssh/id_rsa",
+            "wait_for_completion": False,
+            "poll_interval_sec": 5,
+            "wait_timeout_sec": 600,
         }
     )
 
@@ -84,6 +90,31 @@ def test_submitter_config_from_dict() -> None:
     assert cfg.ssh_user == "alice"
     assert cfg.ssh_port == 2222
     assert cfg.ssh_key_path == "~/.ssh/id_rsa"
+    assert cfg.wait_for_completion is False
+    assert cfg.poll_interval_sec == 5
+    assert cfg.wait_timeout_sec == 600
+
+
+def test_legacy_experiment_config_symbols_are_removed() -> None:
+    import researchclaw.config as cfg
+
+    removed = [
+        "SandboxConfig",
+        "DockerSandboxConfig",
+        "AgenticConfig",
+        "ColliderAgentConfig",
+        "BiologyAgentConfig",
+        "StatAgentConfig",
+        "SshRemoteConfig",
+        "ColabDriveConfig",
+        "OpenCodeConfig",
+        "CodeAgentConfig",
+        "CliAgentConfig",
+        "EXPERIMENT_MODES",
+        "CLI_AGENT_PROVIDERS",
+    ]
+
+    assert [name for name in removed if hasattr(cfg, name)] == []
 
 
 def test_experiment_config_includes_workspace_agent() -> None:

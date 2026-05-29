@@ -8,8 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from researchclaw.config import LarkHITLConfig
+from researchclaw.hitl.file_wait import write_response
 from researchclaw.hitl.intervention import WaitingState
 from researchclaw.hitl.store import HITLStore
+from researchclaw.notify.lark_reply import parse_reply
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +71,18 @@ class LarkHITLListener:
             self._notified_keys.add(key)
             notified_this_tick = True
 
-        self.reader.list_messages(chat_id=self.config.chat_id, since_iso=waiting.since)
+        messages = self.reader.list_messages(
+            chat_id=self.config.chat_id,
+            since_iso=waiting.since,
+        )
+        for message in messages:
+            parsed = parse_reply(getattr(message, "text", ""))
+            if parsed is None:
+                continue
+            write_response(self.run_dir / "hitl", parsed.to_human_input())
+            self._handled_keys.add(key)
+            return PollResult.RESPONDED
+
         if notified_this_tick:
             return PollResult.NOTIFIED_ONLY
         return PollResult.NO_REPLY

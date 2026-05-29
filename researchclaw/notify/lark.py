@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 from dataclasses import dataclass
 
@@ -44,6 +45,7 @@ class LarkNotifier:
             return LarkNotifyResult(())
 
         results: list[LarkTargetResult] = []
+        env = _build_env(self.config)
         for target in self.config.targets:
             if not target.receive_id:
                 results.append(
@@ -65,7 +67,7 @@ class LarkNotifier:
                     )
                 )
             else:
-                results.append(self._send_target(target, command))
+                results.append(self._send_target(target, command, env))
 
         return LarkNotifyResult(tuple(results))
 
@@ -73,16 +75,23 @@ class LarkNotifier:
         self,
         target: LarkTargetConfig,
         command: tuple[str, ...],
+        env: dict[str, str] | None,
     ) -> LarkTargetResult:
         try:
+            kwargs = {
+                "capture_output": True,
+                "text": True,
+                "encoding": "utf-8",
+                "errors": "replace",
+                "timeout": self.config.timeout_sec,
+                "check": False,
+            }
+            if env is not None:
+                kwargs["env"] = env
+
             completed = subprocess.run(
                 list(command),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=self.config.timeout_sec,
-                check=False,
+                **kwargs,
             )
             result = _result_from_completed(target.name, command, completed)
         except subprocess.TimeoutExpired as exc:
@@ -151,6 +160,22 @@ def _build_command(
         "--format",
         "json",
     ]
+
+
+def _build_env(config: LarkNotifyConfig) -> dict[str, str] | None:
+    app_id = os.environ.get(config.app_id_env) or config.app_id
+    app_secret = os.environ.get(config.app_secret_env) or config.app_secret
+    if not app_id or not app_secret:
+        return None
+
+    env = os.environ.copy()
+    env["LARK_APP_ID"] = app_id
+    env["LARK_APP_SECRET"] = app_secret
+    if config.app_id_env:
+        env[config.app_id_env] = app_id
+    if config.app_secret_env:
+        env[config.app_secret_env] = app_secret
+    return env
 
 
 def _result_from_completed(

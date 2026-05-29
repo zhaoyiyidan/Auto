@@ -346,7 +346,11 @@ def test_config_plaintext_used_when_env_absent(monkeypatch: pytest.MonkeyPatch):
     assert env["LARK_APP_SECRET"] == "config-secret"
 
 
-def test_resolved_creds_injected_into_subprocess_env_kwarg():
+def test_resolved_creds_injected_into_subprocess_env_kwarg(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("LARK_APP_ID", raising=False)
+    monkeypatch.delenv("LARK_APP_SECRET", raising=False)
     with patch("researchclaw.notify.lark.subprocess.run") as mock_run:
         mock_run.return_value = _completed()
 

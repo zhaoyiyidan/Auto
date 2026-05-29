@@ -165,12 +165,35 @@ class RuntimeConfig:
 
 
 @dataclass(frozen=True)
+class LarkTargetConfig:
+    name: str = ""
+    kind: str = "user"
+    receive_id_type: str = "open_id"
+    receive_id: str = ""
+
+
+@dataclass(frozen=True)
+class LarkNotifyConfig:
+    enabled: bool = False
+    backend: str = "cli"
+    command: str = "lark-cli"
+    app_id: str = ""
+    app_secret: str = ""
+    app_id_env: str = "LARK_APP_ID"
+    app_secret_env: str = "LARK_APP_SECRET"
+    targets: tuple[LarkTargetConfig, ...] = ()
+    timeout_sec: int = 15
+    dry_run: bool = False
+
+
+@dataclass(frozen=True)
 class NotificationsConfig:
     channel: str
     target: str = ""
     on_stage_start: bool = False
     on_stage_fail: bool = False
     on_gate_required: bool = True
+    lark: LarkNotifyConfig = field(default_factory=LarkNotifyConfig)
 
 
 @dataclass(frozen=True)

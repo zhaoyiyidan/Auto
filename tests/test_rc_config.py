@@ -8,6 +8,8 @@ from researchclaw.config import (
     AcpConfig,
     CliAgentConfig,
     ExperimentConfig,
+    LarkNotifyConfig,
+    LarkTargetConfig,
     RCConfig,
     SandboxConfig,
     SecurityConfig,
@@ -455,6 +457,207 @@ def test_to_dict_roundtrip_rehydrates_equivalent_rcconfig(tmp_path: Path):
 
     assert rehydrated == original
     assert isinstance(original.to_dict()["security"]["hitl_required_stages"], tuple)
+
+
+def test_lark_config_defaults_when_notifications_lark_absent(tmp_path: Path):
+    config = RCConfig.from_dict(
+        _valid_config_data(),
+        project_root=tmp_path,
+        check_paths=False,
+    )
+
+    assert isinstance(config.notifications.lark, LarkNotifyConfig)
+    assert config.notifications.lark.enabled is False
+    assert config.notifications.lark.targets == ()
+    assert config.notifications.lark.command == "lark-cli"
+    assert config.notifications.lark.app_id_env == "LARK_APP_ID"
+    assert config.notifications.lark.app_secret_env == "LARK_APP_SECRET"
+
+
+def test_lark_block_present_but_empty_uses_defaults(tmp_path: Path):
+    data = _valid_config_data()
+    data["notifications"]["lark"] = {}
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.notifications.lark == LarkNotifyConfig()
+
+
+def test_lark_individual_field_defaults(tmp_path: Path):
+    data = _valid_config_data()
+    data["notifications"]["lark"] = {"enabled": True}
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.notifications.lark.enabled is True
+    assert config.notifications.lark.backend == "cli"
+    assert config.notifications.lark.command == "lark-cli"
+    assert config.notifications.lark.targets == ()
+    assert config.notifications.lark.timeout_sec == 15
+    assert config.notifications.lark.dry_run is False
+
+
+def test_lark_targets_mapping_parsed_to_tuple_of_targetconfig(tmp_path: Path):
+    data = _valid_config_data()
+    data["notifications"]["lark"] = {
+        "targets": {
+            "me": {
+                "kind": "user",
+                "receive_id_type": "open_id",
+                "receive_id": "ou_xxx",
+            },
+            "lab_group": {
+                "kind": "chat",
+                "receive_id_type": "chat_id",
+                "receive_id": "oc_xxx",
+            },
+        },
+    }
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.notifications.lark.targets == (
+        LarkTargetConfig(
+            name="me",
+            kind="user",
+            receive_id_type="open_id",
+            receive_id="ou_xxx",
+        ),
+        LarkTargetConfig(
+            name="lab_group",
+            kind="chat",
+            receive_id_type="chat_id",
+            receive_id="oc_xxx",
+        ),
+    )
+
+
+def test_lark_target_defaults_for_missing_subfields(tmp_path: Path):
+    data = _valid_config_data()
+    data["notifications"]["lark"] = {
+        "targets": {
+            "me": {
+                "receive_id": "ou_xxx",
+            },
+        },
+    }
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.notifications.lark.targets == (
+        LarkTargetConfig(name="me", receive_id="ou_xxx"),
+    )
+
+
+def test_lark_targets_empty_mapping_yields_empty_tuple(tmp_path: Path):
+    data = _valid_config_data()
+    data["notifications"]["lark"] = {"targets": {}}
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.notifications.lark.targets == ()
+
+
+def test_lark_config_no_new_required_fields(tmp_path: Path):
+    result = validate_config(
+        _valid_config_data(),
+        project_root=tmp_path,
+        check_paths=False,
+    )
+
+    assert result.ok is True
+
+
+def test_lark_full_block_roundtrips_via_from_dict(tmp_path: Path):
+    data = _valid_config_data()
+    data["notifications"]["lark"] = {
+        "enabled": True,
+        "backend": "cli",
+        "command": "custom-lark-cli",
+        "app_id": "cli_app_id",
+        "app_secret": "cli_app_secret",
+        "app_id_env": "CUSTOM_LARK_APP_ID",
+        "app_secret_env": "CUSTOM_LARK_APP_SECRET",
+        "timeout_sec": 7,
+        "dry_run": True,
+        "targets": {
+            "app_notice": {
+                "kind": "chat",
+                "receive_id_type": "chat_id",
+                "receive_id": "oc_xxx",
+            },
+        },
+    }
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.notifications.lark == LarkNotifyConfig(
+        enabled=True,
+        backend="cli",
+        command="custom-lark-cli",
+        app_id="cli_app_id",
+        app_secret="cli_app_secret",
+        app_id_env="CUSTOM_LARK_APP_ID",
+        app_secret_env="CUSTOM_LARK_APP_SECRET",
+        timeout_sec=7,
+        dry_run=True,
+        targets=(
+            LarkTargetConfig(
+                name="app_notice",
+                kind="chat",
+                receive_id_type="chat_id",
+                receive_id="oc_xxx",
+            ),
+        ),
+    )
+
+
+def test_to_dict_roundtrip_with_lark_targets(tmp_path: Path):
+    data = _valid_config_data()
+    data["notifications"]["lark"] = {
+        "enabled": True,
+        "targets": {
+            "me": {
+                "receive_id_type": "open_id",
+                "receive_id": "ou_xxx",
+            },
+            "lab_group": {
+                "kind": "chat",
+                "receive_id_type": "chat_id",
+                "receive_id": "oc_xxx",
+            },
+        },
+    }
+    original = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    normalized = cast(dict[str, object], json.loads(json.dumps(original.to_dict())))
+    rehydrated = RCConfig.from_dict(
+        normalized,
+        project_root=tmp_path,
+        check_paths=False,
+    )
+
+    assert rehydrated == original
+
+
+def test_existing_notifications_fields_unchanged(tmp_path: Path):
+    data = _valid_config_data()
+    data["notifications"].update(
+        {
+            "target": "ops",
+            "on_stage_start": True,
+            "on_stage_fail": True,
+            "on_gate_required": False,
+        }
+    )
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.notifications.channel == "discord"
+    assert config.notifications.target == "ops"
+    assert config.notifications.on_stage_start is True
+    assert config.notifications.on_stage_fail is True
+    assert config.notifications.on_gate_required is False
 
 
 def test_check_paths_false_skips_missing_kb_root_validation(tmp_path: Path):

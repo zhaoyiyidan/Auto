@@ -216,6 +216,9 @@ class LarkMessageReader:
         since_iso: str,
         max_pages: int = 5,
     ) -> list[LarkMessage]:
+        if not chat_id:
+            return []
+
         start_time = _iso_to_unix_seconds(since_iso)
         since_ms = start_time * 1000
         kwargs = {
@@ -239,7 +242,43 @@ class LarkMessageReader:
                 start_time=start_time,
                 page_token=page_token,
             )
-            completed = subprocess.run(command, **kwargs)
+            try:
+                completed = subprocess.run(command, **kwargs)
+            except subprocess.TimeoutExpired as exc:
+                _log_reader_error(
+                    f"lark-cli timed out after {exc.timeout}s",
+                    self.config,
+                    env,
+                )
+                return []
+            except FileNotFoundError as exc:
+                _log_reader_error(
+                    f"lark-cli executable not found: {exc}",
+                    self.config,
+                    env,
+                )
+                return []
+            except OSError as exc:
+                _log_reader_error(f"lark-cli OS error: {exc}", self.config, env)
+                return []
+            except Exception as exc:
+                _log_reader_error(
+                    f"lark-cli unexpected error: {exc}",
+                    self.config,
+                    env,
+                )
+                return []
+
+            if completed.returncode != 0:
+                detail = completed.stderr or completed.stdout or "lark-cli failed"
+                _log_reader_error(detail, self.config, env)
+                return []
+
+            api_error = _api_error_detail(completed.stdout)
+            if api_error:
+                _log_reader_error(api_error, self.config, env)
+                return []
+
             messages.extend(_messages_from_stdout(completed.stdout, since_ms=since_ms))
 
             has_more, page_token = _page_state_from_stdout(completed.stdout)
@@ -352,6 +391,14 @@ def _safe_int_value(value: object, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _log_reader_error(
+    detail: str,
+    config: LarkNotifyConfig,
+    env: dict[str, str] | None,
+) -> None:
+    logger.warning("Lark message listing failed: %s", _redact_secrets(detail, config, env))
 
 
 def _build_env(config: LarkNotifyConfig) -> dict[str, str] | None:

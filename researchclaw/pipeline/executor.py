@@ -141,7 +141,7 @@ from researchclaw.pipeline.stage_impls._code_generation import (  # noqa: E402
 from researchclaw.pipeline.stage_impls._execution import (  # noqa: E402
     _execute_resource_planning,
     _execute_experiment_run,
-    _execute_iterative_refine,
+    _execute_experiment_route_decision,
 )
 
 # ---------------------------------------------------------------------------
@@ -572,7 +572,7 @@ _STAGE_EXECUTORS: dict[Stage, Callable[..., StageResult]] = {
     Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR: _execute_code_generation,
     Stage.MANIFEST_VALIDATE_AND_PREPARE: _execute_resource_planning,
     Stage.HARNESS_SUBMIT_AND_COLLECT: _execute_experiment_run,
-    Stage.EXPERIMENT_ROUTE_DECISION: _execute_iterative_refine,
+    Stage.EXPERIMENT_ROUTE_DECISION: _execute_experiment_route_decision,
     Stage.RESULT_ANALYSIS: _execute_result_analysis,
     Stage.RESEARCH_DECISION: _execute_research_decision,
     Stage.PAPER_OUTLINE: _execute_paper_outline,

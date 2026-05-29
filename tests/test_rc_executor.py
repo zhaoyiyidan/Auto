@@ -864,6 +864,104 @@ class TestWorkspaceAgentStageWiring:
             "code_commit"
         ] == "refined"
 
+    def test_stage14_analyzes_registry_execution_and_provenance(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        from researchclaw.experiment.workspace import (
+            ExecutionRecord,
+            ExperimentRecord,
+            ResultArtifact,
+            ResultArtifacts,
+        )
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        execution = ExecutionRecord(
+            stage=12,
+            code_commit="commit-1",
+            submitter="local",
+            job_id="job-1",
+            submit_status="submitted",
+            final_status="completed",
+            log_path="logs/run.log",
+            result_paths=["outputs/metrics.json"],
+            result_hashes={"outputs/metrics.json": "sha"},
+            metrics={"accuracy": 0.91},
+            elapsed_sec=1.2,
+            waited=True,
+            recorded_at="2026-05-29T00:00:00Z",
+        )
+        artifacts = ResultArtifacts(
+            code_commit="commit-1",
+            artifacts=[
+                ResultArtifact(
+                    path="outputs/metrics.json",
+                    sha256="sha",
+                    size_bytes=12,
+                    exists=True,
+                )
+            ],
+            collected_at="2026-05-29T00:00:00Z",
+        )
+        record = ExperimentRecord(
+            workspace="/workspace",
+            stage=12,
+            base_sha="base",
+            agent_commit_sha="commit-1",
+            provider="acp",
+            agent_manifest="run_manifest.json",
+            submitter="local",
+            job_id="job-1",
+            result_paths=["outputs/metrics.json"],
+            result_hashes={"outputs/metrics.json": "sha"},
+            recorded_at="2026-05-29T00:00:00Z",
+            session_name="researchclaw-code-test",
+        )
+        _write_prior_artifact(
+            run_dir, 12, "execution_record.json", json.dumps(execution.to_dict())
+        )
+        _write_prior_artifact(
+            run_dir, 12, "result_artifacts.json", json.dumps(artifacts.to_dict())
+        )
+        s12 = run_dir / "stage-12"
+        with (s12 / "workspace_experiment_registry.jsonl").open(
+            "w", encoding="utf-8"
+        ) as handle:
+            handle.write(json.dumps(record.to_dict()) + "\n")
+        stage_dir = run_dir / "stage-14"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_result_analysis(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.DONE
+        assert result.artifacts == (
+            "analysis.md",
+            "experiment_summary.json",
+            "provenance.json",
+        )
+        summary = json.loads(
+            (stage_dir / "experiment_summary.json").read_text(encoding="utf-8")
+        )
+        assert summary["primary_metric"] == "accuracy"
+        assert summary["metric_direction"] == "maximize"
+        assert summary["best_metric"] == 0.91
+        assert summary["best_commit"] == "commit-1"
+        assert summary["n_runs"] == 1
+        provenance = json.loads(
+            (stage_dir / "provenance.json").read_text(encoding="utf-8")
+        )
+        assert provenance["base_sha"] == "base"
+        assert provenance["commits"] == ["commit-1"]
+        assert provenance["result_hashes"]["outputs/metrics.json"] == "sha"
+
 
 def _workspace_agent_rc_config(tmp_path: Path) -> RCConfig:
     workspace = tmp_path / "workspace"

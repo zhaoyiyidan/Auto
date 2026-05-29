@@ -217,6 +217,7 @@ class LarkMessageReader:
         max_pages: int = 5,
     ) -> list[LarkMessage]:
         start_time = _iso_to_unix_seconds(since_iso)
+        since_ms = start_time * 1000
         command = _build_list_command(
             self.config,
             chat_id=chat_id,
@@ -234,8 +235,8 @@ class LarkMessageReader:
         if env is not None:
             kwargs["env"] = env
 
-        subprocess.run(command, **kwargs)
-        return []
+        completed = subprocess.run(command, **kwargs)
+        return _messages_from_stdout(completed.stdout, since_ms=since_ms)
 
 
 def _iso_to_unix_seconds(value: str) -> int:
@@ -243,6 +244,90 @@ def _iso_to_unix_seconds(value: str) -> int:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return int(parsed.timestamp())
+
+
+def _messages_from_stdout(stdout: str, *, since_ms: int) -> list[LarkMessage]:
+    try:
+        payload = json.loads(stdout)
+    except (TypeError, ValueError):
+        return []
+
+    if not isinstance(payload, dict):
+        return []
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return []
+
+    messages: list[LarkMessage] = []
+    for item in data.get("items") or ():
+        message = _message_from_item(item)
+        if message is None:
+            continue
+        if message.sender_type != "user":
+            continue
+        if message.create_time_ms < since_ms:
+            continue
+        messages.append(message)
+    return messages
+
+
+def _message_from_item(item: object) -> LarkMessage | None:
+    if not isinstance(item, dict):
+        return None
+
+    sender = item.get("sender") if isinstance(item.get("sender"), dict) else {}
+    sender_type = str(sender.get("sender_type", "") or "")
+    create_time_ms = _safe_int_value(item.get("create_time"), 0)
+    msg_type = str(item.get("msg_type", "") or "")
+
+    return LarkMessage(
+        message_id=str(item.get("message_id", "") or ""),
+        msg_type=msg_type,
+        text=_extract_message_text(item, msg_type),
+        sender_id=_extract_sender_id(sender.get("sender_id")),
+        sender_type=sender_type,
+        create_time_ms=create_time_ms,
+        chat_id=str(item.get("chat_id", "") or ""),
+    )
+
+
+def _extract_sender_id(value: object) -> str:
+    if isinstance(value, dict):
+        for key in ("open_id", "user_id", "union_id", "email"):
+            candidate = value.get(key)
+            if candidate:
+                return str(candidate)
+        return ""
+    return str(value or "")
+
+
+def _extract_message_text(item: dict[object, object], msg_type: str) -> str:
+    if msg_type != "text":
+        return ""
+
+    body = item.get("body") if isinstance(item.get("body"), dict) else {}
+    content = body.get("content", "")
+    if isinstance(content, str):
+        try:
+            content_obj = json.loads(content)
+        except (TypeError, ValueError):
+            return ""
+    elif isinstance(content, dict):
+        content_obj = content
+    else:
+        return ""
+
+    if not isinstance(content_obj, dict):
+        return ""
+    return str(content_obj.get("text", "") or "")
+
+
+def _safe_int_value(value: object, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _build_env(config: LarkNotifyConfig) -> dict[str, str] | None:

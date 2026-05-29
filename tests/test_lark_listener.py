@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Thread
 
 from researchclaw.config import LarkHITLConfig
-from researchclaw.hitl.file_wait import clear_waiting, write_waiting
-from researchclaw.hitl.intervention import PauseReason, WaitingState
+from researchclaw.hitl.file_wait import clear_waiting, poll_for_response, write_waiting
+from researchclaw.hitl.intervention import HumanInput, PauseReason, WaitingState
 from researchclaw.notify.lark import LarkMessage
 from researchclaw.notify.lark_listener import LarkHITLListener, PollResult
 
@@ -400,3 +401,34 @@ def test_run_stops_after_max_iterations(tmp_path: Path, monkeypatch):
     listener.run(max_iterations=3)
 
     assert len(reader.calls) == 3
+
+
+def test_listener_unblocks_poll_for_response(tmp_path: Path):
+    responses: list[HumanInput] = []
+
+    def wait_for_response() -> None:
+        responses.append(
+            poll_for_response(
+                tmp_path / "hitl",
+                poll_interval_sec=0.1,
+                timeout_sec=5,
+            )
+        )
+
+    thread = Thread(target=wait_for_response)
+    thread.start()
+    _write_waiting(tmp_path)
+    listener = LarkHITLListener(
+        reader=_FakeReader([[_message("approve")]]),
+        notifier=_FakeNotifier(),
+        run_dir=tmp_path,
+        config=_config(),
+        run_id="run-1",
+    )
+
+    assert listener.poll_once() is PollResult.RESPONDED
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert responses[0].action.value == "approve"
+    assert not (tmp_path / "hitl" / "response.json").exists()

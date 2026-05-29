@@ -9,6 +9,7 @@ import pytest
 from researchclaw.experiment.workspace import (
     ExperimentRecord,
     LaunchCommand,
+    MetricsSpec,
     ResourceSpec,
     RunManifest,
     SubmitRequest,
@@ -109,6 +110,40 @@ class TestRunManifest:
         loaded = RunManifest.from_json(path.read_text(encoding="utf-8"))
 
         assert loaded == manifest
+
+    def test_round_trips_schema_version_and_metrics(self) -> None:
+        manifest = RunManifest(
+            code_commit="abc123",
+            launch=LaunchCommand(command="python train.py"),
+            result_paths=["outputs/metrics.json"],
+            metrics=MetricsSpec(primary="accuracy", direction="maximize"),
+        )
+
+        loaded = RunManifest.from_json(manifest.to_json())
+
+        assert loaded.schema_version == "researchclaw.run_manifest.v1"
+        assert loaded.metrics.primary == "accuracy"
+        assert loaded.metrics.direction == "maximize"
+
+    def test_from_json_defaults_legacy_payload(self) -> None:
+        legacy = (
+            '{"code_commit":"sha","launch":{"command":"python x.py"},'
+            '"result_paths":[]}'
+        )
+
+        manifest = RunManifest.from_json(legacy)
+
+        assert manifest.schema_version == "researchclaw.run_manifest.v1"
+        assert manifest.metrics.primary == "primary_metric"
+
+    def test_rejects_bad_metric_direction(self) -> None:
+        with pytest.raises((TypeError, ValueError)):
+            RunManifest(
+                code_commit="s",
+                launch=LaunchCommand(command="x"),
+                result_paths=[],
+                metrics=MetricsSpec(primary="a", direction="sideways"),
+            )
 
 
 class TestWorkspaceAgentResult:

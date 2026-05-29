@@ -218,6 +218,61 @@ def test_validate_parser_accepts_config_flag(monkeypatch: pytest.MonkeyPatch) ->
     assert rc_cli.main(["validate", "--config", "cfg.yaml"]) == 0
 
 
+def test_lark_listen_missing_run_dir_returns_one(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    missing = tmp_path / "missing-run"
+
+    code = rc_cli.cmd_lark_listen(argparse.Namespace(run_dir=str(missing)))
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "run directory not found" in captured.err
+
+
+def test_lark_listen_dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured = {}
+
+    def fake_cmd_lark_listen(args):
+        captured["args"] = args
+        return 0
+
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir()
+    monkeypatch.setattr(rc_cli, "cmd_lark_listen", fake_cmd_lark_listen)
+
+    code = rc_cli.main(["lark-listen", str(run_dir), "--once"])
+
+    assert code == 0
+    parsed = captured["args"]
+    assert parsed.run_dir == str(run_dir)
+    assert parsed.once is True
+
+
+def test_lark_listen_parser_accepts_flags(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured = {}
+
+    def fake_cmd_lark_listen(args):
+        captured["args"] = args
+        return 0
+
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir()
+    monkeypatch.setattr(rc_cli, "cmd_lark_listen", fake_cmd_lark_listen)
+
+    assert rc_cli.main(
+        ["lark-listen", str(run_dir), "--config", "cfg.yaml", "--once"]
+    ) == 0
+    assert captured["args"].config == "cfg.yaml"
+
+    assert rc_cli.main(["lark-listen", str(run_dir), "-c", "cfg.yaml"]) == 0
+    assert captured["args"].config == "cfg.yaml"
+
+
 # --- resolve_config_path tests ---
 
 

@@ -111,7 +111,7 @@ CONTRACTS: dict[Stage, StageContract] = {
         output_files=("manifest_validation.json", "run_manifest.json"),
         dod="Run manifest schema, git commit, and workspace state validated",
         error_code="E11_MANIFEST_INVALID",
-        max_retries=1,
+        max_retries=0,
     ),
     # Phase E: Experiment Execution
     Stage.HARNESS_SUBMIT_AND_COLLECT: StageContract(
@@ -125,10 +125,10 @@ CONTRACTS: dict[Stage, StageContract] = {
     Stage.EXPERIMENT_ROUTE_DECISION: StageContract(
         stage=Stage.EXPERIMENT_ROUTE_DECISION,
         input_files=("execution_record.json",),
-        output_files=("refine_record.json", "run_manifest.json"),
-        dod="Workspace code agent refined implementation from real harness results",
-        error_code="E13_REFINE_FAIL",
-        max_retries=2,
+        output_files=("experiment_decision.json",),
+        dod="Read-only experiment route decision written from execution evidence",
+        error_code="E13_ROUTE_FAIL",
+        max_retries=0,
     ),
     # Phase F: Analysis & Decision
     Stage.RESULT_ANALYSIS: StageContract(

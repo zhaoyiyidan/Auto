@@ -122,15 +122,21 @@ GATE_ROLLBACK: dict[Stage, Stage] = {
 }
 
 # ---------------------------------------------------------------------------
-# Research decision rollback targets (PIVOT/REFINE from Stage 15)
+# Research decision rollback targets (PIVOT from Stage 15)
 # ---------------------------------------------------------------------------
 
 DECISION_ROLLBACK: dict[str, Stage] = {
     "pivot": Stage.HYPOTHESIS_GEN,       # Discard hypotheses, re-generate
-    "refine": Stage.EXPERIMENT_ROUTE_DECISION,    # Keep hypotheses, re-run experiments
 }
 
 MAX_DECISION_PIVOTS: int = 2  # Prevent infinite loops
+MAX_EXPERIMENT_ITERATIONS: int = 3  # Bound Stage 10-13 repair/refine loop
+
+EXPERIMENT_ROUTE_TARGETS: dict[str, Stage] = {
+    "fix_code": Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
+    "revise_task_spec": Stage.EXPERIMENT_TASK_SPEC,
+    "rerun": Stage.HARNESS_SUBMIT_AND_COLLECT,
+}
 
 # ---------------------------------------------------------------------------
 # Noncritical stages — can be skipped on failure without aborting pipeline

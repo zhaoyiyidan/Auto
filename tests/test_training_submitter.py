@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,7 @@ class TestTrainingSubmitterProtocol:
                 )
 
         assert isinstance(MinimalSubmitter(), TrainingSubmitter)
+        assert not hasattr(MinimalSubmitter(), "poll")
 
     def test_name_required(self) -> None:
         assert "name" in TrainingSubmitter.__annotations__
@@ -72,6 +74,23 @@ class TestLocalSubmitter:
 
     def test_name(self) -> None:
         assert LocalSubmitter().name == "local"
+
+    def test_poll_reports_running_completed_and_failed(self, tmp_path: Path) -> None:
+        submitter = LocalSubmitter()
+        running_result = submitter.submit(
+            _request(tmp_path, command="python -c 'import time; time.sleep(0.2)'")
+        )
+
+        assert submitter.poll(running_result) == "running"
+        time.sleep(0.3)
+        assert submitter.poll(running_result) == "completed"
+
+        failed_result = submitter.submit(
+            _request(tmp_path, command="python -c 'raise SystemExit(3)'")
+        )
+        time.sleep(0.1)
+
+        assert submitter.poll(failed_result) == "failed"
 
 
 class TestSlurmSubmitter:

@@ -1864,9 +1864,9 @@ class TestParseDecision:
         text = "## Decision\nPIVOT\n## Justification\nHypotheses flawed."
         assert rc_executor._parse_decision(text) == "pivot"
 
-    def test_refine_detected(self) -> None:
+    def test_refine_treated_as_proceed(self) -> None:
         text = "## Decision\nREFINE\n## Justification\nNeed more tuning."
-        assert rc_executor._parse_decision(text) == "refine"
+        assert rc_executor._parse_decision(text) == "proceed"
 
     def test_pivot_case_insensitive(self) -> None:
         text = "## Decision\npivot\n## Justification\nBad approach."

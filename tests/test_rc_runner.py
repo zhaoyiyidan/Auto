@@ -890,6 +890,39 @@ def test_proceed_decision_does_not_trigger_rollback(
     assert not (run_dir / "decision_history.json").exists()
 
 
+def test_stage15_refine_decision_treated_as_proceed(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    seen: list[Stage] = []
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        seen.append(stage)
+        if stage == Stage.RESEARCH_DECISION:
+            return StageResult(
+                stage=stage,
+                status=StageStatus.DONE,
+                artifacts=("decision.md",),
+                decision="refine",
+            )
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-refine-proceed",
+        config=rc_config,
+        adapters=adapters,
+    )
+    decision_index = seen.index(Stage.RESEARCH_DECISION)
+    assert seen[decision_index + 1] is Stage.PAPER_OUTLINE
+    assert seen.count(Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR) == 1
+    assert not (run_dir / "decision_history.json").exists()
+
+
 def test_read_pivot_count_returns_zero_for_no_history(run_dir: Path) -> None:
     assert rc_runner._read_pivot_count(run_dir) == 0
 

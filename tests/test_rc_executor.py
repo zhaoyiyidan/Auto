@@ -755,114 +755,160 @@ class TestWorkspaceAgentStageWiring:
         )
         assert artifacts["artifacts"][0]["exists"] is False
 
-    def test_stage13_refines_from_real_results_and_writes_manifest(
+    def _write_stage12_execution(
+        self,
+        run_dir: Path,
+        *,
+        final_status: str = "completed",
+        metrics: dict[str, Any] | None = None,
+    ) -> None:
+        payload = {
+            "stage": 12,
+            "code_commit": "commit-1",
+            "submitter": "local",
+            "job_id": "job-1",
+            "submit_status": "submitted",
+            "final_status": final_status,
+            "log_path": "logs/run.log",
+            "result_paths": ["outputs/metrics.json"],
+            "result_hashes": {"outputs/metrics.json": "sha"},
+            "metrics": metrics if metrics is not None else {"accuracy": 0.91},
+            "elapsed_sec": 1.2,
+            "waited": True,
+            "recorded_at": "2026-05-29T00:00:00Z",
+        }
+        _write_prior_artifact(run_dir, 12, "execution_record.json", json.dumps(payload))
+
+    def test_stage13_route_continue_writes_experiment_decision(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        cfg = _workspace_agent_rc_config(tmp_path)
+        self._write_stage12_execution(run_dir, metrics={"accuracy": 0.91})
+        stage_dir = run_dir / "stage-13"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_experiment_route_decision(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.DONE
+        assert result.decision == "continue"
+        decision = json.loads(
+            (stage_dir / "experiment_decision.json").read_text(encoding="utf-8")
+        )
+        assert decision["schema_version"] == "researchclaw.experiment_decision.v1"
+        assert decision["route"] == "continue"
+
+    def test_stage13_route_fix_code_writes_repair_request_to_run_root(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        cfg = _workspace_agent_rc_config(tmp_path)
+        self._write_stage12_execution(run_dir, final_status="failed", metrics={})
+        stage_dir = run_dir / "stage-13"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_experiment_route_decision(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.DONE
+        assert result.decision == "fix_code"
+        repair_request = run_dir / "repair_request.json"
+        assert repair_request.is_file()
+        payload = json.loads(repair_request.read_text(encoding="utf-8"))
+        assert payload["schema_version"] == "researchclaw.repair_request.v1"
+        assert payload["origin_stage"] == 13
+        assert payload["errors"]
+
+    def test_stage13_route_revise_task_spec_writes_refine_request(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        cfg = _workspace_agent_rc_config(tmp_path)
+        self._write_stage12_execution(run_dir, metrics={"accuracy": 0.91})
+        (run_dir / "experiment_diagnosis.json").write_text(
+            json.dumps(
+                {
+                    "quality_assessment": {
+                        "mode": "technical_report",
+                        "sufficient": False,
+                        "repair_possible": False,
+                        "deficiency_types": ["task_spec_objective_mismatch"],
+                    },
+                    "diagnosis": {
+                        "deficiencies": [
+                            {
+                                "type": "task_spec_objective_mismatch",
+                                "description": "objective does not match results",
+                            }
+                        ]
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        stage_dir = run_dir / "stage-13"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_experiment_route_decision(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.DONE
+        assert result.decision == "revise_task_spec"
+        refine_request = run_dir / "refine_request.json"
+        assert refine_request.is_file()
+        payload = json.loads(refine_request.read_text(encoding="utf-8"))
+        assert payload["schema_version"] == "researchclaw.refine_request.v1"
+        assert payload["origin_stage"] == 13
+        assert payload["suggested_changes"]
+
+    def test_stage13_route_never_invokes_workspace_agent(
         self,
         tmp_path: Path,
         run_dir: Path,
         adapters: AdapterBundle,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from researchclaw.experiment.workspace import (
-            ExecutionRecord,
-            LaunchCommand,
-            ResultArtifact,
-            ResultArtifacts,
-            RunManifest,
-        )
-
         cfg = _workspace_agent_rc_config(tmp_path)
-        workspace = Path(cfg.experiment.workspace_agent.workspace_path)
-        head = _init_workspace_git(workspace)
-        calls: list[dict[str, Any]] = []
-        agent = object()
-
-        execution = ExecutionRecord(
-            stage=12,
-            code_commit=head,
-            submitter="local",
-            job_id="job-1",
-            submit_status="submitted",
-            final_status="completed",
-            log_path="logs/run.log",
-            result_paths=["outputs/metrics.json"],
-            result_hashes={"outputs/metrics.json": "sha"},
-            metrics={"accuracy": 0.9},
-            elapsed_sec=1.2,
-            waited=True,
-            recorded_at="2026-05-29T00:00:00Z",
-        )
-        artifacts = ResultArtifacts(
-            code_commit=head,
-            artifacts=[
-                ResultArtifact(
-                    path="outputs/metrics.json",
-                    sha256="sha",
-                    size_bytes=12,
-                    exists=True,
-                )
-            ],
-            collected_at="2026-05-29T00:00:00Z",
-        )
-        _write_prior_artifact(
-            run_dir, 12, "execution_record.json", json.dumps(execution.to_dict())
-        )
-        _write_prior_artifact(
-            run_dir, 12, "result_artifacts.json", json.dumps(artifacts.to_dict())
-        )
+        self._write_stage12_execution(run_dir, metrics={"accuracy": 0.91})
+        called: list[int] = []
         monkeypatch.setattr(
             "researchclaw.experiment.workspace_agent.create_workspace_agent",
-            lambda *args, **kwargs: agent,
-        )
-
-        def fake_implement(**kwargs: Any):
-            from researchclaw.experiment.workspace import WorkspaceAgentResult
-
-            calls.append(kwargs)
-            manifest = RunManifest(
-                code_commit="refined",
-                launch=LaunchCommand(command="python train.py --refined"),
-                result_paths=["outputs/metrics.json"],
-            )
-            (workspace / "run_manifest.json").write_text(
-                manifest.to_json(),
-                encoding="utf-8",
-            )
-            return WorkspaceAgentResult(
-                base_sha=head,
-                agent_commit_sha="refined",
-                manifest_path="run_manifest.json",
-                diff_stat=" train.py | 2 +",
-                raw_log="refined",
-                provider_name="acp",
-                elapsed_sec=0.2,
-            )
-
-        monkeypatch.setattr(
-            "researchclaw.pipeline.workspace_orchestrator.run_workspace_agent_implement",
-            fake_implement,
+            lambda *args, **kwargs: called.append(1),
         )
         stage_dir = run_dir / "stage-13"
         stage_dir.mkdir()
 
-        result = rc_executor._execute_iterative_refine(
+        rc_executor._execute_experiment_route_decision(
             stage_dir,
             run_dir,
             cfg,
             adapters,
-            llm=FakeLLMClient(),
+            llm=None,
         )
 
-        assert result.status is StageStatus.DONE
-        assert calls[0]["stage"] == 13
-        assert calls[0]["agent"] is agent
-        assert calls[0]["close_policy"] == "keep"
-        assert "submitter" not in calls[0]
-        assert "accuracy" in calls[0]["prompt"]
-        assert "RESULT ARTIFACTS" in calls[0]["prompt"]
-        assert (stage_dir / "refine_record.json").is_file()
-        assert json.loads((stage_dir / "run_manifest.json").read_text(encoding="utf-8"))[
-            "code_commit"
-        ] == "refined"
+        assert called == []
 
     def test_stage14_analyzes_registry_execution_and_provenance(
         self,

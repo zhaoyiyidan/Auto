@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
@@ -13,16 +11,10 @@ from researchclaw.pipeline.experiment_diagnosis import (
     DeficiencyType,
     Deficiency,
     ExperimentDiagnosis,
-    PaperMode,
 )
 from researchclaw.pipeline.experiment_repair import (
-    ExperimentRepairResult,
-    RepairCycleResult,
     build_repair_prompt,
-    run_repair_loop,
     select_best_results,
-    _get_repaired_code,
-    _repair_via_workspace_agent,
     _build_experiment_summary_from_run,
     _load_experiment_code,
     _load_experiment_summary,
@@ -111,95 +103,7 @@ class TestBuildRepairPrompt:
         assert "Do not submit" in prompt
 
 
-class TestWorkspaceAgentRepairWiring:
-    def test_repair_uses_workspace_agent_implement_only(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from researchclaw.experiment.workspace import WorkspaceAgentResult
-
-        workspace = tmp_path / "workspace"
-        workspace.mkdir()
-        (workspace / "train.py").write_text("print('fixed')\n", encoding="utf-8")
-        config = SimpleNamespace(
-            experiment=SimpleNamespace(
-                workspace_agent=SimpleNamespace(
-                    enabled=True,
-                    workspace_path=str(workspace),
-                    manifest_filename="run_manifest.json",
-                    timeout_sec=300,
-                    close_policy="close",
-                )
-            )
-        )
-        calls: list[dict[str, Any]] = []
-        agent = object()
-
-        def fake_implement(**kwargs: Any) -> WorkspaceAgentResult:
-            calls.append(kwargs)
-            return WorkspaceAgentResult(
-                base_sha="base",
-                agent_commit_sha="head",
-                manifest_path="run_manifest.json",
-                diff_stat=" train.py | 1 +",
-                raw_log="done",
-                provider_name="acp",
-                elapsed_sec=0.1,
-            )
-
-        monkeypatch.setattr(
-            "researchclaw.experiment.workspace_agent.create_workspace_agent",
-            lambda *args, **kwargs: agent,
-        )
-        monkeypatch.setattr(
-            "researchclaw.experiment.submitter.create_submitter",
-            lambda *args, **kwargs: pytest.fail("repair must not submit jobs"),
-        )
-        monkeypatch.setattr(
-            "researchclaw.pipeline.workspace_orchestrator.run_workspace_agent_implement",
-            fake_implement,
-        )
-
-        repaired = _repair_via_workspace_agent(
-            "fix the experiment",
-            {"main.py": "print('old')\n"},
-            llm=None,
-            config=config,
-            run_dir=tmp_path / "run",
-            cycle=1,
-        )
-
-        assert repaired is not None
-        assert repaired["train.py"] == "print('fixed')\n"
-        assert calls[0]["stage"] == 14
-        assert calls[0]["iteration"] == 1
-        assert calls[0]["agent"] is agent
-        assert calls[0]["close_policy"] == "close"
-
-    def test_get_repaired_code_is_workspace_only(self, tmp_path: Path) -> None:
-        class FailingLLM:
-            def chat(self, *args: Any, **kwargs: Any) -> None:
-                raise AssertionError("legacy LLM repair must not be called")
-
-        config = SimpleNamespace(
-            experiment=SimpleNamespace(
-                repair=SimpleNamespace(max_cycles=1),
-                workspace_agent=SimpleNamespace(enabled=False),
-            )
-        )
-
-        repaired = _get_repaired_code(
-            "fix it",
-            {"main.py": "print('old')\n"},
-            FailingLLM(),
-            config,
-            tmp_path,
-            1,
-        )
-
-        assert repaired is None
-
+class TestRepairLoopRemoval:
     def test_legacy_repair_helpers_are_removed(self) -> None:
         import researchclaw.pipeline._helpers as helpers
         import researchclaw.pipeline.experiment_repair as repair
@@ -213,54 +117,23 @@ class TestWorkspaceAgentRepairWiring:
             "_repair_via_opencode",
             "_repair_via_llm",
             "_run_experiment_in_sandbox",
+            "_get_repaired_code",
+            "_repair_via_workspace_agent",
+            "run_repair_loop",
         ]
 
         assert [name for name in removed_from_helpers if hasattr(helpers, name)] == []
         assert [name for name in removed_from_repair if hasattr(repair, name)] == []
 
+    def test_run_repair_loop_is_removed(self) -> None:
+        import researchclaw.pipeline.experiment_repair as er
+
+        assert not hasattr(er, "run_repair_loop")
+
     def test_repair_config_drops_opencode_flag(self) -> None:
         from researchclaw.config import ExperimentRepairConfig
 
         assert not hasattr(ExperimentRepairConfig(), "use_opencode")
-
-
-# ---------------------------------------------------------------------------
-# ExperimentRepairResult tests
-# ---------------------------------------------------------------------------
-
-
-class TestRepairResult:
-    def test_serialization(self):
-        result = ExperimentRepairResult(
-            success=False,
-            total_cycles=2,
-            final_mode=PaperMode.PRELIMINARY_STUDY,
-        )
-        d = result.to_dict()
-        assert d["success"] is False
-        assert d["total_cycles"] == 2
-        assert d["final_mode"] == "preliminary_study"
-
-    def test_serialization_with_cycles(self):
-        diag = ExperimentDiagnosis(summary="test")
-        result = ExperimentRepairResult(
-            success=True,
-            total_cycles=1,
-            final_mode=PaperMode.FULL_PAPER,
-            cycle_history=[
-                RepairCycleResult(
-                    cycle=1,
-                    diagnosis=diag,
-                    repair_applied=True,
-                    repair_description="Fixed 2 files",
-                ),
-            ],
-        )
-        d = result.to_dict()
-        assert d["success"] is True
-        assert len(d["cycle_history"]) == 1
-        assert d["cycle_history"][0]["repair_applied"] is True
-        assert d["cycle_history"][0]["diagnosis_summary"] == "test"
 
 
 # ---------------------------------------------------------------------------
@@ -330,8 +203,8 @@ class TestBuildExperimentSummary:
 
 
 class TestLoadExperimentCode:
-    def test_loads_refined_manifest(self, tmp_path):
-        stage_dir = tmp_path / "stage-13"
+    def test_loads_stage10_manifest(self, tmp_path):
+        stage_dir = tmp_path / "stage-10"
         stage_dir.mkdir(parents=True)
         (stage_dir / "run_manifest.json").write_text(
             json.dumps({"launch": {"command": "python train.py"}}),
@@ -339,8 +212,8 @@ class TestLoadExperimentCode:
         )
 
         code = _load_experiment_code(tmp_path)
-        assert "stage-13/run_manifest.json" in code
-        assert "python train.py" in code["stage-13/run_manifest.json"]
+        assert "stage-10/run_manifest.json" in code
+        assert "python train.py" in code["stage-10/run_manifest.json"]
 
     def test_loads_task_spec_when_manifest_missing(self, tmp_path):
         stage_dir = tmp_path / "stage-09"
@@ -401,163 +274,6 @@ class TestSelectBestResults:
     def test_returns_none_when_empty(self, tmp_path):
         result = select_best_results(tmp_path, [])
         assert result is None
-
-
-# ---------------------------------------------------------------------------
-# Full repair loop tests (mocked)
-# ---------------------------------------------------------------------------
-
-
-class TestRunRepairLoop:
-    def _make_run_dir(self, tmp_path, n_conditions=1, has_code=True):
-        """Create a minimal run directory for testing."""
-        # Stage 14 — experiment summary
-        s14 = tmp_path / "stage-14"
-        s14.mkdir()
-        (s14 / "runs").mkdir()
-
-        conds = {f"Cond{i}": {"metrics": {"accuracy": 70.0 + i}} for i in range(n_conditions)}
-        summary = {
-            "condition_summaries": conds,
-            "best_run": {"metrics": {f"Cond{i}/0/accuracy": 70.0 + i for i in range(n_conditions)}},
-            "metrics_summary": {"accuracy": {"mean": 70.5}},
-        }
-        (s14 / "experiment_summary.json").write_text(json.dumps(summary))
-
-        run_data = {
-            "stdout": "\n".join(f"condition=Cond{i} metric={70.0 + i}" for i in range(n_conditions)),
-            "stderr": "",
-        }
-        (s14 / "runs" / "run_0.json").write_text(json.dumps(run_data))
-
-        # Stage 10 — experiment code
-        if has_code:
-            s10 = tmp_path / "stage-10" / "experiment"
-            s10.mkdir(parents=True)
-            (s10 / "main.py").write_text("import torch\nprint('hello')")
-
-        return tmp_path
-
-    def test_skips_when_already_sufficient(self, tmp_path):
-        """If experiment is already sufficient, return immediately."""
-        # 3 conditions with 2+ seeds = full_paper
-        s14 = tmp_path / "stage-14"
-        s14.mkdir()
-        (s14 / "runs").mkdir()
-        summary = {
-            "condition_summaries": {
-                "A": {"metrics": {"m": 80.0}},
-                "B": {"metrics": {"m": 85.0}},
-                "C": {"metrics": {"m": 90.0}},
-            },
-            "best_run": {
-                "metrics": {
-                    "A/0/m": 80.0, "A/1/m": 81.0,
-                    "B/0/m": 85.0, "B/1/m": 86.0,
-                    "C/0/m": 90.0, "C/1/m": 91.0,
-                },
-            },
-        }
-        (s14 / "experiment_summary.json").write_text(json.dumps(summary))
-
-        from researchclaw.config import ExperimentConfig, ExperimentRepairConfig
-
-        class FakeConfig:
-            class experiment:
-                time_budget_sec = 2400
-                repair = ExperimentRepairConfig(enabled=True)
-
-            class llm:
-                pass
-
-        result = run_repair_loop(tmp_path, FakeConfig(), "test")
-        assert result.success is True
-        assert result.total_cycles == 0
-        assert result.final_mode == PaperMode.FULL_PAPER
-
-    def test_returns_failure_when_no_code(self, tmp_path):
-        """If no experiment code found, return failure."""
-        s14 = tmp_path / "stage-14"
-        s14.mkdir()
-        (s14 / "experiment_summary.json").write_text(json.dumps({
-            "condition_summaries": {"A": {"metrics": {"m": 80.0}}},
-            "best_run": {"metrics": {}},
-        }))
-
-        from researchclaw.config import ExperimentRepairConfig
-
-        class FakeConfig:
-            class experiment:
-                time_budget_sec = 2400
-                repair = ExperimentRepairConfig(enabled=True)
-
-            class llm:
-                pass
-
-        result = run_repair_loop(tmp_path, FakeConfig(), "test")
-        assert result.success is False
-        assert result.total_cycles == 0
-
-    def test_repair_loop_uses_workspace_agent_without_llm_or_sandbox(
-        self,
-        tmp_path,
-        monkeypatch: pytest.MonkeyPatch,
-    ):
-        """Workspace-native repair asks the code agent and leaves execution to stages."""
-        run_dir = self._make_run_dir(tmp_path, n_conditions=1)
-
-        from researchclaw.config import ExperimentRepairConfig
-        from researchclaw.experiment.workspace import WorkspaceAgentResult
-
-        workspace = tmp_path / "workspace"
-        workspace.mkdir()
-        (workspace / "train.py").write_text("print('fixed')\n", encoding="utf-8")
-
-        class FakeConfig:
-            class experiment:
-                time_budget_sec = 2400
-                mode = "workspace"
-                repair = ExperimentRepairConfig(enabled=True, max_cycles=1)
-                metric_key = "primary_metric"
-                workspace_agent = SimpleNamespace(
-                    enabled=True,
-                    workspace_path=str(workspace),
-                    manifest_filename="run_manifest.json",
-                    timeout_sec=300,
-                    close_policy="keep",
-                )
-
-            class llm:
-                pass
-
-        monkeypatch.setattr(
-            "researchclaw.llm.create_llm_client",
-            lambda *args, **kwargs: pytest.fail("repair must not create an LLM client"),
-        )
-        monkeypatch.setattr(
-            "researchclaw.experiment.workspace_agent.create_workspace_agent",
-            lambda *args, **kwargs: object(),
-        )
-        monkeypatch.setattr(
-            "researchclaw.pipeline.workspace_orchestrator.run_workspace_agent_implement",
-            lambda **kwargs: WorkspaceAgentResult(
-                base_sha="base",
-                agent_commit_sha="head",
-                manifest_path="run_manifest.json",
-                diff_stat=" train.py | 1 +",
-                raw_log="done",
-                provider_name="acp",
-                elapsed_sec=0.1,
-            ),
-        )
-
-        result = run_repair_loop(run_dir, FakeConfig(), "test-mock")
-
-        assert result.total_cycles == 1
-        assert len(result.cycle_history) == 1
-        assert result.cycle_history[0].repair_applied is True
-        assert "Workspace agent" in result.cycle_history[0].repair_description
-        assert not (run_dir / "stage-14_repair_v1" / "experiment").exists()
 
 
 # ---------------------------------------------------------------------------

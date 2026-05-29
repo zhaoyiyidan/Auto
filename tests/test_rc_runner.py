@@ -72,6 +72,43 @@ def _blocked(stage: Stage) -> StageResult:
     )
 
 
+def test_run_experiment_diagnosis_is_read_only(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    _ = adapters
+    called: list[int] = []
+    monkeypatch.setattr(
+        "researchclaw.experiment.workspace_agent.create_workspace_agent",
+        lambda *args, **kwargs: called.append(1),
+    )
+    s14 = run_dir / "stage-14"
+    s14.mkdir()
+    (s14 / "experiment_summary.json").write_text(
+        json.dumps(
+            {
+                "condition_summaries": {"A": {"metrics": {"accuracy": 0.1}}},
+                "best_run": {"metrics": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    s12 = run_dir / "stage-12"
+    s12.mkdir()
+    (s12 / "execution_record.json").write_text(
+        json.dumps({"stdout": "", "stderr": "", "final_status": "completed"}),
+        encoding="utf-8",
+    )
+
+    rc_runner._run_experiment_diagnosis(run_dir, rc_config, "rid")
+
+    assert called == []
+    assert (run_dir / "experiment_diagnosis.json").is_file()
+    assert not (run_dir / "repair_prompt.txt").exists()
+
+
 def test_execute_pipeline_runs_stages_in_sequence(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,

@@ -37,8 +37,19 @@ class _FakeReader:
         return []
 
 
-def _config(*, notify: bool = True) -> LarkHITLConfig:
-    return LarkHITLConfig(enabled=True, chat_id="oc_abc123", notify=notify)
+def _config(
+    *,
+    notify: bool = True,
+    allowed_actions: tuple[str, ...] = (),
+    allowed_senders: tuple[str, ...] = (),
+) -> LarkHITLConfig:
+    return LarkHITLConfig(
+        enabled=True,
+        chat_id="oc_abc123",
+        notify=notify,
+        allowed_actions=allowed_actions,
+        allowed_senders=allowed_senders,
+    )
 
 
 def _write_waiting(
@@ -47,6 +58,7 @@ def _write_waiting(
     since: str = "2026-05-29T12:00:00+00:00",
     stage: int = 5,
     stage_name: str = "Review",
+    available_actions: tuple[str, ...] = ("approve", "reject"),
 ):
     return write_waiting(
         run_dir / "hitl",
@@ -55,7 +67,7 @@ def _write_waiting(
             stage_name=stage_name,
             reason=PauseReason.GATE_APPROVAL,
             since=since,
-            available_actions=("approve", "reject"),
+            available_actions=available_actions,
             context_summary="Check the stage output.",
             output_files=("report.md",),
         ),
@@ -249,3 +261,92 @@ def test_same_second_different_stage_not_deduped(tmp_path: Path):
 
     assert listener.poll_once() is PollResult.RESPONDED
     assert _response_data(tmp_path)["action"] == "reject"
+
+
+def test_allowed_senders_filter(tmp_path: Path):
+    _write_waiting(tmp_path)
+    reader = _FakeReader(
+        [
+            [
+                _message("approve", message_id="om_disallowed", sender_id="ou_bad"),
+                _message("reject", message_id="om_allowed", sender_id="ou_allowed"),
+            ]
+        ]
+    )
+    listener = LarkHITLListener(
+        reader=reader,
+        notifier=_FakeNotifier(),
+        run_dir=tmp_path,
+        config=_config(allowed_senders=("ou_allowed",)),
+        run_id="run-1",
+    )
+
+    assert listener.poll_once() is PollResult.RESPONDED
+    assert _response_data(tmp_path)["action"] == "reject"
+
+
+def test_unparseable_then_valid_used(tmp_path: Path):
+    _write_waiting(tmp_path)
+    reader = _FakeReader([[_message("lol"), _message("approve", message_id="om_2")]])
+    listener = LarkHITLListener(
+        reader=reader,
+        notifier=_FakeNotifier(),
+        run_dir=tmp_path,
+        config=_config(),
+        run_id="run-1",
+    )
+
+    assert listener.poll_once() is PollResult.RESPONDED
+    assert _response_data(tmp_path)["action"] == "approve"
+
+
+def test_action_not_in_available_actions_no_write(tmp_path: Path):
+    _write_waiting(tmp_path, available_actions=("approve", "reject"))
+    notifier = _FakeNotifier()
+    reader = _FakeReader([[_message("skip", message_id="om_skip")]])
+    listener = LarkHITLListener(
+        reader=reader,
+        notifier=notifier,
+        run_dir=tmp_path,
+        config=_config(),
+        run_id="run-1",
+    )
+
+    assert listener.poll_once() is PollResult.INVALID_ACTION
+    assert not (tmp_path / "hitl" / "response.json").exists()
+    assert len(notifier.calls) == 2
+    assert "Invalid action" in notifier.calls[1][0]
+    assert "approve, reject" in notifier.calls[1][1]
+
+
+def test_allowed_actions_config_restricts(tmp_path: Path):
+    _write_waiting(tmp_path, available_actions=("approve", "reject"))
+    reader = _FakeReader([[_message("reject", message_id="om_reject")]])
+    listener = LarkHITLListener(
+        reader=reader,
+        notifier=_FakeNotifier(),
+        run_dir=tmp_path,
+        config=_config(allowed_actions=("approve",)),
+        run_id="run-1",
+    )
+
+    assert listener.poll_once() is PollResult.INVALID_ACTION
+    assert not (tmp_path / "hitl" / "response.json").exists()
+
+
+def test_feedback_sent_once_per_message_id(tmp_path: Path):
+    _write_waiting(tmp_path, available_actions=("approve",))
+    invalid = _message("reject", message_id="om_same")
+    notifier = _FakeNotifier()
+    reader = _FakeReader([[invalid], [invalid]])
+    listener = LarkHITLListener(
+        reader=reader,
+        notifier=notifier,
+        run_dir=tmp_path,
+        config=_config(),
+        run_id="run-1",
+    )
+
+    assert listener.poll_once() is PollResult.INVALID_ACTION
+    assert listener.poll_once() is PollResult.INVALID_ACTION
+    assert len(notifier.calls) == 2

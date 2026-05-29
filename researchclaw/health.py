@@ -14,11 +14,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import ContextManager, cast
+from typing import Any, ContextManager, cast
 
 import yaml
 
-from researchclaw.config import RCConfig, validate_config
+from researchclaw.config import RCConfig, SUBMITTER_TYPES, validate_config
 
 logger = logging.getLogger(__name__)
 
@@ -459,27 +459,47 @@ def _check_models_against_endpoint(
     return available, missing
 
 
-def check_sandbox_python(python_path: str) -> CheckResult:
-    if not python_path.strip():
+def check_workspace_agent_config(workspace_cfg: Any) -> CheckResult:
+    """Validate the workspace-native code agent configuration."""
+    if workspace_cfg is None or not bool(getattr(workspace_cfg, "enabled", False)):
         return CheckResult(
-            name="sandbox_python",
+            name="workspace_agent",
             status="warn",
-            detail="Sandbox python path is empty",
-            fix="Set experiment.sandbox.python_path in config",
+            detail="Workspace agent is disabled",
+            fix="Set experiment.workspace_agent.enabled: true and configure workspace_path",
         )
 
-    path = Path(python_path)
-    if path.exists() and os.access(path, os.X_OK):
+    transport = str(getattr(workspace_cfg, "transport", "acp") or "acp")
+    if transport != "acp":
         return CheckResult(
-            name="sandbox_python",
-            status="pass",
-            detail=f"Sandbox python found: {path}",
+            name="workspace_agent",
+            status="fail",
+            detail=f"Unsupported workspace agent transport: {transport}",
+            fix="Use experiment.workspace_agent.transport: acp",
         )
+
+    workspace_raw = str(getattr(workspace_cfg, "workspace_path", "") or "").strip()
+    if not workspace_raw:
+        return CheckResult(
+            name="workspace_agent",
+            status="fail",
+            detail="Workspace path is empty",
+            fix="Set experiment.workspace_agent.workspace_path",
+        )
+
+    workspace = Path(workspace_raw).expanduser()
+    if not workspace.exists():
+        return CheckResult(
+            name="workspace_agent",
+            status="warn",
+            detail=f"Workspace path does not exist: {workspace}",
+            fix="Set experiment.workspace_agent.workspace_path to an existing git repo",
+        )
+
     return CheckResult(
-        name="sandbox_python",
-        status="warn",
-        detail=f"Sandbox python missing or not executable: {path}",
-        fix="Install sandbox interpreter or update experiment.sandbox.python_path",
+        name="workspace_agent",
+        status="pass",
+        detail=f"Workspace agent configured for {workspace}",
     )
 
 
@@ -496,18 +516,29 @@ def check_matplotlib() -> CheckResult:
     return CheckResult(name="matplotlib", status="pass", detail="matplotlib import ok")
 
 
-def check_experiment_mode(mode: str) -> CheckResult:
-    if mode == "simulated":
+def check_submitter_config(submitter_cfg: Any) -> CheckResult:
+    """Validate the pluggable training submitter configuration."""
+    submitter_type = str(getattr(submitter_cfg, "type", "local") or "local")
+    if submitter_type not in SUBMITTER_TYPES:
         return CheckResult(
-            name="experiment_mode",
+            name="submitter",
+            status="fail",
+            detail=f"Unsupported submitter type: {submitter_type}",
+            fix=f"Use one of: {', '.join(sorted(SUBMITTER_TYPES))}",
+        )
+    if submitter_type == "custom_python" and not str(
+        getattr(submitter_cfg, "custom_callable", "") or ""
+    ).strip():
+        return CheckResult(
+            name="submitter",
             status="warn",
-            detail="Experiment mode is simulated — results will be synthetic",
-            fix="Use sandbox or docker mode for real execution",
+            detail="custom_python submitter has no callable configured",
+            fix="Set experiment.submitter.custom_callable",
         )
     return CheckResult(
-        name="experiment_mode",
+        name="submitter",
         status="pass",
-        detail=f"Experiment mode: {mode}",
+        detail=f"Submitter configured: {submitter_type}",
     )
 
 
@@ -528,34 +559,6 @@ def check_acp_agent(agent_command: str) -> CheckResult:
     )
 
 
-def check_docker_runtime(config: RCConfig) -> CheckResult:
-    """Check Docker daemon, image availability, and optional NVIDIA runtime."""
-    from researchclaw.experiment.docker_sandbox import DockerSandbox
-
-    if not DockerSandbox.check_docker_available():
-        return CheckResult(
-            name="docker_runtime",
-            status="fail",
-            detail="Docker daemon is not reachable",
-            fix="Install and start Docker, or switch to mode: sandbox",
-        )
-
-    docker_cfg = config.experiment.docker
-    if not DockerSandbox.ensure_image(docker_cfg.image):
-        return CheckResult(
-            name="docker_runtime",
-            status="fail",
-            detail=f"Docker image '{docker_cfg.image}' not found locally",
-            fix=f"docker build -t {docker_cfg.image} researchclaw/docker/",
-        )
-
-    detail = f"Docker OK, image={docker_cfg.image}"
-    if docker_cfg.gpu_enabled:
-        detail += ", GPU passthrough enabled"
-
-    return CheckResult(name="docker_runtime", status="pass", detail=detail)
-
-
 def run_doctor(config_path: str | Path) -> DoctorReport:
     """Run all health checks and return report."""
     checks: list[CheckResult] = []
@@ -569,8 +572,8 @@ def run_doctor(config_path: str | Path) -> DoctorReport:
     api_key = ""
     model = ""
     fallback_models: tuple[str, ...] = ()
-    sandbox_python_path = ""
-    experiment_mode = ""
+    workspace_agent_cfg: Any = None
+    submitter_cfg: Any = None
     provider = ""
     acp_agent_command = "claude"
 
@@ -581,8 +584,8 @@ def run_doctor(config_path: str | Path) -> DoctorReport:
         api_key = config.llm.api_key or os.environ.get(config.llm.api_key_env, "")
         model = config.llm.primary_model
         fallback_models = config.llm.fallback_models
-        sandbox_python_path = config.experiment.sandbox.python_path
-        experiment_mode = config.experiment.mode
+        workspace_agent_cfg = config.experiment.workspace_agent
+        submitter_cfg = config.experiment.submitter
         acp_agent_command = config.llm.acp.agent
     except (FileNotFoundError, OSError, ValueError, yaml.YAMLError) as exc:
         logger.debug("Could not fully load config for doctor checks: %s", exc)
@@ -593,23 +596,9 @@ def run_doctor(config_path: str | Path) -> DoctorReport:
         checks.append(check_llm_connectivity(base_url, api_key))
         checks.append(check_api_key_valid(base_url, api_key))
         checks.append(check_model_chain(base_url, api_key, model, fallback_models))
-    checks.append(check_sandbox_python(sandbox_python_path))
+    checks.append(check_workspace_agent_config(workspace_agent_cfg))
+    checks.append(check_submitter_config(submitter_cfg))
     checks.append(check_matplotlib())
-    checks.append(check_experiment_mode(experiment_mode))
-
-    if experiment_mode == "docker":
-        try:
-            checks.append(check_docker_runtime(config))
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("Docker health check failed: %s", exc)
-            checks.append(
-                CheckResult(
-                    name="docker_runtime",
-                    status="fail",
-                    detail=f"Docker health check error: {exc}",
-                    fix="Ensure Docker is installed and the daemon is running",
-                )
-            )
 
     overall = "fail" if any(c.status == "fail" for c in checks) else "pass"
     return DoctorReport(

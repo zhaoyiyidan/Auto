@@ -31,22 +31,11 @@ def run_acp_debate(
         raise RuntimeError("ACP debate requires ACPClient")
 
     synthesis = _read_prior_artifact(run_dir, "synthesis.md") or ""
-    extension_context_path = run_dir / "hypothesis_extension_context.md"
-    if extension_context_path.exists():
-        try:
-            extension_context = extension_context_path.read_text(
-                encoding="utf-8"
-            ).strip()
-        except OSError:
-            extension_context = ""
-        if extension_context:
-            synthesis = (
-                f"{synthesis}\n\n## Hypothesis Extension Context\n"
-                "Generate deeper follow-up hypotheses from this prior hypothesis "
-                "and experiment evidence. Do not treat this as a blank-slate "
-                "pivot.\n\n"
-                f"{extension_context}"
-            )
+    # EXTEND context is a ONE-TIME round-1 seed, not part of synthesis. Keeping
+    # it separate means it is injected into the round-1 claim's
+    # {extension_context} slot only; later rounds rely on prior_claim + judge
+    # criticisms, and the judge / final synthesizer see the clean synthesis.
+    extension_context = _read_extension_context(run_dir)
     roles = prompts.debate_roles_hypothesis()
     if not roles:
         raise RuntimeError("No hypothesis debate roles configured")
@@ -64,6 +53,7 @@ def run_acp_debate(
             archive_path=archive_path,
             base_config=llm.config,
             synthesis=synthesis,
+            extension_context=extension_context,
             topic=config.research.topic,
             max_rounds=max_rounds,
             confidence_min=confidence_min,
@@ -102,6 +92,7 @@ def _run_role_debates_parallel(
     archive_path: Path,
     base_config: ACPConfig,
     synthesis: str,
+    extension_context: str,
     topic: str,
     max_rounds: int,
     confidence_min: float,
@@ -122,6 +113,7 @@ def _run_role_debates_parallel(
                 archive_path=archive_path,
                 base_config=base_config,
                 synthesis=synthesis,
+                extension_context=extension_context,
                 topic=topic,
                 max_rounds=max_rounds,
                 confidence_min=confidence_min,
@@ -153,6 +145,7 @@ def _run_role_debate(
     archive_path: Path,
     base_config: ACPConfig,
     synthesis: str,
+    extension_context: str,
     topic: str,
     max_rounds: int,
     confidence_min: float,
@@ -172,6 +165,7 @@ def _run_role_debate(
                     role_name,
                     role_prompts,
                     synthesis,
+                    extension_context,
                     topic,
                     prior_claim,
                     judge_criticisms,
@@ -230,6 +224,17 @@ def _run_role_debate(
             return candidate_claim
 
     return prior_claim
+
+
+def _read_extension_context(run_dir: Path) -> str:
+    """Read the EXTEND rollback context, returning '' when absent."""
+    path = run_dir / "hypothesis_extension_context.md"
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def _export_ancestor(acp_client: ACPClient, archive_dir: Path) -> Path:
@@ -330,6 +335,7 @@ def _run_claim_agent(
     role_name: str,
     role_prompts: dict[str, str],
     synthesis: str,
+    extension_context: str,
     topic: str,
     prior_claim: str | None,
     judge_criticisms: list[str] | None,
@@ -340,6 +346,7 @@ def _run_claim_agent(
         role_prompts,
         topic,
         synthesis,
+        extension_context,
         prior_claim,
         judge_criticisms,
     )
@@ -392,11 +399,31 @@ def _build_claim_prompt(
     role_prompts: dict[str, str],
     topic: str,
     synthesis: str,
+    extension_context: str,
     prior_claim: str | None,
     judge_criticisms: list[str] | None,
 ) -> tuple[list[dict[str, str]], str]:
-    """Construct the claim-generation prompt for a role fork."""
-    variables = {"topic": topic, "synthesis": synthesis, "extension_context": ""}
+    """Construct the claim-generation prompt for a role fork.
+
+    The EXTEND context is a one-time round-1 seed: it is rendered into the
+    template's ``{extension_context}`` slot only when there is no prior claim
+    (i.e. the first round). Revision rounds drop it and instead carry the prior
+    candidate + judge criticisms, so the two "prior" signals never overlap.
+    """
+    extension_block = ""
+    if prior_claim is None and extension_context:
+        extension_block = (
+            "## Hypothesis Extension Context\n"
+            "Generate deeper follow-up hypotheses from this prior hypothesis "
+            "and experiment evidence. Do not treat this as a blank-slate "
+            "pivot.\n\n"
+            f"{extension_context}\n"
+        )
+    variables = {
+        "topic": topic,
+        "synthesis": synthesis,
+        "extension_context": extension_block,
+    }
     system = _render(role_prompts.get("system", ""), variables)
     user = _render(role_prompts.get("user", ""), variables)
 

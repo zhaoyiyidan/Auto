@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
+from researchclaw.experiment.execution_contract import default_contract
 from researchclaw.experiment.workspace import TaskSpec
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._helpers import (
@@ -76,6 +78,9 @@ def _task_spec_from_llm(
         "Create a ResearchClaw code-agent task spec as YAML only.\n"
         "Required keys: workspace, objective, constraints, primary_metric, "
         "metric_direction, allowed_scope, forbidden_scope, expected_outputs.\n"
+        "Optional key: execution_contract, a lightweight block declaring "
+        "required result artifacts, required metric names/types, completion "
+        "statuses, and any agent-declared checks for later pure-logic routing.\n"
         f"Workspace: {workspace}\n"
         f"Topic: {config.research.topic}\n"
         f"Primary metric: {config.experiment.metric_key}\n"
@@ -91,7 +96,9 @@ def _task_spec_from_llm(
             prompt,
             max_tokens=2048,
         )
-        return TaskSpec.from_yaml(_extract_yaml_block(response.content))
+        return _ensure_execution_contract(
+            TaskSpec.from_yaml(_extract_yaml_block(response.content))
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Stage 09: failed to parse LLM task spec: %s", exc)
         return None
@@ -116,6 +123,24 @@ def _template_task_spec(config: RCConfig, hypotheses: str) -> TaskSpec:
         allowed_scope=["."],
         forbidden_scope=[".git/", ".researchclaw/"],
         expected_outputs=["outputs/metrics.json"],
+        execution_contract=default_contract(
+            primary_metric=str(config.experiment.metric_key),
+            metric_direction=str(config.experiment.metric_direction),
+            expected_outputs=["outputs/metrics.json"],
+        ),
+    )
+
+
+def _ensure_execution_contract(spec: TaskSpec) -> TaskSpec:
+    if spec.execution_contract is not None:
+        return spec
+    return replace(
+        spec,
+        execution_contract=default_contract(
+            primary_metric=spec.primary_metric,
+            metric_direction=spec.metric_direction,
+            expected_outputs=spec.expected_outputs or ["outputs/metrics.json"],
+        ),
     )
 
 

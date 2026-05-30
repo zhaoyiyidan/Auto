@@ -9,6 +9,8 @@ from typing import Any
 
 import yaml
 
+from researchclaw.experiment.execution_contract import ExecutionContract
+
 
 @dataclass(frozen=True)
 class ResourceSpec:
@@ -169,6 +171,7 @@ class TaskSpec:
     forbidden_scope: list[str]
     expected_outputs: list[str]
     schema_version: str = "researchclaw.task_spec.v1"
+    execution_contract: ExecutionContract | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.workspace, str) or not self.workspace.strip():
@@ -188,6 +191,10 @@ class TaskSpec:
                 isinstance(item, str) for item in value
             ):
                 raise TypeError(f"TaskSpec.{name} must be a list[str]")
+        if self.execution_contract is not None and not isinstance(
+            self.execution_contract, ExecutionContract
+        ):
+            raise TypeError("TaskSpec.execution_contract must be an ExecutionContract or None")
 
     def to_yaml(self) -> str:
         payload = {
@@ -201,6 +208,8 @@ class TaskSpec:
             "forbidden_scope": self.forbidden_scope,
             "expected_outputs": self.expected_outputs,
         }
+        if self.execution_contract is not None:
+            payload["execution_contract"] = self.execution_contract.to_dict()
         return yaml.safe_dump(payload, sort_keys=False)
 
     @classmethod
@@ -208,6 +217,12 @@ class TaskSpec:
         data = yaml.safe_load(text) or {}
         if not isinstance(data, dict):
             raise TypeError("TaskSpec YAML must contain an object")
+        contract_data = data.get("execution_contract")
+        execution_contract = (
+            ExecutionContract.from_dict(contract_data)
+            if isinstance(contract_data, dict)
+            else None
+        )
         return cls(
             workspace=str(data.get("workspace", "")),
             objective=str(data.get("objective", "")),
@@ -220,6 +235,7 @@ class TaskSpec:
             schema_version=str(
                 data.get("schema_version") or "researchclaw.task_spec.v1"
             ),
+            execution_contract=execution_contract,
         )
 
     @classmethod

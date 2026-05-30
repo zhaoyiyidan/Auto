@@ -377,6 +377,15 @@ def _run_hitl_post_stage(
     human_input = session.wait_for_human()
 
     if human_input.action == HumanAction.APPROVE:
+        # Stage 15: the operator may have edited stage-15/decision.md on the
+        # server before approving (e.g. PROCEED -> EXTEND). Re-read it so the
+        # human-edited decision actually drives routing instead of the AI's
+        # in-memory decision parsed when the stage first ran.
+        if stage is Stage.RESEARCH_DECISION and result.status == StageStatus.DONE:
+            try:
+                return _finalize_research_decision_from_artifact(stage_dir, run_dir)
+            except _GateProposalStale:
+                return result
         return result
 
     if human_input.action == HumanAction.REJECT:
@@ -390,7 +399,13 @@ def _run_hitl_post_stage(
         )
 
     if human_input.action == HumanAction.EDIT:
-        # Human already edited files via the adapter
+        # Human already edited files via the adapter. For Stage 15 re-read the
+        # edited decision.md so the new decision drives routing.
+        if stage is Stage.RESEARCH_DECISION and result.status == StageStatus.DONE:
+            try:
+                return _finalize_research_decision_from_artifact(stage_dir, run_dir)
+            except _GateProposalStale:
+                return result
         return result
 
     if human_input.action == HumanAction.SKIP:

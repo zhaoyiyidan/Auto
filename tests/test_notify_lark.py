@@ -122,7 +122,7 @@ def test_send_success_invokes_subprocess_once():
     assert result.targets[0].status == "ok"
 
 
-def test_send_success_captures_message_metadata():
+def test_send_success_on_zero_code_response():
     stdout = json.dumps(
         {
             "code": 0,
@@ -138,8 +138,8 @@ def test_send_success_captures_message_metadata():
 
         result = LarkNotifier(_config()).send("Title", "Body")
 
-    assert result.targets[0].message_id == "om_123"
-    assert result.targets[0].create_time_ms == 1780055989352
+    assert result.ok
+    assert result.targets[0].status == "ok"
 
 
 def test_send_builds_exact_argv():

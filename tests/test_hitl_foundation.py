@@ -271,6 +271,32 @@ class TestHITLSession:
         result = session.wait_for_human()
         assert result.action == HumanAction.APPROVE
 
+    def test_pause_invokes_registered_notifier(self) -> None:
+        config = HITLConfig(enabled=True, mode="co-pilot")
+        session = HITLSession(config=config, run_dir=None)
+
+        seen: list[tuple[int, str]] = []
+        session.set_pause_notifier(
+            lambda w: seen.append((w.stage, w.reason.value))
+        )
+
+        session.pause(15, "RESEARCH_DECISION", PauseReason.GATE_APPROVAL)
+
+        assert seen == [(15, PauseReason.GATE_APPROVAL.value)]
+
+    def test_pause_notifier_failure_is_swallowed(self) -> None:
+        config = HITLConfig(enabled=True, mode="co-pilot")
+        session = HITLSession(config=config, run_dir=None)
+
+        def _boom(_w) -> None:
+            raise RuntimeError("lark down")
+
+        session.set_pause_notifier(_boom)
+
+        # Must not raise — a broken notifier can never break the pipeline.
+        session.pause(15, "RESEARCH_DECISION", PauseReason.GATE_APPROVAL)
+        assert session.is_waiting
+
     def test_edit_tracking(self) -> None:
         config = HITLConfig(enabled=True, mode="co-pilot")
         session = HITLSession(config=config)

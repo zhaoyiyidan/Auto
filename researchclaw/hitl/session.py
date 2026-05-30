@@ -61,6 +61,11 @@ class HITLSession:
     _input_callback: Callable[
         [WaitingState], HumanInput
     ] | None = field(default=None, repr=False)
+    # Optional out-of-band notifier invoked whenever the pipeline pauses
+    # (e.g. push a Lark/Feishu message). Must not block or raise.
+    _pause_notifier: Callable[
+        [WaitingState], None
+    ] | None = field(default=None, repr=False)
 
     # Timestamps
     created_at: str = field(
@@ -97,6 +102,19 @@ class HITLSession:
         awaits a message.
         """
         self._input_callback = callback
+
+    def set_pause_notifier(
+        self,
+        notifier: Callable[[WaitingState], None],
+    ) -> None:
+        """Register an out-of-band notifier fired on every pause.
+
+        The notifier receives the same WaitingState as the input callback and
+        is meant for push notifications (e.g. Lark/Feishu). It is invoked
+        best-effort inside ``pause()``: any exception is swallowed so a broken
+        notifier can never block or crash the pipeline.
+        """
+        self._pause_notifier = notifier
 
     # ------------------------------------------------------------------
     # Policy queries
@@ -165,6 +183,13 @@ class HITLSession:
             stage_name,
             reason.value,
         )
+        if self._pause_notifier is not None and self._waiting is not None:
+            try:
+                self._pause_notifier(self._waiting)
+            except Exception:  # noqa: BLE001 — notifier must never break the run
+                logger.warning(
+                    "HITL pause notifier failed (non-blocking)", exc_info=True
+                )
 
     def wait_for_human(self) -> HumanInput:
         """Block until human provides input.

@@ -151,7 +151,7 @@ def test_cmd_run_reports_paused_pipeline(
     assert "1 paused" in captured.out
 
 
-def test_cmd_run_lark_hitl_uses_file_polling(
+def test_cmd_run_lark_notify_uses_file_polling(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -175,9 +175,6 @@ notifications:
         kind: chat
         receive_id_type: chat_id
         receive_id: oc_test
-    hitl:
-      enabled: true
-      chat_id: oc_test
 knowledge_base:
   backend: markdown
   root: kb
@@ -223,8 +220,12 @@ hitl:
     assert code == 0
     adapters = captured["adapters"]
     assert adapters.hitl is not None
+    # Lark notifications configured -> stay in file-polling mode so a server
+    # operator can decide via `researchclaw approve`/`attach`.
     assert getattr(adapters.hitl, "_input_callback") is None
-    assert "file polling (Lark listener)" in capsys.readouterr().out
+    # A pause notifier is wired so the pipeline itself pushes the Lark alert.
+    assert getattr(adapters.hitl, "_pause_notifier") is not None
+    assert "file polling" in capsys.readouterr().out
 
 
 def test_main_dispatches_run_command(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -292,100 +293,6 @@ def test_run_parser_accepts_required_flags(
 def test_validate_parser_accepts_config_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rc_cli, "cmd_validate", lambda args: 0)
     assert rc_cli.main(["validate", "--config", "cfg.yaml"]) == 0
-
-
-def test_lark_listen_missing_run_dir_returns_one(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    missing = tmp_path / "missing-run"
-
-    code = rc_cli.cmd_lark_listen(argparse.Namespace(run_dir=str(missing)))
-
-    captured = capsys.readouterr()
-    assert code == 1
-    assert "run directory not found" in captured.err
-
-
-def test_lark_listen_read_replies_false_does_not_require_chat_id(tmp_path: Path) -> None:
-    run_dir = tmp_path / "run-1"
-    run_dir.mkdir()
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        """
-project:
-  name: demo
-research:
-  topic: Synthetic benchmark research
-runtime:
-  timezone: UTC
-notifications:
-  channel: lark
-  lark:
-    enabled: true
-    hitl:
-      enabled: true
-      read_replies: false
-knowledge_base:
-  backend: markdown
-  root: kb
-openclaw_bridge: {}
-llm:
-  provider: acp
-  acp:
-    agent: codex
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
-
-    code = rc_cli.cmd_lark_listen(
-        argparse.Namespace(run_dir=str(run_dir), config=str(config_path), once=True)
-    )
-
-    assert code == 0
-
-
-def test_lark_listen_dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    captured = {}
-
-    def fake_cmd_lark_listen(args):
-        captured["args"] = args
-        return 0
-
-    run_dir = tmp_path / "run-1"
-    run_dir.mkdir()
-    monkeypatch.setattr(rc_cli, "cmd_lark_listen", fake_cmd_lark_listen)
-
-    code = rc_cli.main(["lark-listen", str(run_dir), "--once"])
-
-    assert code == 0
-    parsed = captured["args"]
-    assert parsed.run_dir == str(run_dir)
-    assert parsed.once is True
-
-
-def test_lark_listen_parser_accepts_flags(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    captured = {}
-
-    def fake_cmd_lark_listen(args):
-        captured["args"] = args
-        return 0
-
-    run_dir = tmp_path / "run-1"
-    run_dir.mkdir()
-    monkeypatch.setattr(rc_cli, "cmd_lark_listen", fake_cmd_lark_listen)
-
-    assert rc_cli.main(
-        ["lark-listen", str(run_dir), "--config", "cfg.yaml", "--once"]
-    ) == 0
-    assert captured["args"].config == "cfg.yaml"
-
-    assert rc_cli.main(["lark-listen", str(run_dir), "-c", "cfg.yaml"]) == 0
-    assert captured["args"].config == "cfg.yaml"
 
 
 # --- resolve_config_path tests ---

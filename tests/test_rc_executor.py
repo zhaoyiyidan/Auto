@@ -2372,6 +2372,79 @@ class TestExecuteStageGateResume:
         assert result.decision == "pivot"
 
 
+class TestStage15InlineHitlDecisionEdit:
+    """Part F: under inline HITL (config.hitl gate, not the sentinel path), a
+    human who edits stage-15/decision.md on the server then approves must have
+    their edited decision drive routing — not the AI's in-memory decision."""
+
+    def _gate_only_session(self, run_dir: Path, action):
+        from researchclaw.hitl.config import HITLConfig
+        from researchclaw.hitl.intervention import HumanInput
+        from researchclaw.hitl.session import HITLSession
+
+        session = HITLSession(
+            run_id="run-inline",
+            config=HITLConfig(enabled=True, mode="gate-only"),
+            run_dir=run_dir,
+        )
+        session.set_input_callback(lambda _w: HumanInput(action=action))
+        return session
+
+    def test_approve_rereads_human_edited_decision(
+        self, run_dir: Path, adapters: AdapterBundle
+    ) -> None:
+        from researchclaw.hitl.intervention import HumanAction
+
+        stage_dir = run_dir / "stage-15"
+        stage_dir.mkdir()
+        # Human edited the decision on the server: PROCEED -> EXTEND.
+        (stage_dir / "decision.md").write_text(
+            "## Decision\nEXTEND\n## Justification\nHuman wants follow-ups.",
+            encoding="utf-8",
+        )
+        adapters.hitl = self._gate_only_session(run_dir, HumanAction.APPROVE)
+
+        # In-memory result still says PROCEED (what the AI produced).
+        ai_result = rc_executor.StageResult(
+            stage=Stage.RESEARCH_DECISION,
+            status=StageStatus.DONE,
+            artifacts=("decision.md",),
+            decision="proceed",
+        )
+
+        final = rc_executor._run_hitl_post_stage(
+            Stage.RESEARCH_DECISION, ai_result, run_dir, adapters
+        )
+
+        assert final.decision == "extend"
+
+    def test_edit_action_rereads_human_edited_decision(
+        self, run_dir: Path, adapters: AdapterBundle
+    ) -> None:
+        from researchclaw.hitl.intervention import HumanAction
+
+        stage_dir = run_dir / "stage-15"
+        stage_dir.mkdir()
+        (stage_dir / "decision.md").write_text(
+            "## Decision\nPIVOT\n## Justification\nHuman rejects direction.",
+            encoding="utf-8",
+        )
+        adapters.hitl = self._gate_only_session(run_dir, HumanAction.EDIT)
+
+        ai_result = rc_executor.StageResult(
+            stage=Stage.RESEARCH_DECISION,
+            status=StageStatus.DONE,
+            artifacts=("decision.md",),
+            decision="proceed",
+        )
+
+        final = rc_executor._run_hitl_post_stage(
+            Stage.RESEARCH_DECISION, ai_result, run_dir, adapters
+        )
+
+        assert final.decision == "pivot"
+
+
 class TestMultiPerspectiveGenerate:
     def test_generates_all_perspectives(self, tmp_path: Path) -> None:
         roles = {

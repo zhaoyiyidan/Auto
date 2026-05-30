@@ -426,6 +426,38 @@ def test_acp_command_line_too_long_falls_back_to_file_transport():
     assert call_count == 1
 
 
+def test_acp_send_prompt_retries_on_stream_disconnect():
+    """FIX#2: a transient stream disconnect is retried (with session reset)."""
+    from researchclaw.llm.acp_client import ACPClient, ACPConfig
+    from researchclaw.llm.acp_retry import TransientAcpDisconnect
+
+    client = ACPClient(ACPConfig(agent="codex", max_retries=3))
+    client._acpx = "acpx"
+    client._session_ready = True
+    client._ensure_session = lambda: None  # type: ignore[assignment]
+    client._retry_sleep = lambda _s: None  # type: ignore[assignment]
+
+    resets = {"n": 0}
+    client._force_reconnect = lambda: resets.__setitem__("n", resets["n"] + 1)  # type: ignore[assignment]
+
+    calls = {"n": 0}
+
+    def flaky_cli(acpx: str, prompt: str) -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise TransientAcpDisconnect(
+                "stream closed before response.completed"
+            )
+        return "recovered"
+
+    client._send_prompt_cli = flaky_cli  # type: ignore[assignment]
+
+    result = client._send_prompt("hello")
+    assert result == "recovered"
+    assert calls["n"] == 2
+    assert resets["n"] == 1  # session reset before the retry
+
+
 def test_acp_windows_cmd_wrapper_uses_lower_inline_limit(monkeypatch: pytest.MonkeyPatch):
     from researchclaw.llm.acp_client import ACPClient
 

@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from researchclaw.llm.acp_client import _find_acpx
+from researchclaw.llm.acp_retry import (
+    TransientAcpDisconnect,
+    is_transient_text,
+    run_acp_with_retry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +36,7 @@ class AcpWorkspaceSessionConfig:
     base_url: str = ""
     api_key_env: str = ""
     model: str = ""
+    max_retries: int = 3
 
 
 class AcpWorkspaceSession:
@@ -58,6 +64,7 @@ class AcpWorkspaceSession:
         base_url: str = "",
         api_key_env: str = "",
         model: str = "",
+        max_retries: int = 3,
     ) -> None:
         self.config = AcpWorkspaceSessionConfig(
             agent=agent,
@@ -69,9 +76,12 @@ class AcpWorkspaceSession:
             base_url=base_url,
             api_key_env=api_key_env,
             model=model,
+            max_retries=max_retries,
         )
         self._acpx: str | None = acpx_command or None
         self._session_ready = False
+        # Backoff sleep for transient-disconnect retries; injectable in tests.
+        self._retry_sleep = time.sleep
 
     @property
     def session_name(self) -> str:
@@ -130,32 +140,71 @@ class AcpWorkspaceSession:
         self._session_ready = True
 
     def run_task(self, prompt: str) -> str:
-        """Send *prompt* to the persistent code session and return raw stdout."""
+        """Send *prompt* to the persistent code session and return raw stdout.
+
+        Transient ACP stream disconnects (including the case where acpx exits 0
+        but leaves a disconnect banner in stdout) are retried up to
+        ``config.max_retries`` times. Each retry closes and re-ensures the SAME
+        named session so the agent resumes its own partial workspace state; the
+        prompt instructs the agent to inspect existing changes and continue
+        rather than start over, so a resend does not duplicate commits. Genuine
+        failures (non-zero exit without a transient signature) are not retried.
+        """
         prompt = prompt.replace("\x00", "")
         acpx = self._resolve_acpx()
         if not acpx:
             raise RuntimeError("acpx not found")
-        self.ensure_session()
-        prompt_bytes = len(prompt.encode("utf-8"))
-        use_stdin = prompt_bytes > self._cli_prompt_limit(acpx) or (
-            sys.platform == "win32" and "\n" in prompt
-        )
-        try:
-            if use_stdin:
-                result = self._send_prompt_via_stdin(acpx, prompt)
-            else:
-                result = self._send_prompt_cli(acpx, prompt)
-        except RuntimeError as exc:
-            exc_lower = str(exc).lower()
-            if use_stdin or not any(hint in exc_lower for hint in self._CMD_TOO_LONG_HINTS):
-                raise
-            result = self._send_prompt_via_stdin(acpx, prompt)
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"ACP workspace task failed (exit {result.returncode}): "
-                f"{(result.stderr or '').strip()}"
+
+        def _do_call() -> str:
+            self.ensure_session()
+            prompt_bytes = len(prompt.encode("utf-8"))
+            use_stdin = prompt_bytes > self._cli_prompt_limit(acpx) or (
+                sys.platform == "win32" and "\n" in prompt
             )
-        return result.stdout or ""
+            try:
+                if use_stdin:
+                    result = self._send_prompt_via_stdin(acpx, prompt)
+                else:
+                    result = self._send_prompt_cli(acpx, prompt)
+            except RuntimeError as exc:
+                exc_lower = str(exc).lower()
+                if use_stdin or not any(
+                    hint in exc_lower for hint in self._CMD_TOO_LONG_HINTS
+                ):
+                    raise
+                result = self._send_prompt_via_stdin(acpx, prompt)
+            if result.returncode != 0:
+                detail = (result.stderr or "").strip()
+                # A non-zero exit that carries a transient-disconnect signature
+                # is retryable; anything else is a genuine failure.
+                if is_transient_text(result.stdout) or is_transient_text(result.stderr):
+                    raise TransientAcpDisconnect(
+                        f"ACP workspace stream disconnected (exit {result.returncode}): "
+                        f"{detail[:200]}"
+                    )
+                raise RuntimeError(
+                    f"ACP workspace task failed (exit {result.returncode}): {detail}"
+                )
+            # acpx can exit 0 after exhausting its own internal reconnects,
+            # leaving a disconnect banner in stdout — treat as retryable.
+            if is_transient_text(result.stdout) or is_transient_text(result.stderr):
+                raise TransientAcpDisconnect(
+                    "ACP workspace stream disconnected (exit 0): "
+                    f"{(result.stdout or '').strip()[:200]}"
+                )
+            return result.stdout or ""
+
+        def _reset() -> None:
+            self.close()
+            self._session_ready = False
+            self.ensure_session()
+
+        return run_acp_with_retry(
+            _do_call,
+            reset=_reset,
+            max_retries=self.config.max_retries,
+            sleep=self._retry_sleep,
+        )
 
     def export_session(self, output_path: Path) -> None:
         """Export the current named ACP session to *output_path*."""
@@ -232,6 +281,7 @@ class AcpWorkspaceSession:
             base_url=fork_config.base_url,
             api_key_env=fork_config.api_key_env,
             model=fork_config.model,
+            max_retries=fork_config.max_retries,
         )
 
     def close_session(self, name: str) -> None:

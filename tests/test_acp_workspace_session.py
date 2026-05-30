@@ -189,6 +189,90 @@ def test_run_task_uses_stdin_transport_for_large_prompts(tmp_path: Path) -> None
     assert captured["input_data"] == "x" * 11
 
 
+def test_run_task_retries_on_transient_stdout_returncode_zero(tmp_path: Path) -> None:
+    """FIX#2: an exit-0 disconnect banner in stdout is retried."""
+    session = AcpWorkspaceSession(
+        agent="claude",
+        cwd=tmp_path,
+        acpx_command="acpx",
+        session_name="researchclaw-code-run-1",
+        max_retries=3,
+    )
+    session.ensure_session = lambda: None  # type: ignore[method-assign]
+    session.close = lambda: None  # type: ignore[method-assign]
+    session._retry_sleep = lambda _s: None  # type: ignore[attr-defined]
+
+    calls = {"n": 0}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return subprocess.CompletedProcess(
+                cmd, 0, "Reconnecting... 5/5\nstream closed before response.completed\n", ""
+            )
+        return subprocess.CompletedProcess(cmd, 0, "agent finished work", "")
+
+    session._run_acp_with_heartbeat = fake_run  # type: ignore[method-assign]
+
+    assert session.run_task("modify workspace") == "agent finished work"
+    assert calls["n"] == 2
+
+
+def test_run_task_no_retry_on_real_failure(tmp_path: Path) -> None:
+    """FIX#2: a non-zero exit without a transient signature is NOT retried."""
+    session = AcpWorkspaceSession(
+        agent="claude",
+        cwd=tmp_path,
+        acpx_command="acpx",
+        session_name="researchclaw-code-run-1",
+        max_retries=3,
+    )
+    session.ensure_session = lambda: None  # type: ignore[method-assign]
+    session._retry_sleep = lambda _s: None  # type: ignore[attr-defined]
+
+    calls = {"n": 0}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls["n"] += 1
+        return subprocess.CompletedProcess(cmd, 1, "", "ZeroDivisionError in train loop")
+
+    session._run_acp_with_heartbeat = fake_run  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="ACP workspace task failed"):
+        session.run_task("modify workspace")
+    assert calls["n"] == 1
+
+
+def test_run_task_respects_max_retries_config(tmp_path: Path) -> None:
+    """FIX#2: retries are bounded by max_retries (1 + max_retries attempts)."""
+    from researchclaw.llm.acp_retry import TransientAcpDisconnect
+
+    session = AcpWorkspaceSession(
+        agent="claude",
+        cwd=tmp_path,
+        acpx_command="acpx",
+        session_name="researchclaw-code-run-1",
+        max_retries=1,
+    )
+    session.ensure_session = lambda: None  # type: ignore[method-assign]
+    session.close = lambda: None  # type: ignore[method-assign]
+    session._retry_sleep = lambda _s: None  # type: ignore[attr-defined]
+
+    calls = {"n": 0}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls["n"] += 1
+        return subprocess.CompletedProcess(
+            cmd, 0, "stream disconnected before completion", ""
+        )
+
+    session._run_acp_with_heartbeat = fake_run  # type: ignore[method-assign]
+
+    with pytest.raises(TransientAcpDisconnect):
+        session.run_task("modify workspace")
+    assert calls["n"] == 2  # 1 initial + 1 retry
+
+
 def test_export_session_writes_requested_archive(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

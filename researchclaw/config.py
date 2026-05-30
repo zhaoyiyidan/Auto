@@ -203,6 +203,7 @@ class AcpConfig:
     timeout_sec: int = 1800
     base_url: str = ""
     api_key_env: str = ""
+    max_retries: int = 3
     debate_max_rounds: int = 2
     debate_confidence_min: float = 0.6
     enable_debate: bool = True
@@ -930,6 +931,7 @@ def _parse_llm_config(data: dict[str, Any]) -> LlmConfig:
             timeout_sec=int(acp_data.get("timeout_sec", 1800)),
             base_url=acp_data.get("base_url", ""),
             api_key_env=acp_data.get("api_key_env", ""),
+            max_retries=_safe_int(acp_data.get("max_retries"), 3),
             debate_max_rounds=_safe_int(acp_data.get("debate_max_rounds"), 2),
             debate_confidence_min=_safe_float(
                 acp_data.get("debate_confidence_min"), 0.6

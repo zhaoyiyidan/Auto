@@ -227,6 +227,31 @@ def test_acp_config_default_base_url_and_api_key_env():
     assert cfg.debate_confidence_min == 0.6
 
 
+def test_acp_config_max_retries_default_is_three():
+    assert AcpConfig().max_retries == 3
+
+
+def test_acp_config_parses_max_retries(tmp_path: Path):
+    data = _valid_config_data()
+    data["llm"] = {
+        "provider": "acp",
+        "acp": {"agent": "codex", "max_retries": 5},
+    }
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.llm.acp.max_retries == 5
+
+
+def test_acp_config_max_retries_defaults_when_absent(tmp_path: Path):
+    data = _valid_config_data()
+    data["llm"] = {"provider": "acp", "acp": {"agent": "codex"}}
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.llm.acp.max_retries == 3
+
+
 def test_acp_config_enable_debate_defaults_true():
     cfg = AcpConfig()
 

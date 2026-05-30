@@ -24,6 +24,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from researchclaw.llm.acp_retry import (
+    TransientAcpDisconnect,
+    is_transient_text,
+    run_acp_with_retry,
+)
 from researchclaw.llm.client import LLMResponse
 
 logger = logging.getLogger(__name__)
@@ -47,6 +52,7 @@ class ACPConfig:
     base_url: str = ""
     api_key_env: str = ""
     model: str = ""
+    max_retries: int = 3
     debate_max_rounds: int = 2
     debate_confidence_min: float = 0.6
 
@@ -81,6 +87,8 @@ class ACPClient:
         self.config = acp_config
         self._acpx: str | None = acp_config.acpx_command or None
         self._session_ready = False
+        # Backoff sleep for transient-disconnect retries; injectable in tests.
+        self._retry_sleep = time.sleep
         # Prune dead weakrefs, then track this instance
         ACPClient._live_instances = [r for r in ACPClient._live_instances if r() is not None]
         ACPClient._live_instances.append(weakref.ref(self))
@@ -101,6 +109,7 @@ class ACPClient:
             base_url=getattr(acp, "base_url", ""),
             api_key_env=getattr(acp, "api_key_env", ""),
             model=getattr(rc_config.llm, "primary_model", ""),
+            max_retries=getattr(acp, "max_retries", 3),
             debate_max_rounds=getattr(acp, "debate_max_rounds", 2),
             debate_confidence_min=getattr(acp, "debate_confidence_min", 0.6),
         ))
@@ -458,31 +467,38 @@ class ACPClient:
                 prompt_bytes,
             )
 
-        last_exc: RuntimeError | None = None
-        for attempt in range(1 + self._MAX_RECONNECT_ATTEMPTS):
+        # Drive transient-disconnect retries through the shared helper. Transport
+        # fallbacks (OSError / "command line too long") are handled INLINE inside
+        # the callable as a one-shot switch to file transport — they are NOT
+        # retries. Reconnect-style runtime errors and exit-0 disconnect banners
+        # are converted to TransientAcpDisconnect so the helper retries them with
+        # session reset + exponential backoff.
+        state = {"use_file": use_file}
+
+        def _do_call() -> str:
             self._ensure_session()
             try:
-                if use_file:
+                if state["use_file"]:
                     return self._send_prompt_via_file(acpx, prompt)
                 return self._send_prompt_cli(acpx, prompt)
             except OSError as os_exc:
                 # OS-level failure (e.g., Windows CreateProcess arg limit).
                 # Fall back to temp-file transport automatically.
-                if not use_file:
+                if not state["use_file"]:
                     logger.warning(
                         "CLI subprocess raised OSError, "
                         "falling back to temp file: %s",
                         os_exc,
                     )
-                    use_file = True
+                    state["use_file"] = True
                     return self._send_prompt_via_file(acpx, prompt)
-                raise RuntimeError(
-                    f"ACP prompt failed: {os_exc}"
-                ) from os_exc
+                raise RuntimeError(f"ACP prompt failed: {os_exc}") from os_exc
+            except TransientAcpDisconnect:
+                raise
             except RuntimeError as exc:
                 # Detect localized "command line too long" from subprocess stderr
                 exc_lower = str(exc).lower()
-                if not use_file and any(
+                if not state["use_file"] and any(
                     h in exc_lower for h in self._CMD_TOO_LONG_HINTS
                 ):
                     logger.warning(
@@ -490,21 +506,20 @@ class ACPClient:
                         "falling back to temp file: %s",
                         exc,
                     )
-                    use_file = True
+                    state["use_file"] = True
                     return self._send_prompt_via_file(acpx, prompt)
-                if not any(pat in str(exc) for pat in self._RECONNECT_ERRORS):
-                    raise
-                last_exc = exc
-                if attempt < self._MAX_RECONNECT_ATTEMPTS:
-                    logger.warning(
-                        "ACP session died (%s), reconnecting (attempt %d/%d)...",
-                        exc,
-                        attempt + 1,
-                        self._MAX_RECONNECT_ATTEMPTS,
-                    )
-                    self._force_reconnect()
+                # Reconnect-style runtime errors are transient → make them
+                # retryable by the shared helper.
+                if is_transient_text(str(exc)):
+                    raise TransientAcpDisconnect(str(exc)) from exc
+                raise
 
-        raise last_exc  # type: ignore[misc]
+        return run_acp_with_retry(
+            _do_call,
+            reset=self._force_reconnect,
+            max_retries=self.config.max_retries,
+            sleep=self._retry_sleep,
+        )
 
     def _force_reconnect(self) -> None:
         """Close the stale session and reset so _ensure_session creates a new one."""
@@ -636,6 +651,15 @@ class ACPClient:
                 )
             )
 
+        # acpx can exit 0 even after exhausting its own internal reconnects,
+        # leaving a disconnect banner in stdout. Surface that as a retryable
+        # transient failure rather than returning a truncated/empty response.
+        if is_transient_text(result.stdout) or is_transient_text(result.stderr):
+            raise TransientAcpDisconnect(
+                "ACP stream disconnected (cli transport): "
+                f"{(result.stdout or result.stderr or '').strip()[:200]}"
+            )
+
         return self._extract_response(result.stdout)
 
     def _send_prompt_via_file(self, acpx: str, prompt: str) -> str:
@@ -660,6 +684,12 @@ class ACPClient:
                 self._format_prompt_error(
                     result.returncode, result.stdout, result.stderr
                 )
+            )
+
+        if is_transient_text(result.stdout) or is_transient_text(result.stderr):
+            raise TransientAcpDisconnect(
+                "ACP stream disconnected (stdin transport): "
+                f"{(result.stdout or result.stderr or '').strip()[:200]}"
             )
 
         return self._extract_response(result.stdout)

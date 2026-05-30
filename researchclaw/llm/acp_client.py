@@ -139,7 +139,15 @@ class ACPClient:
         )
 
     def preflight(self) -> tuple[bool, str]:
-        """Check that acpx and the agent are available."""
+        """Check that acpx, the agent, AND a real generation all work.
+
+        Beyond resolving binaries and creating the session, this sends a
+        minimal generation prompt and round-trips it.  Without that, a broken
+        provider/auth (e.g. acpx-codex falling back to api.openai.com and
+        401ing) would still report "session ready" — the failure would only
+        surface mid-pipeline at Stage 1.  Round-tripping here fails fast with
+        the real error.
+        """
         acpx = self._resolve_acpx()
         if not acpx:
             return False, (
@@ -150,12 +158,20 @@ class ACPClient:
         agent = self.config.agent
         if not shutil.which(agent):
             return False, f"ACP agent CLI not found: {agent!r} (not on PATH)"
-        # Create the session
+        # Create the session and round-trip a real generation.
         try:
             self._ensure_session()
-            return True, f"OK - ACP session ready ({agent} via acpx)"
+            reply = self._send_prompt(
+                "Preflight check. Reply with exactly: OK"
+            )
         except Exception as exc:  # noqa: BLE001
-            return False, f"ACP session init failed: {exc}"
+            return False, f"ACP generation failed: {exc}"
+        if not (reply or "").strip():
+            return False, (
+                f"ACP agent {agent!r} returned an empty response during "
+                "preflight (provider/auth may be misconfigured)."
+            )
+        return True, f"OK - ACP generation ready ({agent} via acpx)"
 
     def close(self) -> None:
         """Close the acpx session."""
@@ -578,6 +594,27 @@ class ACPClient:
             stderr="".join(stderr_chunks),
         )
 
+    @staticmethod
+    def _format_prompt_error(
+        returncode: int, stdout: str | None, stderr: str | None
+    ) -> str:
+        """Build an ACP failure message that keeps both streams.
+
+        codex (and other ACP agents) write the real cause — e.g. a 401
+        "Authentication required" — to **stdout**, while stderr only carries
+        the "agent connected" banner.  Surfacing both makes auth/runtime
+        failures diagnosable instead of showing a useless banner.
+        """
+        out = (stdout or "").strip()
+        err = (stderr or "").strip()
+        detail_parts = []
+        if err:
+            detail_parts.append(f"stderr: {err}")
+        if out:
+            detail_parts.append(f"stdout: {out}")
+        detail = " | ".join(detail_parts) if detail_parts else "no output"
+        return f"ACP prompt failed (exit {returncode}): {detail}"
+
     def _send_prompt_cli(self, acpx: str, prompt: str) -> str:
         """Send prompt as a CLI argument (original path)."""
         cmd = [
@@ -593,8 +630,11 @@ class ACPClient:
             ) from exc
 
         if result.returncode != 0:
-            stderr = (result.stderr or "").strip()
-            raise RuntimeError(f"ACP prompt failed (exit {result.returncode}): {stderr}")
+            raise RuntimeError(
+                self._format_prompt_error(
+                    result.returncode, result.stdout, result.stderr
+                )
+            )
 
         return self._extract_response(result.stdout)
 
@@ -616,9 +656,10 @@ class ACPClient:
             ) from exc
 
         if result.returncode != 0:
-            stderr = (result.stderr or "").strip()
             raise RuntimeError(
-                f"ACP prompt failed (exit {result.returncode}): {stderr}"
+                self._format_prompt_error(
+                    result.returncode, result.stdout, result.stderr
+                )
             )
 
         return self._extract_response(result.stdout)

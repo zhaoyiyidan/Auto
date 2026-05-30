@@ -36,6 +36,21 @@ _CONTINUOUS_ENVS = {
 }
 
 
+_STAGE10_VALIDATION_BOUNDARY = (
+    "Stage 10 validation boundary (MUST):\n"
+    "1. You may run static checks, syntax/compile checks, unit tests, and at "
+    "most one tiny smoke test whose purpose is code-path validation only.\n"
+    "2. Any smoke test MUST use toy/synthetic or very small data, at most one "
+    "seed, at most one condition per critical code path, and a throwaway "
+    "output directory that is not listed in result_paths.\n"
+    "3. MUST NOT run the formal experiment, grid search, parameter sweep, "
+    "multi-seed run, timing benchmark, or launch.command during Stage 10.\n"
+    "4. MUST NOT create or update the final result artifacts listed in "
+    "result_paths; ResearchClaw Stage 12 will run the manifest command and "
+    "collect those outputs.\n\n"
+)
+
+
 def _workspace_codegen_prompt(
     *,
     topic: str,
@@ -64,6 +79,7 @@ def _workspace_codegen_prompt(
         f"5. MUST write {manifest_filename} in the workspace root or .researchclaw/.\n"
         "6. MUST include schema_version, code_commit, launch.command, launch.cwd, "
         "launch.env, launch.resources, result_paths, and metrics in the manifest.\n\n"
+        f"{_STAGE10_VALIDATION_BOUNDARY}"
         "Boundaries (MUST NOT):\n"
         "1. MUST NOT submit the job yourself. Do not submit the job yourself; "
         "ResearchClaw's submitter will run the manifest command.\n"
@@ -121,6 +137,7 @@ def _repair_or_refine_prompt(
         f"5. MUST write {manifest_filename} in the workspace root or .researchclaw/.\n"
         "6. MUST include code_commit, launch.command, launch.cwd, launch.env, "
         "launch.resources, and result_paths in the manifest.\n\n"
+        f"{_STAGE10_VALIDATION_BOUNDARY}"
         "Boundaries (MUST NOT):\n"
         "1. MUST NOT submit the job yourself. Do not submit the job yourself; "
         "ResearchClaw's submitter will run the manifest command.\n"

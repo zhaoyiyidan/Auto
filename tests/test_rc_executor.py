@@ -391,6 +391,11 @@ class TestWorkspaceAgentStageWiring:
         assert prompt.count("MUST NOT") >= 4
         assert "git commit" in prompt.lower()
         assert "Do not submit" in prompt
+        assert "Stage 10 validation boundary" in prompt
+        assert "MUST NOT run the formal experiment" in prompt
+        assert "grid search" in prompt
+        assert "timing benchmark" in prompt
+        assert "ResearchClaw Stage 12 will run the manifest command" in prompt
         assert "run_manifest.json" in prompt
         assert "main.py" not in prompt
 
@@ -414,6 +419,11 @@ class TestWorkspaceAgentStageWiring:
         assert prompt.count("MUST NOT") >= 4
         assert "git commit" in prompt.lower()
         assert "Do not submit" in prompt
+        assert "Stage 10 validation boundary" in prompt
+        assert "MUST NOT run the formal experiment" in prompt
+        assert "grid search" in prompt
+        assert "timing benchmark" in prompt
+        assert "ResearchClaw Stage 12 will run the manifest command" in prompt
         assert "run_manifest.json" in prompt
         assert "REPAIR REQUEST" in prompt
         assert "accuracy stuck at 0" in prompt

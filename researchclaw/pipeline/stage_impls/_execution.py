@@ -82,6 +82,33 @@ def _execute_manifest_validate_and_prepare(
             decision="fix_code",
         )
 
+    task_spec = _load_task_spec(run_dir)
+    if task_spec is not None and task_spec.execution_contract is not None:
+        contract_errors = _contract_manifest_errors(
+            task_spec.execution_contract, manifest
+        )
+        if contract_errors:
+            _write_repair_request(
+                run_dir,
+                origin_stage=11,
+                reason="contract_mismatch",
+                errors=contract_errors,
+                iteration=_read_experiment_iteration_count(run_dir),
+                generated=_utcnow_iso(),
+                diagnosis_ref=(
+                    "experiment_diagnosis.json"
+                    if (run_dir / "experiment_diagnosis.json").is_file()
+                    else ""
+                ),
+            )
+            return StageResult(
+                stage=Stage.MANIFEST_VALIDATE_AND_PREPARE,
+                status=StageStatus.FAILED,
+                artifacts=("manifest_validation.json",),
+                error="E11_MANIFEST_INVALID: " + "; ".join(contract_errors),
+                decision="fix_code",
+            )
+
     (stage_dir / "run_manifest.json").write_text(manifest.to_json(), encoding="utf-8")
     return StageResult(
         stage=Stage.MANIFEST_VALIDATE_AND_PREPARE,
@@ -312,6 +339,34 @@ def _load_execution_contract(run_dir: Path, config: RCConfig) -> ExecutionContra
         metric_direction=str(getattr(config.experiment, "metric_direction", "maximize")),
         expected_outputs=expected_outputs,
     )
+
+
+def _contract_manifest_errors(
+    contract: ExecutionContract,
+    manifest: RunManifest,
+) -> list[str]:
+    errors: list[str] = []
+    manifest_paths = set(manifest.result_paths)
+    for artifact in contract.result_artifacts:
+        if artifact.required and artifact.path not in manifest_paths:
+            errors.append(
+                f"required result artifact {artifact.path!r} is missing from manifest.result_paths"
+            )
+
+    primary = contract.metrics.primary
+    if primary.name != manifest.metrics.primary:
+        errors.append(
+            "contract primary metric "
+            f"{primary.name!r} does not match manifest.metrics.primary "
+            f"{manifest.metrics.primary!r}"
+        )
+    if primary.direction != manifest.metrics.direction:
+        errors.append(
+            "contract metric direction "
+            f"{primary.direction!r} does not match manifest.metrics.direction "
+            f"{manifest.metrics.direction!r}"
+        )
+    return errors
 
 
 def _route_from_experiment_evidence(

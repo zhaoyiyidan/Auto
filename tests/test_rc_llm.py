@@ -599,6 +599,82 @@ def test_acp_codex_env_sets_codex_acp_config_for_custom_provider(
     assert "secret-key" not in env["CODEX_CONFIG"]
 
 
+# ---------------------------------------------------------------------------
+# ACP error-surfacing + preflight round-trip (bug #1 & #2)
+# ---------------------------------------------------------------------------
+
+
+def _make_failing_popen(captured: dict[str, object], *, stdout: str, stderr: str):
+    """Build a fake subprocess.Popen returning exit 1 with the given streams."""
+
+    class FakeProcess:
+        returncode = 1
+
+        def __init__(self) -> None:
+            self.stdin = io.StringIO()
+            self.stdout = io.StringIO(stdout)
+            self.stderr = io.StringIO(stderr)
+
+        def wait(self, timeout: int) -> int:
+            return 1
+
+        def kill(self) -> None:
+            return None
+
+    def fake_popen(cmd: list[str], **kwargs: object) -> FakeProcess:
+        captured["cmd"] = cmd
+        return FakeProcess()
+
+    return fake_popen
+
+
+def test_acp_send_prompt_cli_error_includes_stdout(monkeypatch: pytest.MonkeyPatch):
+    """bug #1: codex writes its real 401 to stdout; the raised error must keep it."""
+    from researchclaw.llm.acp_client import ACPClient, ACPConfig
+
+    captured: dict[str, object] = {}
+    fake_popen = _make_failing_popen(
+        captured,
+        stdout="RUNTIME ERROR: Authentication required (401)",
+        stderr="agent connected",
+    )
+    monkeypatch.setattr("researchclaw.llm.acp_client.subprocess.Popen", fake_popen)
+
+    client = ACPClient(ACPConfig(agent="codex"))
+    client._acpx = "acpx"
+    client._session_ready = True
+
+    with pytest.raises(RuntimeError) as excinfo:
+        client._send_prompt_cli("acpx", "hello")
+
+    # The real cause (stdout) must be present, not just the useless stderr banner.
+    assert "Authentication required" in str(excinfo.value)
+
+
+def test_acp_send_prompt_via_file_error_includes_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """bug #1: the stdin-pipe transport must also surface stdout on failure."""
+    from researchclaw.llm.acp_client import ACPClient, ACPConfig
+
+    captured: dict[str, object] = {}
+    fake_popen = _make_failing_popen(
+        captured,
+        stdout="RUNTIME ERROR: Authentication required (401)",
+        stderr="agent connected",
+    )
+    monkeypatch.setattr("researchclaw.llm.acp_client.subprocess.Popen", fake_popen)
+
+    client = ACPClient(ACPConfig(agent="codex"))
+    client._acpx = "acpx"
+    client._session_ready = True
+
+    with pytest.raises(RuntimeError) as excinfo:
+        client._send_prompt_via_file("acpx", "a very long prompt")
+
+    assert "Authentication required" in str(excinfo.value)
+
+
 def test_new_param_models_contains_expected_models():
     expected = {"gpt-5", "gpt-5.1", "gpt-5.2", "gpt-5.4", "o3", "o3-mini", "o4-mini"}
     assert expected.issubset(_NEW_PARAM_MODELS)

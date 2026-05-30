@@ -578,6 +578,27 @@ class ACPClient:
             stderr="".join(stderr_chunks),
         )
 
+    @staticmethod
+    def _format_prompt_error(
+        returncode: int, stdout: str | None, stderr: str | None
+    ) -> str:
+        """Build an ACP failure message that keeps both streams.
+
+        codex (and other ACP agents) write the real cause — e.g. a 401
+        "Authentication required" — to **stdout**, while stderr only carries
+        the "agent connected" banner.  Surfacing both makes auth/runtime
+        failures diagnosable instead of showing a useless banner.
+        """
+        out = (stdout or "").strip()
+        err = (stderr or "").strip()
+        detail_parts = []
+        if err:
+            detail_parts.append(f"stderr: {err}")
+        if out:
+            detail_parts.append(f"stdout: {out}")
+        detail = " | ".join(detail_parts) if detail_parts else "no output"
+        return f"ACP prompt failed (exit {returncode}): {detail}"
+
     def _send_prompt_cli(self, acpx: str, prompt: str) -> str:
         """Send prompt as a CLI argument (original path)."""
         cmd = [
@@ -593,8 +614,11 @@ class ACPClient:
             ) from exc
 
         if result.returncode != 0:
-            stderr = (result.stderr or "").strip()
-            raise RuntimeError(f"ACP prompt failed (exit {result.returncode}): {stderr}")
+            raise RuntimeError(
+                self._format_prompt_error(
+                    result.returncode, result.stdout, result.stderr
+                )
+            )
 
         return self._extract_response(result.stdout)
 
@@ -616,9 +640,10 @@ class ACPClient:
             ) from exc
 
         if result.returncode != 0:
-            stderr = (result.stderr or "").strip()
             raise RuntimeError(
-                f"ACP prompt failed (exit {result.returncode}): {stderr}"
+                self._format_prompt_error(
+                    result.returncode, result.stdout, result.stderr
+                )
             )
 
         return self._extract_response(result.stdout)

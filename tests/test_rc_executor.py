@@ -739,6 +739,157 @@ class TestWorkspaceAgentStageWiring:
         )
         assert validation["ok"] is False
 
+    def test_stage11_contract_mismatch_emits_repair_request(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        from researchclaw.experiment.execution_contract import (
+            ArtifactCheck,
+            ExecutionContract,
+            MetricsContract,
+            PrimaryMetric,
+        )
+        from researchclaw.experiment.workspace import LaunchCommand, RunManifest, TaskSpec
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        workspace = Path(cfg.experiment.workspace_agent.workspace_path)
+        head = _init_workspace_git(workspace)
+        manifest = RunManifest(
+            code_commit=head,
+            launch=LaunchCommand(command="python train.py"),
+            result_paths=["outputs/metrics.json"],
+        )
+        spec = TaskSpec(
+            workspace=str(workspace),
+            objective="improve",
+            constraints=[],
+            primary_metric="f1",
+            metric_direction="maximize",
+            allowed_scope=["."],
+            forbidden_scope=[],
+            expected_outputs=["outputs/required.json"],
+            execution_contract=ExecutionContract(
+                result_artifacts=(
+                    ArtifactCheck("outputs/required.json", required=True),
+                ),
+                metrics=MetricsContract(primary=PrimaryMetric("f1", "maximize")),
+            ),
+        )
+        _write_prior_artifact(run_dir, 9, "task_spec.yaml", spec.to_yaml())
+        _write_prior_artifact(run_dir, 10, "run_manifest.json", manifest.to_json())
+        stage_dir = run_dir / "stage-11"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_resource_planning(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.FAILED
+        assert result.decision == "fix_code"
+        repair = json.loads((run_dir / "repair_request.json").read_text(encoding="utf-8"))
+        assert repair["origin_stage"] == 11
+        assert repair["reason"] == "contract_mismatch"
+        assert any("outputs/required.json" in error for error in repair["errors"])
+        assert any("metric" in error for error in repair["errors"])
+
+    def test_stage11_no_contract_skips_check(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        from researchclaw.experiment.workspace import LaunchCommand, RunManifest
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        workspace = Path(cfg.experiment.workspace_agent.workspace_path)
+        head = _init_workspace_git(workspace)
+        manifest = RunManifest(
+            code_commit=head,
+            launch=LaunchCommand(command="python train.py"),
+            result_paths=["outputs/metrics.json"],
+        )
+        _write_prior_artifact(run_dir, 10, "run_manifest.json", manifest.to_json())
+        stage_dir = run_dir / "stage-11"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_resource_planning(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.DONE
+
+    def test_stage11_contract_consistent_passes(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        from researchclaw.experiment.execution_contract import (
+            ArtifactCheck,
+            ExecutionContract,
+            MetricsContract,
+            PrimaryMetric,
+        )
+        from researchclaw.experiment.workspace import (
+            LaunchCommand,
+            MetricsSpec,
+            RunManifest,
+            TaskSpec,
+        )
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        workspace = Path(cfg.experiment.workspace_agent.workspace_path)
+        head = _init_workspace_git(workspace)
+        manifest = RunManifest(
+            code_commit=head,
+            launch=LaunchCommand(command="python train.py"),
+            result_paths=["outputs/metrics.json"],
+            metrics=MetricsSpec(primary="accuracy", direction="maximize"),
+        )
+        spec = TaskSpec(
+            workspace=str(workspace),
+            objective="improve",
+            constraints=[],
+            primary_metric="accuracy",
+            metric_direction="maximize",
+            allowed_scope=["."],
+            forbidden_scope=[],
+            expected_outputs=["outputs/metrics.json"],
+            execution_contract=ExecutionContract(
+                result_artifacts=(
+                    ArtifactCheck("outputs/metrics.json", required=True),
+                ),
+                metrics=MetricsContract(
+                    primary=PrimaryMetric("accuracy", "maximize")
+                ),
+            ),
+        )
+        _write_prior_artifact(run_dir, 9, "task_spec.yaml", spec.to_yaml())
+        _write_prior_artifact(run_dir, 10, "run_manifest.json", manifest.to_json())
+        stage_dir = run_dir / "stage-11"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_resource_planning(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.DONE
+        assert (stage_dir / "run_manifest.json").is_file()
+
     def test_stage12_submits_waits_collects_hashed_results(
         self,
         tmp_path: Path,

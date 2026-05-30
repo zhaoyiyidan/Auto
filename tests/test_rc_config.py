@@ -10,6 +10,7 @@ from researchclaw.config import (
     LarkNotifyConfig,
     LarkTargetConfig,
     RCConfig,
+    ResultAnalysisAgentConfig,
     SecurityConfig,
     ValidationResult,
     load_config,
@@ -226,6 +227,38 @@ def test_rcconfig_from_dict_parses_experiment_repair_max_cycles(tmp_path: Path):
 
     assert config.experiment.repair.enabled is True
     assert config.experiment.repair.max_cycles == 7
+
+
+def test_result_analysis_agent_config_defaults() -> None:
+    defaults = ResultAnalysisAgentConfig()
+
+    assert defaults.session_name == "researchclaw-analysis"
+    assert defaults.agent == "claude"
+    assert defaults.acpx_command == ""
+    assert defaults.timeout_sec == 1800
+    assert defaults.max_turns == 50
+    assert defaults.max_postcheck_retries == 1
+
+
+def test_rcconfig_from_dict_parses_result_analysis_agent_config(tmp_path: Path) -> None:
+    data = _valid_config_data()
+    data["experiment"]["result_analysis_agent"] = {
+        "session_name": "custom-analysis",
+        "agent": "codex",
+        "acpx_command": "/usr/local/bin/acpx",
+        "timeout_sec": 99,
+        "max_turns": 8,
+        "max_postcheck_retries": 2,
+    }
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.experiment.result_analysis_agent.session_name == "custom-analysis"
+    assert config.experiment.result_analysis_agent.agent == "codex"
+    assert config.experiment.result_analysis_agent.acpx_command == "/usr/local/bin/acpx"
+    assert config.experiment.result_analysis_agent.timeout_sec == 99
+    assert config.experiment.result_analysis_agent.max_turns == 8
+    assert config.experiment.result_analysis_agent.max_postcheck_retries == 2
 
 
 def test_acp_config_default_base_url_and_api_key_env():

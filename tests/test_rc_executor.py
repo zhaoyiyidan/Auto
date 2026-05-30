@@ -3594,40 +3594,325 @@ class TestHypothesisGenDebate:
 
 
 class TestResultAnalysisDebate:
-    def test_result_analysis_writes_workspace_native_artifacts(
-        self, tmp_path: Path, rc_config: RCConfig, adapters: AdapterBundle
+    _COMPLIANT_ANALYSIS = """# Experiment Analysis
+
+## Experiment Objective
+Test whether the treatment improves accuracy.
+
+## Experiment Plan
+Compare baseline and treatment across three seeds.
+
+## Executed Experiments
+The workspace ran baseline and treatment conditions.
+
+## Results Summary
+Treatment accuracy was higher than baseline accuracy.
+
+## Artifact Locations
+Metrics are in outputs/metrics.json and outputs/run_summary.json.
+
+## Reproducibility
+Run python train.py from the workspace.
+"""
+
+    _VIOLATING_ANALYSIS = """# Experiment Analysis
+
+## Decision
+PIVOT
+"""
+
+    class _FakeOrganizerSession:
+        def __init__(self, stage_dir: Path, docs: list[str]) -> None:
+            self.stage_dir = stage_dir
+            self.docs = docs
+            self.prompts: list[str] = []
+
+        def run_task(self, prompt: str) -> str:
+            self.prompts.append(prompt)
+            doc_index = min(len(self.prompts) - 1, len(self.docs) - 1)
+            self.stage_dir.mkdir(parents=True, exist_ok=True)
+            (self.stage_dir / "analysis.md").write_text(
+                self.docs[doc_index],
+                encoding="utf-8",
+            )
+            return f"attempt {len(self.prompts)}"
+
+    def _analysis_config(
+        self,
+        rc_config: RCConfig,
+        workspace: Path,
+    ) -> RCConfig:
+        return replace(
+            rc_config,
+            experiment=replace(
+                rc_config.experiment,
+                mode="workspace",
+                metric_key="accuracy",
+                metric_direction="maximize",
+                workspace_agent=replace(
+                    rc_config.experiment.workspace_agent,
+                    workspace_path=str(workspace),
+                ),
+            ),
+        )
+
+    def _seed_result_analysis_inputs(self, run_dir: Path, workspace: Path) -> None:
+        (workspace / "outputs").mkdir(parents=True, exist_ok=True)
+        (workspace / "outputs" / "metrics.json").write_text(
+            json.dumps(
+                {
+                    "primary_metric": "accuracy",
+                    "metric_direction": "maximize",
+                    "aggregates": {
+                        "baseline": {"accuracy": {"mean": 0.70, "std": 0.01, "n": 3}},
+                        "treatment": {"accuracy": {"mean": 0.82, "std": 0.02, "n": 3}},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (workspace / "outputs" / "run_summary.json").write_text(
+            json.dumps({"training_run_count": 6, "run_count": 6}),
+            encoding="utf-8",
+        )
+        _write_prior_artifact(run_dir, 9, "task_spec.yaml", "objective: improve accuracy\n")
+        _write_prior_artifact(
+            run_dir,
+            10,
+            "run_manifest.json",
+            json.dumps(
+                {
+                    "schema_version": "researchclaw.run_manifest.v1",
+                    "code_commit": "head",
+                    "launch": {
+                        "command": "python train.py",
+                        "cwd": ".",
+                        "env": {},
+                        "resources": {
+                            "gpus": 1,
+                            "time": "01:00:00",
+                            "partition": "gpu",
+                            "mem_gb": 16,
+                        },
+                    },
+                    "result_paths": [
+                        "outputs/metrics.json",
+                        "outputs/run_summary.json",
+                    ],
+                    "metrics": {"primary": "accuracy", "direction": "maximize"},
+                }
+            ),
+        )
+        _write_prior_artifact(
+            run_dir,
+            12,
+            "execution_record.json",
+            json.dumps(
+                {
+                    "code_commit": "head",
+                    "job_id": "job-1",
+                    "elapsed_sec": 12.5,
+                    "submitter": {"type": "local"},
+                    "metrics": {
+                        "accuracy": 0.82,
+                        "primary_metric": "accuracy",
+                        "condition_plan": {
+                            "baseline": {"seeds": [1, 2, 3]},
+                            "treatment": {"seeds": [1, 2, 3]},
+                        },
+                        "aggregates": {
+                            "baseline": {
+                                "accuracy": {"mean": 0.70, "std": 0.01, "n": 3}
+                            },
+                            "treatment": {
+                                "accuracy": {"mean": 0.82, "std": 0.02, "n": 3}
+                            },
+                        },
+                        "hypothesis_checks": {
+                            "treatment_beats_baseline": True,
+                        },
+                    },
+                    "result_hashes": {"outputs/metrics.json": "sha256:abc"},
+                }
+            ),
+        )
+        _write_prior_artifact(
+            run_dir,
+            12,
+            "result_artifacts.json",
+            json.dumps({"artifacts": ["outputs/metrics.json"]}),
+        )
+        _write_prior_artifact(
+            run_dir,
+            12,
+            "contract_evidence.json",
+            json.dumps({"ok": True, "violations": []}),
+        )
+        _write_prior_artifact(
+            run_dir,
+            12,
+            "workspace_experiment_registry.jsonl",
+            json.dumps(
+                {
+                    "stage": 13,
+                    "base_sha": "base",
+                    "agent_commit_sha": "head",
+                    "session_name": "researchclaw-code",
+                    "result_hashes": {"outputs/metrics.json": "sha256:abc"},
+                }
+            )
+            + "\n",
+        )
+        _write_prior_artifact(
+            run_dir,
+            13,
+            "experiment_decision.json",
+            json.dumps({"route": "continue"}),
+        )
+
+    def test_result_analysis_agent_writes_workspace_native_artifacts(
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        from researchclaw.pipeline.stage_impls import _analysis as analysis_impl
+
         run_dir = tmp_path / "run"
+        workspace = tmp_path / "workspace"
         run_dir.mkdir()
         stage_dir = run_dir / "stage-14"
         stage_dir.mkdir(parents=True)
-        _write_prior_artifact(run_dir, 1, "goal.md", "# Goal\nTest")
-        _write_prior_artifact(run_dir, 8, "hypotheses.md", "# H1\nTest")
-        fake_llm = FakeLLMClient("## Analysis\nResults look good.")
-        result = rc_executor._execute_result_analysis(
-            stage_dir, run_dir, rc_config, adapters, llm=fake_llm
+        self._seed_result_analysis_inputs(run_dir, workspace)
+        config = self._analysis_config(rc_config, workspace)
+        fake_session = self._FakeOrganizerSession(
+            stage_dir, [self._COMPLIANT_ANALYSIS]
         )
+        monkeypatch.setattr(
+            analysis_impl,
+            "create_evidence_organizer_agent",
+            lambda config, run_dir: fake_session,
+        )
+
+        result = rc_executor._execute_result_analysis(
+            stage_dir, run_dir, config, adapters, llm=FakeLLMClient("unused")
+        )
+
         assert result.status == StageStatus.DONE
         assert "analysis.md" in result.artifacts
         assert "experiment_summary.json" in result.artifacts
         assert "provenance.json" in result.artifacts
-        assert (stage_dir / "analysis.md").exists()
-        assert (stage_dir / "experiment_summary.json").exists()
-        assert (stage_dir / "provenance.json").exists()
+        assert len(fake_session.prompts) == 1
+        analysis_text = (stage_dir / "analysis.md").read_text(encoding="utf-8")
+        assert "## Executed Experiments" in analysis_text
+        assert "Runs analyzed:" not in analysis_text
+        summary = json.loads(
+            (stage_dir / "experiment_summary.json").read_text(encoding="utf-8")
+        )
+        assert summary["primary_metric"] == "accuracy"
+        assert summary["condition_summaries"]["baseline"]["n_seeds"] == 3
+        assert summary["condition_summaries"]["treatment"]["metrics"]["accuracy"] == 0.82
 
-    def test_result_analysis_without_llm_no_perspectives(
-        self, tmp_path: Path, rc_config: RCConfig, adapters: AdapterBundle
+    def test_result_analysis_agent_unavailable_fails_hard(
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        from researchclaw.pipeline.stage_impls import _analysis as analysis_impl
+
         run_dir = tmp_path / "run"
+        workspace = tmp_path / "workspace"
         run_dir.mkdir()
         stage_dir = run_dir / "stage-14"
         stage_dir.mkdir(parents=True)
-        result = rc_executor._execute_result_analysis(
-            stage_dir, run_dir, rc_config, adapters, llm=None
+        self._seed_result_analysis_inputs(run_dir, workspace)
+        config = self._analysis_config(rc_config, workspace)
+        monkeypatch.setattr(
+            analysis_impl,
+            "create_evidence_organizer_agent",
+            lambda config, run_dir: None,
         )
+
+        result = rc_executor._execute_result_analysis(
+            stage_dir, run_dir, config, adapters, llm=None
+        )
+
+        assert result.status == StageStatus.FAILED
+        assert result.error is not None
+        assert "E14_ANALYSIS_ERR" in result.error
+
+    def test_result_analysis_boundary_violation_fails_with_retry_decision(
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _analysis as analysis_impl
+
+        run_dir = tmp_path / "run"
+        workspace = tmp_path / "workspace"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-14"
+        stage_dir.mkdir(parents=True)
+        self._seed_result_analysis_inputs(run_dir, workspace)
+        config = self._analysis_config(rc_config, workspace)
+        fake_session = self._FakeOrganizerSession(
+            stage_dir, [self._VIOLATING_ANALYSIS, self._VIOLATING_ANALYSIS]
+        )
+        monkeypatch.setattr(
+            analysis_impl,
+            "create_evidence_organizer_agent",
+            lambda config, run_dir: fake_session,
+        )
+
+        result = rc_executor._execute_result_analysis(
+            stage_dir, run_dir, config, adapters, llm=None
+        )
+
+        assert len(fake_session.prompts) == 2
+        assert result.status == StageStatus.FAILED
+        assert result.decision == "retry"
+        assert result.error is not None
+        assert "E14_ANALYSIS_ERR" in result.error
+
+    def test_result_analysis_boundary_violation_can_succeed_on_strict_retry(
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from researchclaw.pipeline.stage_impls import _analysis as analysis_impl
+
+        run_dir = tmp_path / "run"
+        workspace = tmp_path / "workspace"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-14"
+        stage_dir.mkdir(parents=True)
+        self._seed_result_analysis_inputs(run_dir, workspace)
+        config = self._analysis_config(rc_config, workspace)
+        fake_session = self._FakeOrganizerSession(
+            stage_dir, [self._VIOLATING_ANALYSIS, self._COMPLIANT_ANALYSIS]
+        )
+        monkeypatch.setattr(
+            analysis_impl,
+            "create_evidence_organizer_agent",
+            lambda config, run_dir: fake_session,
+        )
+
+        result = rc_executor._execute_result_analysis(
+            stage_dir, run_dir, config, adapters, llm=None
+        )
+
+        assert len(fake_session.prompts) == 2
         assert result.status == StageStatus.DONE
-        assert "analysis.md" in result.artifacts
-        assert not (stage_dir / "perspectives").exists()
+        assert "## Decision" not in (stage_dir / "analysis.md").read_text(
+            encoding="utf-8"
+        )
 
 
 class TestParseMetricsFromStdout:

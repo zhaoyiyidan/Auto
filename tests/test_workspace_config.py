@@ -23,6 +23,9 @@ def test_workspace_agent_config_defaults() -> None:
     assert cfg.manifest_filename == "run_manifest.json"
     assert cfg.timeout_sec == 1800
     assert cfg.max_turns == 50
+    assert cfg.reconnect_timeout_sec == 300
+    assert cfg.reconnect_poll_interval_sec == 5
+    assert cfg.max_reruns == 3
     assert cfg.close_policy == "keep"
     assert not hasattr(cfg, "git_mode")
 
@@ -39,6 +42,9 @@ def test_workspace_agent_config_from_dict() -> None:
             "manifest_filename": "manifest.json",
             "timeout_sec": 2400,
             "max_turns": 80,
+            "reconnect_timeout_sec": 120,
+            "reconnect_poll_interval_sec": 3,
+            "max_reruns": 2,
             "close_policy": "close",
         }
     )
@@ -52,6 +58,9 @@ def test_workspace_agent_config_from_dict() -> None:
     assert cfg.manifest_filename == "manifest.json"
     assert cfg.timeout_sec == 2400
     assert cfg.max_turns == 80
+    assert cfg.reconnect_timeout_sec == 120
+    assert cfg.reconnect_poll_interval_sec == 3
+    assert cfg.max_reruns == 2
     assert cfg.close_policy == "close"
 
 
@@ -166,6 +175,9 @@ def test_workspace_agent_config_roundtrip_through_rc_config() -> None:
                 "manifest_filename": "agent_manifest.json",
                 "timeout_sec": 3600,
                 "max_turns": 120,
+                "reconnect_timeout_sec": 180,
+                "reconnect_poll_interval_sec": 6,
+                "max_reruns": 1,
                 "close_policy": "close",
             }
         },
@@ -182,5 +194,8 @@ def test_workspace_agent_config_roundtrip_through_rc_config() -> None:
     assert cfg.manifest_filename == "agent_manifest.json"
     assert cfg.timeout_sec == 3600
     assert cfg.max_turns == 120
+    assert cfg.reconnect_timeout_sec == 180
+    assert cfg.reconnect_poll_interval_sec == 6
+    assert cfg.max_reruns == 1
     assert cfg.close_policy == "close"
     assert "git_mode" not in loaded.to_dict()["experiment"]["workspace_agent"]

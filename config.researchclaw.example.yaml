@@ -173,7 +173,8 @@ llm:
   #   # optional, default: "". Env var whose value is forwarded to the agent.
   #   # api_key_env: "CUSTOM_API_KEY"
   #
-  #   # optional, default: 3. Retry count for transient ACP disconnects.
+  #   # optional, default: 3. Retry count for ordinary ACP LLM turns.
+  #   # Workspace-agent reruns use experiment.workspace_agent.max_reruns.
   #   max_retries: 3
   #
   #   # optional, default: true. Enables ACP-forked Stage 8 hypothesis debate.
@@ -385,6 +386,19 @@ experiment:
 
     # optional, default: 50. Maximum ACP turns for the workspace agent.
     max_turns: 50
+
+    # optional, default: 300. After an ACP stream disconnect, keep reconnecting
+    # to the same session and reading ACP session history for this many seconds
+    # before any task prompt is resent.
+    reconnect_timeout_sec: 300
+
+    # optional, default: 5. Poll interval while reconnecting after a transient
+    # workspace-agent disconnect.
+    reconnect_poll_interval_sec: 5
+
+    # optional, default: 3. Maximum full task reruns after reconnect polling
+    # cannot confirm completion. Reaching this limit fails the stage.
+    max_reruns: 3
 
   submitter:
     # optional, default: "local". Valid values:

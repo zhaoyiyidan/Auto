@@ -17,7 +17,6 @@ from researchclaw.llm.acp_client import _find_acpx
 from researchclaw.llm.acp_retry import (
     TransientAcpDisconnect,
     is_transient_text,
-    run_acp_with_retry,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,6 +36,8 @@ class AcpWorkspaceSessionConfig:
     api_key_env: str = ""
     model: str = ""
     max_retries: int = 3
+    reconnect_timeout_sec: int = 300
+    reconnect_poll_interval_sec: int = 5
 
 
 class AcpWorkspaceSession:
@@ -65,6 +66,8 @@ class AcpWorkspaceSession:
         api_key_env: str = "",
         model: str = "",
         max_retries: int = 3,
+        reconnect_timeout_sec: int = 300,
+        reconnect_poll_interval_sec: int = 5,
     ) -> None:
         self.config = AcpWorkspaceSessionConfig(
             agent=agent,
@@ -77,6 +80,8 @@ class AcpWorkspaceSession:
             api_key_env=api_key_env,
             model=model,
             max_retries=max_retries,
+            reconnect_timeout_sec=reconnect_timeout_sec,
+            reconnect_poll_interval_sec=reconnect_poll_interval_sec,
         )
         self._acpx: str | None = acpx_command or None
         self._session_ready = False
@@ -142,24 +147,23 @@ class AcpWorkspaceSession:
     def run_task(self, prompt: str) -> str:
         """Send *prompt* to the persistent code session and return raw stdout.
 
-        Transient ACP stream disconnects (including the case where acpx exits 0
-        but leaves a disconnect banner in stdout) are retried up to
-        ``config.max_retries`` times. Each retry closes and re-ensures the SAME
-        named session so the agent resumes its own partial workspace state, and
-        the resent prompt is prefixed with a continuation instruction telling the
-        agent to inspect existing uncommitted/committed changes and continue
-        rather than start over — so a resend does not duplicate work. If a retry
-        leaves more than one new commit on top of the pre-task HEAD, a warning is
-        logged so stacked commits are visible. Genuine failures (non-zero exit
-        without a transient signature) are not retried.
+        Workspace tasks are side-effectful. A transient ACP stream disconnect is
+        therefore not treated as immediate permission to resend the full task.
+        First, ResearchClaw keeps reconnecting to the same named session and
+        tries to read the completed response from ACP session history for up to
+        ``config.reconnect_timeout_sec``. Only if reconnect/history recovery
+        fails does it perform a bounded rerun, prefixed with continuation
+        instructions. Genuine failures (non-zero exit without a transient
+        signature) are not retried.
         """
         prompt = prompt.replace("\x00", "")
         acpx = self._resolve_acpx()
         if not acpx:
             raise RuntimeError("acpx not found")
 
+        self.ensure_session()
         base_head = self._git_head()
-        attempt = {"n": 0}
+        attempts = {"n": 0}
 
         _CONTINUATION_PREFACE = (
             "NOTE: a previous attempt at this task was interrupted by a transient "
@@ -169,9 +173,9 @@ class AcpWorkspaceSession:
             "NOT create duplicate commits for work that is already committed.\n\n"
         )
 
-        def _do_call() -> str:
-            send_prompt = prompt if attempt["n"] == 0 else _CONTINUATION_PREFACE + prompt
-            attempt["n"] += 1
+        def _do_call(rerun_count: int) -> str:
+            send_prompt = prompt if rerun_count == 0 else _CONTINUATION_PREFACE + prompt
+            attempts["n"] += 1
             self.ensure_session()
             prompt_bytes = len(send_prompt.encode("utf-8"))
             use_stdin = prompt_bytes > self._cli_prompt_limit(acpx) or (
@@ -210,20 +214,122 @@ class AcpWorkspaceSession:
                 )
             return result.stdout or ""
 
-        def _reset() -> None:
+        def _reset_for_rerun() -> None:
             self.close()
             self._session_ready = False
             self.ensure_session()
 
-        output = run_acp_with_retry(
-            _do_call,
-            reset=_reset,
-            max_retries=self.config.max_retries,
-            sleep=self._retry_sleep,
+        max_reruns = max(0, int(self.config.max_retries))
+        rerun_count = 0
+        while True:
+            history_count = self._session_history_count(acpx)
+            try:
+                output = _do_call(rerun_count)
+                if attempts["n"] > 1:
+                    self._warn_if_stacked_commits(base_head)
+                return output
+            except TransientAcpDisconnect as exc:
+                recovered = self._wait_for_reconnect_result(acpx, history_count, exc)
+                if recovered is not None:
+                    if attempts["n"] > 1:
+                        self._warn_if_stacked_commits(base_head)
+                    return recovered
+                if rerun_count >= max_reruns:
+                    raise
+                delay = min(30.0, 2.0 ** rerun_count)
+                self._retry_sleep(delay)
+                _reset_for_rerun()
+                rerun_count += 1
+
+    def _wait_for_reconnect_result(
+        self,
+        acpx: str,
+        history_count_before_prompt: int | None,
+        exc: TransientAcpDisconnect,
+    ) -> str | None:
+        """Reconnect to the same ACP session and read a completed response."""
+        timeout = max(0, int(self.config.reconnect_timeout_sec))
+        if timeout <= 0:
+            return None
+        interval = max(1, int(self.config.reconnect_poll_interval_sec))
+        poll_count = max(1, (timeout + interval - 1) // interval)
+        logger.warning(
+            "ACP workspace stream disconnected: %s. Reconnecting for up to %ds "
+            "before any task rerun.",
+            exc,
+            timeout,
         )
-        if attempt["n"] > 1:
-            self._warn_if_stacked_commits(base_head)
-        return output
+        for poll_index in range(poll_count):
+            self._session_ready = False
+            try:
+                self.ensure_session()
+            except Exception:  # noqa: BLE001
+                logger.debug("ACP workspace reconnect attempt failed", exc_info=True)
+            if history_count_before_prompt is not None:
+                current_count = self._session_history_count(acpx)
+                if (
+                    current_count is not None
+                    and current_count >= history_count_before_prompt + 2
+                ):
+                    recovered = self._read_session_tail(acpx)
+                    if recovered:
+                        return recovered
+            if poll_index < poll_count - 1:
+                self._retry_sleep(float(interval))
+        return None
+
+    def _session_history_count(self, acpx: str) -> int | None:
+        try:
+            result = subprocess.run(
+                [
+                    *self._acpx_base_args(acpx),
+                    "sessions",
+                    "show",
+                    self.config.session_name,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=15,
+                env=self._build_env(),
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        if result.returncode != 0:
+            return None
+        for line in (result.stdout or "").splitlines():
+            key, sep, value = line.partition(":")
+            if sep and key.strip() == "historyEntries":
+                try:
+                    return int(value.strip())
+                except ValueError:
+                    return None
+        return None
+
+    def _read_session_tail(self, acpx: str) -> str:
+        try:
+            result = subprocess.run(
+                [
+                    *self._acpx_base_args(acpx),
+                    "sessions",
+                    "read",
+                    "--tail",
+                    "2",
+                    self.config.session_name,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                env=self._build_env(),
+            )
+        except Exception:  # noqa: BLE001
+            return ""
+        if result.returncode != 0:
+            return ""
+        return (result.stdout or "").strip()
 
     def _git_head(self) -> str | None:
         """Return the current git HEAD sha of the workspace, or None."""
@@ -345,6 +451,8 @@ class AcpWorkspaceSession:
             api_key_env=fork_config.api_key_env,
             model=fork_config.model,
             max_retries=fork_config.max_retries,
+            reconnect_timeout_sec=fork_config.reconnect_timeout_sec,
+            reconnect_poll_interval_sec=fork_config.reconnect_poll_interval_sec,
         )
 
     def close_session(self, name: str) -> None:

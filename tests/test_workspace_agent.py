@@ -98,6 +98,9 @@ class TestCreateWorkspaceAgent:
         assert isinstance(agent.inner, AcpWorkspaceAgent)
         assert agent.inner.session.session_name == "researchclaw-code-run-1"
         assert agent.inner.session.cwd == tmp_path
+        assert agent.inner.session.config.reconnect_timeout_sec == 180
+        assert agent.inner.session.config.reconnect_poll_interval_sec == 6
+        assert agent.inner.session.config.max_retries == 1
 
     def test_factory_supports_codex_acp_agent(self, tmp_path: Path) -> None:
         cfg = _config(workspace_path=str(tmp_path), agent="codex")
@@ -138,6 +141,9 @@ def _config(
                 acpx_command="acpx",
                 timeout_sec=1200,
                 max_turns=40,
+                reconnect_timeout_sec=180,
+                reconnect_poll_interval_sec=6,
+                max_reruns=1,
             ),
         )
     )

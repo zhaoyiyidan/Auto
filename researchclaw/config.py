@@ -302,6 +302,9 @@ class WorkspaceAgentConfig:
     manifest_filename: str = "run_manifest.json"
     timeout_sec: int = 1800
     max_turns: int = 50
+    reconnect_timeout_sec: int = 300
+    reconnect_poll_interval_sec: int = 5
+    max_reruns: int = 3
     close_policy: str = "keep"
 
 
@@ -1013,6 +1016,11 @@ def _parse_workspace_agent_config(data: dict[str, Any]) -> WorkspaceAgentConfig:
         manifest_filename=data.get("manifest_filename", "run_manifest.json"),
         timeout_sec=_safe_int(data.get("timeout_sec"), 1800),
         max_turns=_safe_int(data.get("max_turns"), 50),
+        reconnect_timeout_sec=_safe_int(data.get("reconnect_timeout_sec"), 300),
+        reconnect_poll_interval_sec=_safe_int(
+            data.get("reconnect_poll_interval_sec"), 5
+        ),
+        max_reruns=_safe_int(data.get("max_reruns"), 3),
         close_policy=data.get("close_policy", "keep"),
     )
 

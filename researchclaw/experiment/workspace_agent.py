@@ -92,7 +92,11 @@ def create_workspace_agent(
         base_url=base_url,
         api_key_env=api_key_env,
         model=getattr(config.llm, "primary_model", ""),
-        max_retries=getattr(acp_cfg, "max_retries", 3),
+        max_retries=getattr(workspace_cfg, "max_reruns", 3),
+        reconnect_timeout_sec=getattr(workspace_cfg, "reconnect_timeout_sec", 300),
+        reconnect_poll_interval_sec=getattr(
+            workspace_cfg, "reconnect_poll_interval_sec", 5
+        ),
     )
     agent = AcpWorkspaceAgent(
         session,

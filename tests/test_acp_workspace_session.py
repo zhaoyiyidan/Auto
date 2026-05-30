@@ -190,13 +190,14 @@ def test_run_task_uses_stdin_transport_for_large_prompts(tmp_path: Path) -> None
 
 
 def test_run_task_retries_on_transient_stdout_returncode_zero(tmp_path: Path) -> None:
-    """FIX#2: an exit-0 disconnect banner in stdout is retried."""
+    """An exit-0 disconnect banner reruns only after reconnect is exhausted."""
     session = AcpWorkspaceSession(
         agent="claude",
         cwd=tmp_path,
         acpx_command="acpx",
         session_name="researchclaw-code-run-1",
         max_retries=3,
+        reconnect_timeout_sec=0,
     )
     session.ensure_session = lambda: None  # type: ignore[method-assign]
     session.close = lambda: None  # type: ignore[method-assign]
@@ -219,13 +220,14 @@ def test_run_task_retries_on_transient_stdout_returncode_zero(tmp_path: Path) ->
 
 
 def test_run_task_resend_includes_continuation_preface(tmp_path: Path) -> None:
-    """FIX#2 idempotency: the resent prompt tells the agent to continue, not restart."""
+    """Rerun prompt tells the agent to continue, not restart."""
     session = AcpWorkspaceSession(
         agent="claude",
         cwd=tmp_path,
         acpx_command="acpx",
         session_name="researchclaw-code-run-1",
         max_retries=3,
+        reconnect_timeout_sec=0,
     )
     session.ensure_session = lambda: None  # type: ignore[method-assign]
     session.close = lambda: None  # type: ignore[method-assign]
@@ -260,6 +262,7 @@ def test_run_task_no_retry_on_real_failure(tmp_path: Path) -> None:
         acpx_command="acpx",
         session_name="researchclaw-code-run-1",
         max_retries=3,
+        reconnect_timeout_sec=0,
     )
     session.ensure_session = lambda: None  # type: ignore[method-assign]
     session._retry_sleep = lambda _s: None  # type: ignore[attr-defined]
@@ -278,7 +281,7 @@ def test_run_task_no_retry_on_real_failure(tmp_path: Path) -> None:
 
 
 def test_run_task_respects_max_retries_config(tmp_path: Path) -> None:
-    """FIX#2: retries are bounded by max_retries (1 + max_retries attempts)."""
+    """FIX#2: reruns are bounded by max_retries (1 + max_retries attempts)."""
     from researchclaw.llm.acp_retry import TransientAcpDisconnect
 
     session = AcpWorkspaceSession(
@@ -287,6 +290,7 @@ def test_run_task_respects_max_retries_config(tmp_path: Path) -> None:
         acpx_command="acpx",
         session_name="researchclaw-code-run-1",
         max_retries=1,
+        reconnect_timeout_sec=0,
     )
     session.ensure_session = lambda: None  # type: ignore[method-assign]
     session.close = lambda: None  # type: ignore[method-assign]
@@ -305,6 +309,83 @@ def test_run_task_respects_max_retries_config(tmp_path: Path) -> None:
     with pytest.raises(TransientAcpDisconnect):
         session.run_task("modify workspace")
     assert calls["n"] == 2  # 1 initial + 1 retry
+
+
+def test_run_task_returns_reconnected_session_history_without_resending(
+    tmp_path: Path,
+) -> None:
+    session = AcpWorkspaceSession(
+        agent="claude",
+        cwd=tmp_path,
+        acpx_command="acpx",
+        session_name="researchclaw-code-run-1",
+        max_retries=3,
+        reconnect_timeout_sec=30,
+        reconnect_poll_interval_sec=1,
+    )
+    session.ensure_session = lambda: None  # type: ignore[method-assign]
+    session.close = lambda: None  # type: ignore[method-assign]
+    session._retry_sleep = lambda _s: None  # type: ignore[attr-defined]
+    history_counts = iter([10, 12])
+
+    def fake_history_count(_acpx: str) -> int:
+        return next(history_counts)
+
+    def fake_session_tail(_acpx: str) -> str:
+        return "assistant completed"
+
+    session._session_history_count = fake_history_count  # type: ignore[method-assign]
+    session._read_session_tail = fake_session_tail  # type: ignore[method-assign]
+
+    calls = {"n": 0}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls["n"] += 1
+        return subprocess.CompletedProcess(
+            cmd, 0, "stream closed before response.completed", ""
+        )
+
+    session._run_acp_with_heartbeat = fake_run  # type: ignore[method-assign]
+
+    output = session.run_task("modify workspace")
+
+    assert output == "assistant completed"
+    assert calls["n"] == 1
+
+
+def test_run_task_reruns_after_reconnect_timeout(
+    tmp_path: Path,
+) -> None:
+    session = AcpWorkspaceSession(
+        agent="claude",
+        cwd=tmp_path,
+        acpx_command="acpx",
+        session_name="researchclaw-code-run-1",
+        max_retries=1,
+        reconnect_timeout_sec=0,
+        reconnect_poll_interval_sec=1,
+    )
+    session.ensure_session = lambda: None  # type: ignore[method-assign]
+    session.close = lambda: None  # type: ignore[method-assign]
+    session._session_history_count = lambda _acpx: 10  # type: ignore[method-assign]
+    sleeps: list[float] = []
+    session._retry_sleep = sleeps.append  # type: ignore[attr-defined]
+
+    calls = {"n": 0}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return subprocess.CompletedProcess(
+                cmd, 0, "stream closed before response.completed", ""
+            )
+        return subprocess.CompletedProcess(cmd, 0, "done", "")
+
+    session._run_acp_with_heartbeat = fake_run  # type: ignore[method-assign]
+
+    assert session.run_task("modify workspace") == "done"
+    assert calls["n"] == 2
+    assert sleeps == [1.0]
 
 
 def test_export_session_writes_requested_archive(

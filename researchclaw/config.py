@@ -297,7 +297,7 @@ class WorkspaceAgentConfig:
     transport: str = "acp"
     workspace_path: str = "."
     session_name: str = ""
-    agent: str = "claude"
+    agent: str = ""
     acpx_command: str = ""
     manifest_filename: str = "run_manifest.json"
     timeout_sec: int = 1800
@@ -313,7 +313,7 @@ class ResultAnalysisAgentConfig:
     """Independent Stage 14 evidence-organizer agent session."""
 
     session_name: str = "researchclaw-analysis"
-    agent: str = "claude"
+    agent: str = ""
     acpx_command: str = ""
     timeout_sec: int = 1800
     max_turns: int = 50
@@ -1029,7 +1029,7 @@ def _parse_workspace_agent_config(data: dict[str, Any]) -> WorkspaceAgentConfig:
         transport=data.get("transport", "acp"),
         workspace_path=data.get("workspace_path", "."),
         session_name=data.get("session_name", ""),
-        agent=data.get("agent", "claude"),
+        agent=data.get("agent", ""),
         acpx_command=data.get("acpx_command", ""),
         manifest_filename=data.get("manifest_filename", "run_manifest.json"),
         timeout_sec=_safe_int(data.get("timeout_sec"), 1800),
@@ -1050,7 +1050,7 @@ def _parse_result_analysis_agent_config(
         return ResultAnalysisAgentConfig()
     return ResultAnalysisAgentConfig(
         session_name=data.get("session_name", "researchclaw-analysis"),
-        agent=data.get("agent", "claude"),
+        agent=data.get("agent", ""),
         acpx_command=data.get("acpx_command", ""),
         timeout_sec=_safe_int(data.get("timeout_sec"), 1800),
         max_turns=_safe_int(data.get("max_turns"), 50),

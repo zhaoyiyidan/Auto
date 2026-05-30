@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -111,6 +112,26 @@ class TestCreateWorkspaceAgent:
         assert agent.name == "acp"
         assert agent.inner.session.agent == "codex"
 
+    def test_factory_inherits_llm_acp_agent_when_unset(self, tmp_path: Path) -> None:
+        cfg = _config(workspace_path=str(tmp_path), agent="", acpx_command="")
+        cfg = replace(
+            cfg,
+            llm=replace(
+                cfg.llm,
+                acp=replace(
+                    cfg.llm.acp,
+                    agent="codex",
+                    acpx_command="/usr/local/bin/acpx",
+                ),
+            ),
+        )
+
+        agent = create_workspace_agent(cfg)
+
+        assert isinstance(agent, GitWorkspaceAgent)
+        assert agent.inner.session.agent == "codex"
+        assert agent.inner.session.config.acpx_command == "/usr/local/bin/acpx"
+
     def test_factory_rejects_non_acp_transport(self, tmp_path: Path) -> None:
         cfg = _config(workspace_path=str(tmp_path), transport="oneshot")
 
@@ -122,6 +143,7 @@ def _config(
     *,
     workspace_path: str,
     agent: str = "claude",
+    acpx_command: str = "acpx",
     transport: str = "acp",
 ) -> Any:
     from researchclaw.config import (
@@ -138,7 +160,7 @@ def _config(
                 workspace_path=workspace_path,
                 session_name="researchclaw-code-run-1",
                 agent=agent,
-                acpx_command="acpx",
+                acpx_command=acpx_command,
                 timeout_sec=1200,
                 max_turns=40,
                 reconnect_timeout_sec=180,

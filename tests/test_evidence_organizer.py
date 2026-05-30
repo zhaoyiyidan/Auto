@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from researchclaw.config import RCConfig
+from researchclaw.pipeline import evidence_organizer
 from researchclaw.pipeline.evidence_organizer import (
     build_evidence_bundle,
     build_organizer_prompt,
@@ -206,6 +207,83 @@ def test_build_organizer_prompt_contains_fixed_sections_and_boundaries() -> None
     ):
         assert phrase in prompt
     assert "stage-15" not in prompt.lower()
+
+
+def test_create_evidence_organizer_inherits_llm_acp_agent_not_workspace_agent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class DummySession:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        def _resolve_acpx(self) -> str:
+            return "/usr/bin/acpx"
+
+    monkeypatch.setattr(evidence_organizer, "AcpWorkspaceSession", DummySession)
+    base = RCConfig()
+    config = replace(
+        base,
+        llm=replace(
+            base.llm,
+            acp=replace(base.llm.acp, agent="codex"),
+        ),
+        experiment=replace(
+            base.experiment,
+            workspace_agent=replace(
+                base.experiment.workspace_agent,
+                enabled=True,
+                agent="claude",
+            ),
+            result_analysis_agent=replace(
+                base.experiment.result_analysis_agent,
+                agent="",
+            ),
+        ),
+    )
+
+    session = evidence_organizer.create_evidence_organizer_agent(config, tmp_path)
+
+    assert session is not None
+    assert captured["agent"] == "codex"
+
+
+def test_create_evidence_organizer_uses_explicit_analysis_agent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class DummySession:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        def _resolve_acpx(self) -> str:
+            return "/usr/bin/acpx"
+
+    monkeypatch.setattr(evidence_organizer, "AcpWorkspaceSession", DummySession)
+    base = RCConfig()
+    config = replace(
+        base,
+        llm=replace(
+            base.llm,
+            acp=replace(base.llm.acp, agent="codex"),
+        ),
+        experiment=replace(
+            base.experiment,
+            result_analysis_agent=replace(
+                base.experiment.result_analysis_agent,
+                agent="claude",
+            ),
+        ),
+    )
+
+    session = evidence_organizer.create_evidence_organizer_agent(config, tmp_path)
+
+    assert session is not None
+    assert captured["agent"] == "claude"
 
 
 def test_postcheck_analysis_accepts_clean_six_section_document(tmp_path: Path) -> None:

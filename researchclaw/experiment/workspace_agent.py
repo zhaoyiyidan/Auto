@@ -65,6 +65,16 @@ class GitWorkspaceAgent:
         )
 
 
+def _resolve_workspace_agent_command(config: Any) -> str:
+    workspace_cfg = config.experiment.workspace_agent
+    if str(getattr(workspace_cfg, "agent", "") or "").strip():
+        return str(workspace_cfg.agent).strip()
+
+    acp_cfg = getattr(getattr(config, "llm", None), "acp", None)
+    acp_agent = str(getattr(acp_cfg, "agent", "") or "").strip()
+    return acp_agent or "claude"
+
+
 def create_workspace_agent(
     config: Any,
     llm: Any | None = None,
@@ -82,10 +92,11 @@ def create_workspace_agent(
     acp_cfg = getattr(getattr(config, "llm", None), "acp", None)
     base_url = getattr(acp_cfg, "base_url", "") or getattr(config.llm, "base_url", "")
     api_key_env = getattr(acp_cfg, "api_key_env", "") or getattr(config.llm, "api_key_env", "")
+    acpx_command = workspace_cfg.acpx_command or getattr(acp_cfg, "acpx_command", "")
     session = AcpWorkspaceSession(
-        agent=workspace_cfg.agent,
+        agent=_resolve_workspace_agent_command(config),
         cwd=Path(workspace_cfg.workspace_path),
-        acpx_command=workspace_cfg.acpx_command,
+        acpx_command=acpx_command,
         session_name=session_name,
         timeout_sec=workspace_cfg.timeout_sec,
         max_turns=workspace_cfg.max_turns,

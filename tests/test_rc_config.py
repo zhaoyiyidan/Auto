@@ -233,7 +233,7 @@ def test_result_analysis_agent_config_defaults() -> None:
     defaults = ResultAnalysisAgentConfig()
 
     assert defaults.session_name == "researchclaw-analysis"
-    assert defaults.agent == "claude"
+    assert defaults.agent == ""
     assert defaults.acpx_command == ""
     assert defaults.timeout_sec == 1800
     assert defaults.max_turns == 50

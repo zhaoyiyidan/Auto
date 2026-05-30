@@ -45,6 +45,16 @@ _FIXED_ANALYSIS_SECTIONS: tuple[str, ...] = (
 )
 
 
+def _resolve_organizer_agent(config: RCConfig) -> str:
+    agent_cfg = config.experiment.result_analysis_agent
+    if agent_cfg.agent.strip():
+        return agent_cfg.agent.strip()
+
+    acp_cfg = getattr(config.llm, "acp", None)
+    acp_agent = str(getattr(acp_cfg, "agent", "") or "").strip()
+    return acp_agent or "claude"
+
+
 def build_evidence_bundle(run_dir: Path, config: RCConfig) -> dict[str, Any]:
     """Build the path-only evidence bundle for the Stage 14 organizer agent."""
     run_dir = run_dir.resolve()
@@ -143,7 +153,7 @@ def create_evidence_organizer_agent(
         or ""
     )
     session = AcpWorkspaceSession(
-        agent=agent_cfg.agent,
+        agent=_resolve_organizer_agent(config),
         cwd=run_dir,
         acpx_command=acpx_command,
         session_name=agent_cfg.session_name,

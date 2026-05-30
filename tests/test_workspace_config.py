@@ -18,7 +18,7 @@ def test_workspace_agent_config_defaults() -> None:
     assert cfg.transport == "acp"
     assert cfg.workspace_path == "."
     assert cfg.session_name == ""
-    assert cfg.agent == "claude"
+    assert cfg.agent == ""
     assert cfg.acpx_command == ""
     assert cfg.manifest_filename == "run_manifest.json"
     assert cfg.timeout_sec == 1800

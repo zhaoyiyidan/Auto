@@ -288,6 +288,16 @@ def _execute_experiment_route_decision(
             diagnosis_ref="experiment_diagnosis.json" if diagnosis_path.is_file() else "",
         )
 
+    if route == "hitl" and reason == "execution_timeout":
+        return StageResult(
+            stage=Stage.EXPERIMENT_ROUTE_DECISION,
+            status=StageStatus.FAILED,
+            artifacts=("experiment_decision.json",),
+            error="E13_ROUTE_FAIL: experiment timed out; manual debugging required",
+            evidence_refs=("stage-13/experiment_decision.json",),
+            decision=route,
+        )
+
     return StageResult(
         stage=Stage.EXPERIMENT_ROUTE_DECISION,
         status=StageStatus.DONE,
@@ -407,6 +417,13 @@ def _route_from_experiment_evidence(
     final_status = str(execution.get("final_status", "")).strip().lower()
     if evidence.completion_status == "incomplete":
         return ("rerun", "execution_incomplete", [f"final_status={final_status}"])
+
+    if final_status == "timeout":
+        return (
+            "hitl",
+            "execution_timeout",
+            ["experiment timed out before Stage 13 could validate results"],
+        )
 
     if evidence.completion_status == "failed":
         status = final_status or "missing"

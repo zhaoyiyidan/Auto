@@ -1411,6 +1411,36 @@ class TestWorkspaceAgentStageWiring:
         assert payload["origin_stage"] == 13
         assert payload["errors"]
 
+    def test_stage13_timeout_stops_for_manual_debug(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        cfg = _workspace_agent_rc_config(tmp_path)
+        self._write_stage12_execution(run_dir, final_status="timeout", metrics={})
+        stage_dir = run_dir / "stage-13"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_experiment_route_decision(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.FAILED
+        assert result.decision == "hitl"
+        assert result.error is not None
+        assert "timed out" in result.error
+        assert not (run_dir / "repair_request.json").exists()
+        decision = json.loads(
+            (stage_dir / "experiment_decision.json").read_text(encoding="utf-8")
+        )
+        assert decision["route"] == "hitl"
+        assert decision["reason"] == "execution_timeout"
+
     def test_stage13_route_revise_task_spec_writes_refine_request(
         self,
         tmp_path: Path,

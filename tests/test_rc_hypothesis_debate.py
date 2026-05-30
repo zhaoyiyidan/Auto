@@ -56,7 +56,7 @@ def test_parse_judge_verdict_empty_fails_safe() -> None:
 def test_build_claim_prompt_round_one_vs_revision() -> None:
     role_prompts = {
         "system": "You are the {topic} specialist.",
-        "user": "Use synthesis: {synthesis}",
+        "user": "Use synthesis: {synthesis}\n{extension_context}",
     }
 
     first_messages, first_system = _build_claim_prompt(
@@ -64,6 +64,7 @@ def test_build_claim_prompt_round_one_vs_revision() -> None:
         role_prompts,
         "routing",
         "gap text",
+        "PRIOR CYCLE EVIDENCE",
         None,
         None,
     )
@@ -72,6 +73,7 @@ def test_build_claim_prompt_round_one_vs_revision() -> None:
         role_prompts,
         "routing",
         "gap text",
+        "PRIOR CYCLE EVIDENCE",
         "old claim",
         ["not measurable"],
     )
@@ -79,9 +81,15 @@ def test_build_claim_prompt_round_one_vs_revision() -> None:
     assert first_system == "You are the routing specialist."
     assert "gap text" in first_messages[0]["content"]
     assert "Prior Candidate Claim" not in first_messages[0]["content"]
+    # EXTEND context is a one-time round-1 seed.
+    assert "PRIOR CYCLE EVIDENCE" in first_messages[0]["content"]
+    assert "Hypothesis Extension Context" in first_messages[0]["content"]
     assert "old claim" in second_messages[0]["content"]
     assert "not measurable" in second_messages[0]["content"]
     assert "hidden session" in second_messages[0]["content"]
+    # Revision rounds must NOT re-inject the EXTEND context.
+    assert "PRIOR CYCLE EVIDENCE" not in second_messages[0]["content"]
+    assert "Hypothesis Extension Context" not in second_messages[0]["content"]
 
 
 def test_build_judge_prompt_includes_candidate_and_forbids_rewrites() -> None:

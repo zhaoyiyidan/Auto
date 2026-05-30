@@ -218,6 +218,16 @@ def test_rcconfig_from_dict_parses_llm_wire_api(tmp_path: Path):
     assert config.llm.wire_api == "responses"
 
 
+def test_rcconfig_from_dict_parses_experiment_repair_max_cycles(tmp_path: Path):
+    data = _valid_config_data()
+    data["experiment"]["repair"] = {"enabled": True, "max_cycles": 7}
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.experiment.repair.enabled is True
+    assert config.experiment.repair.max_cycles == 7
+
+
 def test_acp_config_default_base_url_and_api_key_env():
     cfg = AcpConfig()
 

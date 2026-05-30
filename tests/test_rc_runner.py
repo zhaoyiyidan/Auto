@@ -800,6 +800,43 @@ def test_experiment_loop_max_iterations_forces_continue(
     assert Stage.RESULT_ANALYSIS in seen
 
 
+def test_experiment_loop_max_iterations_uses_configured_repair_cycles(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    rc_config = replace(
+        rc_config,
+        experiment=replace(
+            rc_config.experiment,
+            repair=replace(rc_config.experiment.repair, max_cycles=1),
+        ),
+    )
+    seen: list[Stage] = []
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        seen.append(stage)
+        _touch_stage_dir(run_dir, stage)
+        if stage == Stage.EXPERIMENT_ROUTE_DECISION:
+            return _route_result(stage, "fix_code")
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-configured-max-experiment",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    assert seen.count(Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR) == 2
+    history = json.loads((run_dir / "experiment_loop_history.json").read_text())
+    assert len(history["iterations"]) == 1
+    assert Stage.RESULT_ANALYSIS in seen
+
+
 def test_experiment_loop_abort_stops(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,

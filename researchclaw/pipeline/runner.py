@@ -327,6 +327,15 @@ def _read_experiment_iterations(run_dir: Path) -> list[dict[str, object]]:
     return []
 
 
+def _max_experiment_iterations(config: RCConfig) -> int:
+    repair_cfg = getattr(getattr(config, "experiment", None), "repair", None)
+    configured = getattr(repair_cfg, "max_cycles", MAX_EXPERIMENT_ITERATIONS)
+    try:
+        return max(0, int(configured))
+    except (TypeError, ValueError):
+        return MAX_EXPERIMENT_ITERATIONS
+
+
 def _record_experiment_iteration(
     run_dir: Path,
     *,
@@ -373,6 +382,7 @@ def _run_experiment_loop(
 ) -> tuple[list[StageResult], str]:
     _ = stop_on_gate
     results: list[StageResult] = []
+    max_experiment_iterations = _max_experiment_iterations(config)
     loop_stages = {
         Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
         Stage.MANIFEST_VALIDATE_AND_PREPARE,
@@ -416,7 +426,7 @@ def _run_experiment_loop(
                 result.status is StageStatus.FAILED
                 and result.decision == "fix_code"
             ):
-                if len(_read_experiment_iterations(run_dir)) >= MAX_EXPERIMENT_ITERATIONS:
+                if len(_read_experiment_iterations(run_dir)) >= max_experiment_iterations:
                     return results, "continue"
                 attempt = _record_experiment_iteration(
                     run_dir,
@@ -475,7 +485,7 @@ def _run_experiment_loop(
         target = _route_to_stage(route)
         if target is None:
             return results, "stop"
-        if len(_read_experiment_iterations(run_dir)) >= MAX_EXPERIMENT_ITERATIONS:
+        if len(_read_experiment_iterations(run_dir)) >= max_experiment_iterations:
             return results, "continue"
         attempt = _record_experiment_iteration(
             run_dir,

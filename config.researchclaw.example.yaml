@@ -100,6 +100,11 @@ experiment:
   max_iterations: 10
   metric_key: "primary_metric"
   metric_direction: "minimize"
+  repair:
+    enabled: true
+    # Max automatic Stage 10-13 experiment repair/rerun cycles before the
+    # pipeline stops trying to fix the experiment automatically.
+    max_cycles: 3
   sandbox:
     # Use ".venv/Scripts/python.exe" on Windows
     python_path: ".venv/bin/python3"

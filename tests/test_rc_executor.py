@@ -1218,6 +1218,82 @@ class TestWorkspaceAgentStageWiring:
 
         assert called == []
 
+    def test_stage13_uses_task_spec_contract_when_present(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        from researchclaw.experiment.execution_contract import (
+            ExecutionContract,
+            MetricCheck,
+            MetricsContract,
+            PrimaryMetric,
+        )
+        from researchclaw.experiment.workspace import TaskSpec
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        spec = TaskSpec(
+            workspace=str(tmp_path / "workspace"),
+            objective="improve",
+            constraints=[],
+            primary_metric="f1",
+            metric_direction="maximize",
+            allowed_scope=["."],
+            forbidden_scope=[],
+            expected_outputs=["outputs/metrics.json"],
+            execution_contract=ExecutionContract(
+                metrics=MetricsContract(
+                    primary=PrimaryMetric("f1", "maximize"),
+                    required=(MetricCheck("f1", "number"),),
+                )
+            ),
+        )
+        _write_prior_artifact(run_dir, 9, "task_spec.yaml", spec.to_yaml())
+        self._write_stage12_execution(run_dir, metrics={"accuracy": 0.91})
+        stage_dir = run_dir / "stage-13"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_experiment_route_decision(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.DONE
+        assert result.decision == "fix_code"
+        repair = json.loads((run_dir / "repair_request.json").read_text(encoding="utf-8"))
+        assert repair["reason"] == "metrics_missing"
+        assert "metric:f1:missing" in repair["errors"]
+
+    def test_stage13_falls_back_to_default_contract_without_task_spec(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        cfg = _workspace_agent_rc_config(tmp_path)
+        self._write_stage12_execution(run_dir, metrics={"accuracy": 0.91})
+        stage_dir = run_dir / "stage-13"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_experiment_route_decision(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        decision = json.loads(
+            (stage_dir / "experiment_decision.json").read_text(encoding="utf-8")
+        )
+        assert result.status is StageStatus.DONE
+        assert result.decision == "continue"
+        assert decision["route"] == "continue"
+
     def test_stage14_analyzes_registry_execution_and_provenance(
         self,
         tmp_path: Path,

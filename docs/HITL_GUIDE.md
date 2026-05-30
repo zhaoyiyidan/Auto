@@ -532,26 +532,26 @@ External AI agents (Claude, OpenClaw) can interact with the HITL system via MCP 
 
 This enables **agent-in-the-loop** workflows where another AI system reviews and approves the pipeline's work.
 
-### Lark/Feishu Bot Listener
+### Lark/Feishu Notifications (notify-only)
 
-`researchclaw lark-listen <run_dir>` runs a separate daemon that bridges a
-Feishu group chat into the existing HITL file wait loop. The pipeline process
-does not import Lark code: it keeps blocking on `hitl/response.json`, while the
-listener sends the pause prompt, reads human replies from the configured chat,
-and writes the response file that resumes the run.
+Lark/Feishu is **notify-only**: when the pipeline pauses at a gate it pushes an
+alert to the configured chat/user, then waits on `<run_dir>/hitl/response.json`.
+The pipeline does **not** read chat replies — you make the decision on the
+server with the terminal HITL commands (`researchclaw approve`/`reject`/
+`attach`/`guide`), or by editing the stage artifact and then approving (see
+Stage 15 below).
 
 Setup:
 
-1. Create a Feishu/Lark app bot and add it to the review group.
+1. Create a Feishu/Lark app bot and add it to the review group (or DM the owner).
 2. Install and authenticate the official `lark-cli`.
-3. Get the group `chat_id` (`oc_...`), for example with
-   `lark-cli api GET /open-apis/im/v1/chats --format json`.
-4. Export `LARK_APP_ID` and `LARK_APP_SECRET`, or set local gitignored config
-   values for testing.
-5. Start the pipeline in a HITL mode so it writes `<run_dir>/hitl/waiting.json`.
-6. In a second terminal, run `researchclaw lark-listen <run_dir>`.
+3. Get the target `chat_id` (`oc_...`) or user `open_id` (`ou_...`).
+4. Export `LARK_APP_ID` and `LARK_APP_SECRET` (or set local gitignored config
+   values for testing).
+5. Start the pipeline in a HITL mode. When Lark targets are configured, the run
+   stays in **file-polling** mode so a second SSH session can decide.
 
-Example local config:
+Example config:
 
 ```yaml
 notifications:
@@ -560,46 +560,40 @@ notifications:
     enabled: true
     app_id_env: LARK_APP_ID
     app_secret_env: LARK_APP_SECRET
+    dry_run: false          # true = log the would-send message, don't call lark-cli
     targets:
       review_group:
         kind: chat
         receive_id_type: chat_id
         receive_id: oc_abc123
-    hitl:
-      enabled: true
-      chat_id: oc_abc123
-      poll_interval_sec: 2.0
-      reply_timeout_sec: 0
-      allowed_actions: [approve, reject, abort, skip, inject]
-      allowed_senders: []
-      notify: true
-      read_replies: true
+      owner:
+        kind: user
+        receive_id_type: open_id
+        receive_id: ou_abc123
 ```
 
-Reply grammar:
+Deciding (on the server, in a second terminal):
 
-| Reply | Action |
-|-------|--------|
-| `approve`, `ok`, `lgtm`, `yes`, `同意`, `通过` | approve |
-| `reject: reason`, `no`, `拒绝`, `驳回` | reject |
-| `abort`, `stop`, `cancel`, `终止`, `取消` | abort |
-| `skip`, `跳过` | skip |
-| `guidance: text`, `guide: text`, `inject: text`, `指导: text`, `建议: text` | inject guidance |
-| `edit`, `collaborate`, `resume`, `take_over` | matching HITL action when allowed |
-| `rollback: 7` | rollback to stage 7 |
+```bash
+researchclaw status  <run_dir>          # see what it's waiting on
+researchclaw approve <run_dir>          # accept the AI's result
+researchclaw reject  <run_dir> -m "..." # reject with a reason
+researchclaw attach  <run_dir>          # interactive review
+```
+
+**Stage 15 (RESEARCH_DECISION):** to override the decision rather than just
+approve it, edit `<run_dir>/stage-15/decision.md` (change the keyword under
+`## Decision` to `PROCEED` / `EXTEND` / `PIVOT`) and then run
+`researchclaw approve <run_dir>` — the pipeline re-reads the edited file and
+routes on your decision.
 
 Security notes:
 
 - Prefer environment variables for app credentials. Plain config values are only
   for local gitignored testing.
-- Use `allowed_senders` to restrict who can resume a run from a group chat.
-- Use `allowed_actions` to narrow chat-driven actions even when the waiting
-  state allows more.
-- Set `read_replies: false` to send Feishu notifications only. In that mode the
-  listener does not poll chat messages, and the paused pipeline must be resumed
-  with `researchclaw approve <run_dir>` or `researchclaw attach <run_dir>`.
-- Direct 1:1 DM support is not included in this listener; use a group `chat_id`
-  that contains the bot.
+- Lark never receives decisions: there is no chat-reply listener, so a stray
+  group message can never resume or alter a run. Decisions require shell access
+  to the server.
 
 ---
 

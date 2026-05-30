@@ -153,10 +153,59 @@ def _generate_run_id(topic: str) -> str:
     return f"rc-{ts}-{topic_hash}"
 
 
-def _lark_hitl_file_polling_enabled(config: RCConfig) -> bool:
+def _remote_hitl_file_polling_enabled(config: RCConfig) -> bool:
+    """True when gate decisions are made out-of-band (server terminal).
+
+    When Lark notifications are configured, the pipeline pushes a pause alert
+    and then waits on ``hitl/response.json`` (file polling) instead of blocking
+    on a local ``input()`` prompt — so the operator can SSH in and run
+    ``researchclaw approve``/``attach``/``reject`` from a second session.
+    """
     lark_config = getattr(getattr(config, "notifications", None), "lark", None)
-    hitl_config = getattr(lark_config, "hitl", None)
-    return bool(getattr(hitl_config, "enabled", False))
+    return bool(
+        getattr(lark_config, "enabled", False)
+        and getattr(lark_config, "targets", ())
+    )
+
+
+def _build_lark_pause_notifier(config: RCConfig, run_id: str):
+    """Return a ``WaitingState -> None`` callback that pushes a Lark alert.
+
+    Returns ``None`` when Lark notifications are not configured. The callback
+    is best-effort: it never raises (HITLSession.pause swallows errors too).
+    """
+    lark_config = getattr(getattr(config, "notifications", None), "lark", None)
+    if not (
+        getattr(lark_config, "enabled", False)
+        and getattr(lark_config, "targets", ())
+    ):
+        return None
+
+    from researchclaw.notify.lark import LarkNotifier
+
+    notifier = LarkNotifier(lark_config)
+
+    def _notify(waiting) -> None:
+        run_label = run_id or "current run"
+        title = f"ResearchClaw HITL review needed: {run_label}"
+        actions = ", ".join(waiting.available_actions)
+        lines = [
+            f"Stage {waiting.stage}: {waiting.stage_name}",
+            f"Reason: {waiting.reason.value}",
+            f"Available actions: {actions}",
+            "",
+            "Log in to the server to decide:",
+            "  researchclaw approve <run_dir>     # accept",
+            "  researchclaw reject <run_dir> -m   # reject",
+            "  researchclaw attach <run_dir>      # interactive / edit then approve",
+        ]
+        if waiting.context_summary:
+            lines.append(f"\nContext: {waiting.context_summary}")
+        if waiting.output_files:
+            lines.append("Output files: " + ", ".join(waiting.output_files))
+        notifier.send(title, "\n".join(lines))
+
+    return _notify
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -377,14 +426,21 @@ def cmd_run(args: argparse.Namespace) -> int:
                 scripted = ScriptedHITLAdapter.from_file(interventions_file)
                 hitl_session.set_input_callback(scripted.collect_input)
                 print(f"  HITL:    scripted ({len(scripted.pending_stages)} interventions)")
-            elif _lark_hitl_file_polling_enabled(config):
-                print("  HITL:    file polling (Lark listener)")
+            elif _remote_hitl_file_polling_enabled(config):
+                print(
+                    "  HITL:    file polling "
+                    "(SSH in, then researchclaw approve/attach to decide)"
+                )
             else:
                 # Wire CLI adapter for interactive input
                 from researchclaw.hitl.adapters.cli_adapter import CLIAdapter
 
                 cli_adapter = CLIAdapter(run_dir=run_dir)
                 hitl_session.set_input_callback(cli_adapter.collect_input)
+            # Push a Lark/Feishu alert whenever the pipeline pauses (notify-only).
+            _pause_notifier = _build_lark_pause_notifier(config, run_id)
+            if _pause_notifier is not None:
+                hitl_session.set_pause_notifier(_pause_notifier)
             adapters.hitl = hitl_session
         except Exception as _hitl_exc:
             import logging
@@ -1414,15 +1470,6 @@ def build_parser() -> argparse.ArgumentParser:
     attach_p = sub.add_parser("attach", help="Attach to a running/paused pipeline for HITL interaction")
     _ = attach_p.add_argument("run_dir", help="Path to run artifacts directory")
 
-    # HITL: Lark/Feishu reply listener
-    lark_listen_p = sub.add_parser(
-        "lark-listen",
-        help="Listen for Lark/Feishu HITL replies for a paused run",
-    )
-    _ = lark_listen_p.add_argument("run_dir", help="Path to run artifacts directory")
-    _ = lark_listen_p.add_argument("--config", "-c", default=None, help="Path to config file")
-    _ = lark_listen_p.add_argument("--once", action="store_true", help="Poll once and exit")
-
     # HITL: Check pipeline status
     status_p = sub.add_parser("status", help="Show pipeline and HITL status")
     _ = status_p.add_argument("run_dir", help="Path to run artifacts directory")
@@ -1486,8 +1533,6 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_skills(args)
     elif command == "profile":
         return cmd_profile(args)
-    elif command == "lark-listen":
-        return cmd_lark_listen(args)
     elif command == "attach":
         return cmd_attach(args)
     elif command == "status":
@@ -2121,43 +2166,6 @@ def cmd_profile(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 # HITL subcommands
 # ---------------------------------------------------------------------------
-
-
-def cmd_lark_listen(args: argparse.Namespace) -> int:
-    """Run a Lark/Feishu listener that writes HITL response.json files."""
-    run_dir = Path(cast(str, args.run_dir))
-    if not run_dir.is_dir():
-        print(f"Error: run directory not found: {run_dir}", file=sys.stderr)
-        return 1
-
-    resolved = _resolve_config_or_exit(args)
-    if resolved is None:
-        return 1
-
-    try:
-        rc_config = RCConfig.load(resolved, check_paths=False)
-    except Exception as exc:  # noqa: BLE001
-        print(f"Error loading config: {exc}", file=sys.stderr)
-        return 1
-
-    lark_config = rc_config.notifications.lark
-    hitl_config = lark_config.hitl
-    if hitl_config.read_replies and not hitl_config.chat_id:
-        print("Error: notifications.lark.hitl.chat_id is required", file=sys.stderr)
-        return 1
-
-    from researchclaw.notify.lark import LarkMessageReader, LarkNotifier
-    from researchclaw.notify.lark_listener import LarkHITLListener
-
-    listener = LarkHITLListener(
-        reader=LarkMessageReader(lark_config),
-        notifier=LarkNotifier(lark_config),
-        run_dir=run_dir,
-        config=hitl_config,
-        run_id=run_dir.name,
-    )
-    listener.run(max_iterations=1 if getattr(args, "once", False) else None)
-    return 0
 
 
 def cmd_attach(args: argparse.Namespace) -> int:

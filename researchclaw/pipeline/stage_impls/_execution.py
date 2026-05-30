@@ -189,6 +189,7 @@ def _execute_harness_submit_and_collect(
         "submit_result.json",
         "result_artifacts.json",
     )
+    _write_contract_evidence(stage_dir, run_dir, config)
     artifacts = _read_result_artifacts(stage_dir)
     if artifacts and not any(bool(item.get("exists")) for item in artifacts):
         return StageResult(
@@ -367,6 +368,22 @@ def _contract_manifest_errors(
             f"{manifest.metrics.direction!r}"
         )
     return errors
+
+
+def _write_contract_evidence(stage_dir: Path, run_dir: Path, config: RCConfig) -> None:
+    execution = _load_json_file(stage_dir / "execution_record.json")
+    if not execution:
+        return
+    artifacts = _load_json_file(stage_dir / "result_artifacts.json")
+    evidence = evaluate_contract(
+        _load_execution_contract(run_dir, config),
+        execution,
+        artifacts,
+    )
+    (stage_dir / "contract_evidence.json").write_text(
+        json.dumps(evidence.to_dict(), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def _route_from_experiment_evidence(

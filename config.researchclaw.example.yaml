@@ -1,285 +1,491 @@
+# ResearchClaw example config.
+#
+# Scope:
+# - Keeps fields that are read by the current CLI, pipeline, server, LLM,
+#   HITL, notification, search, export, and workspace-agent code paths.
+# - Omits fields that are only parsed in researchclaw/config.py but are not
+#   wired into runtime behavior.
+# - Optional fields that require real secrets, IDs, or local paths are shown as
+#   comments next to the section that uses them instead of as empty YAML values.
+#
+# Comment convention:
+# - required: must be present and non-empty for validation.
+# - optional, default: may be omitted; the listed value is the code default.
+# - conditionally required: required only for the named feature/provider/mode.
+
 project:
+  # required: Project identifier used in run metadata and reports.
   name: "my-research"
+
+  # optional, default: "docs-first". Controls default gate behavior.
+  # Valid values: "docs-first", "semi-auto", "full-auto".
   mode: "full-auto"
 
+  # optional, default: "" (auto-detect). Forces a domain profile when set.
+  # Use `researchclaw profile list` to see available profile ids.
+  # profile: "hep_ph"
+
 research:
+  # required: Main research topic.
   topic: "Your research topic here"
+
+  # optional, default: []. Domain hints used by prompt/domain routing and trends.
   domains:
     - "machine-learning"
+
+  # optional, default: 0. Target paper count used by literature stages.
   daily_paper_count: 10
+
+  # optional, default: 0.0. Quality threshold used in prompts and quality gates.
   quality_threshold: 4.0
-  # Stage 4 default: generate a search-agent handoff prompt and pause.
-  # Set false to use the legacy OpenAlex/Semantic Scholar/arXiv API path.
+
+  # optional, default: true. Allows recoverable noncritical stages to degrade.
+  graceful_degradation: true
+
+  # optional, default: true. true pauses Stage 4 for manual search handoff;
+  # false uses the built-in OpenAlex/Semantic Scholar/arXiv/web-search path.
   manual_search: true
 
 runtime:
+  # required: Time zone label for run metadata.
   timezone: "America/New_York"
-  max_parallel_tasks: 3
-  approval_timeout_hours: 12
-  retry_limit: 2
 
 notifications:
+  # required: Notification channel used by message adapters.
   channel: "console"
-  target: ""
-  on_stage_start: true
-  on_stage_fail: true
-  on_gate_required: true
-  # lark:
-  #   enabled: false
-  #   backend: "cli"
-  #   command: "lark-cli"
-  #   app_id: ""
-  #   app_secret: ""
-  #   app_id_env: "LARK_APP_ID"
-  #   app_secret_env: "LARK_APP_SECRET"
-  #   timeout_sec: 15
-  #   dry_run: false
-  #   targets:
-  #     me:
-  #       kind: "user"
-  #       receive_id_type: "open_id"
-  #       receive_id: "ou_xxx"
-  #     lab_group:
-  #       kind: "chat"
-  #       receive_id_type: "chat_id"
-  #       receive_id: "oc_xxx"
-  # Lark is notify-only: the pipeline pushes a pause alert when it reaches a
-  # gate. Make decisions on the server with `researchclaw approve`/`reject`/
-  # `attach` (the run waits on hitl/response.json). Replies in the Lark chat
-  # are NOT read.
 
-knowledge_base:
-  backend: "markdown"
-  root: "docs/kb"
+  # optional, default: false. Used only when openclaw_bridge.use_message is true.
+  on_stage_start: false
+
+  # optional, default: true. Used only when openclaw_bridge.use_message is true.
+  on_gate_required: true
+
+  # Optional Lark/Feishu pause alerts. Uncomment only when you have real target
+  # ids and credentials.
+  #
+  # lark:
+  #   # optional, default: false. Enables outbound notify-only HITL alerts.
+  #   enabled: true
+  #
+  #   # optional, default: "lark-cli". CLI command used to call Lark OpenAPI.
+  #   command: "lark-cli"
+  #
+  #   # optional, default: "LARK_APP_ID". Env var for the Lark app id.
+  #   app_id_env: "LARK_APP_ID"
+  #
+  #   # optional, default: "LARK_APP_SECRET". Env var for the Lark app secret.
+  #   app_secret_env: "LARK_APP_SECRET"
+  #
+  #   # optional, default: unset. Inline credentials are supported but should
+  #   # stay out of committed configs.
+  #   # app_id: "cli_xxx"
+  #   # app_secret: "secret_xxx"
+  #
+  #   # optional, default: 15. lark-cli subprocess timeout in seconds.
+  #   timeout_sec: 15
+  #
+  #   # optional, default: false. Prints/saves command metadata without sending.
+  #   dry_run: false
+  #
+  #   # conditionally required: at least one target is needed when enabled.
+  #   targets:
+  #     lab_group:
+  #       # optional, default: "open_id". Common values: "open_id", "chat_id".
+  #       receive_id_type: "chat_id"
+  #
+  #       # conditionally required: Lark user/chat receive id.
+  #       receive_id: "oc_xxx"
 
 openclaw_bridge:
-  use_cron: false
+  # optional, default: false. Sends stage/gate notifications through adapters.
   use_message: false
+
+  # optional, default: false. Records stage/gate status through memory adapters.
   use_memory: false
-  use_sessions_spawn: false
+
+  # optional, default: false. Lets Stage 4 use the OpenClaw web-fetch adapter.
   use_web_fetch: false
-  use_browser: false
+
+knowledge_base:
+  # optional, default: "markdown". Backend used when writing stage outputs to KB.
+  # Valid values: "markdown", "obsidian".
+  backend: "markdown"
+
+  # required: Root directory for KB outputs.
+  root: "docs/kb"
 
 llm:
+  # optional, default: "openai-compatible". LLM provider.
+  # Common values: openai, openrouter, deepseek, anthropic, minimax,
+  # openai-compatible, acp.
   provider: "openai-compatible"
+
+  # conditionally required: Required unless provider is "acp".
   base_url: "https://api.openai.com/v1"
-  wire_api: "chat_completions"  # Set to "responses" for Responses-only gateways
+
+  # optional, default: "chat_completions". Use "responses" for Responses-only gateways.
+  wire_api: "chat_completions"
+
+  # conditionally required: Required unless provider is "acp".
   api_key_env: "OPENAI_API_KEY"
-  api_key: ""
+
+  # optional, default: "" (client falls back to "gpt-4o" if blank).
+  # Inline api_key is supported, but env vars are safer for secrets.
+  # api_key: "sk-..."
+
+  # optional, default: "" (client falls back to "gpt-4o" if blank).
   primary_model: "gpt-4o"
+
+  # optional, default: []. Ordered fallback model chain.
   fallback_models:
     - "gpt-4.1"
     - "gpt-4o-mini"
-  # --- MiniMax provider example ---
-  # provider: "minimax"
-  # api_key_env: "MINIMAX_API_KEY"
-  # primary_model: "MiniMax-M2.5"
-  # fallback_models:
-  #   - "MiniMax-M2.5-highspeed"
-  # --- ACPX + custom Codex provider example ---
-  # provider: "acp"
+
+  # optional, default: "". Semantic Scholar API key used by literature/trends.
+  # Prefer exporting the key outside this tracked template if possible.
+  # s2_api_key: "..."
+
+  # optional, default: 600. Direct LLM request timeout in seconds.
+  timeout_sec: 600
+
+  # Optional ACP provider settings. Uncomment when provider: "acp" or when
+  # workspace-agent sessions need ACP-specific provider env overrides.
+  #
   # acp:
+  #   # optional, default: "claude". ACP-compatible agent command.
   #   agent: "codex"
-  #   base_url: "https://your-provider.example.com/v1"
-  #   api_key_env: "CUSTOM_API_KEY"
+  #
+  #   # optional, default: ".". Working directory for persistent ACP sessions.
+  #   cwd: "."
+  #
+  #   # optional, default: "" (auto-detect acpx).
+  #   # acpx_command: "/path/to/acpx"
+  #
+  #   # optional, default: "researchclaw". Persistent ACP session name.
+  #   session_name: "researchclaw"
+  #
+  #   # optional, default: 1800. Per-prompt ACP timeout in seconds.
   #   timeout_sec: 1800
-  #   enable_debate: true   # default true; set false to skip the slow stage-8 hypothesis debate
+  #
+  #   # optional, default: "". Provider base URL forwarded to compatible agents.
+  #   # base_url: "https://your-provider.example.com/v1"
+  #
+  #   # optional, default: "". Env var whose value is forwarded to the agent.
+  #   # api_key_env: "CUSTOM_API_KEY"
+  #
+  #   # optional, default: 3. Retry count for transient ACP disconnects.
+  #   max_retries: 3
+  #
+  #   # optional, default: true. Enables ACP-forked Stage 8 hypothesis debate.
+  #   enable_debate: true
+  #
+  #   # optional, default: 2. Max debate rounds per hypothesis role.
+  #   debate_max_rounds: 2
+  #
+  #   # optional, default: 0.6. Minimum judge confidence for debate acceptance.
+  #   debate_confidence_min: 0.6
+
+# Optional prompt overrides used by `researchclaw run` and `researchclaw info`.
+#
+# prompts:
+#   # optional, default: "". YAML file overriding built-in stage prompts.
+#   custom_file: "prompts.override.yaml"
+#
+#   # optional, default: {}. Extra per-stage guidance; value may be a file path
+#   # or inline text. Keys are stage prompt names shown by `researchclaw info`.
+#   extra_prompts:
+#     synthesis: "Focus on mechanisms, not only benchmark scores."
+#     paper_draft: "Use the lab's preferred structure."
+
+# Optional skill-library tuning. Built-in/user/project/MetaClaw skills are
+# loaded automatically; these fields add extra directories or change match count.
+#
+# skills:
+#   # optional, default: []. Project or local directories containing SKILL.md.
+#   custom_dirs:
+#     - ".claude/skills"
+#
+#   # optional, default: []. Shared directories containing SKILL.md.
+#   external_dirs:
+#     - "/shared/researchclaw/skills"
+#
+#   # optional, default: 3. Max matched skills injected into a stage prompt.
+#   max_skills_per_stage: 3
+
+# Optional MetaClaw bridge. Uncomment when you run a MetaClaw proxy/PRM or want
+# post-run lessons converted into reusable skills.
+#
+# metaclaw_bridge:
+#   # optional, default: false. Enables MetaClaw LLM proxy and post-run hooks.
+#   enabled: true
+#
+#   # optional, default: "http://localhost:30000". MetaClaw proxy URL.
+#   proxy_url: "http://localhost:30000"
+#
+#   # optional, default: "~/.metaclaw/skills". Output dir for generated skills.
+#   skills_dir: "~/.metaclaw/skills"
+#
+#   # optional, default: "". Direct LLM fallback URL behind the MetaClaw proxy.
+#   # fallback_url: "https://api.openai.com/v1"
+#
+#   # optional, default: "". Direct LLM fallback key; keep secrets untracked.
+#   # fallback_api_key: "sk-..."
+#
+#   prm:
+#     # optional, default: false. Enables PRM quality gate evaluation.
+#     enabled: true
+#
+#     # conditionally required when prm.enabled: true. PRM API base URL.
+#     api_base: "http://localhost:30000"
+#
+#     # optional, default: "". Env var for PRM API key.
+#     api_key_env: "METACLAW_API_KEY"
+#
+#     # optional, default: "". Inline PRM API key; keep secrets untracked.
+#     # api_key: "..."
+#
+#     # optional, default: "gpt-5.4". PRM model id.
+#     model: "gpt-5.4"
+#
+#     # optional, default: 3. Number of PRM votes.
+#     votes: 3
+#
+#     # optional, default: 0.6. PRM sampling temperature.
+#     temperature: 0.6
+#
+#     # optional, default: [5, 9, 15, 20]. Stages scored by PRM.
+#     gate_stages: [5, 9, 15, 20]
+#
+#   lesson_to_skill:
+#     # optional, default: true. Converts post-run lessons to skills.
+#     enabled: true
+#
+#     # optional, default: "warning". Minimum lesson severity to convert.
+#     min_severity: "warning"
+#
+#     # optional, default: 3. Max generated skills per run.
+#     max_skills_per_run: 3
+
+web_search:
+  # optional, default: true. Used by Stage 4 when automatic search is active.
+  enabled: true
+
+  # optional, default: "TAVILY_API_KEY". Env var checked for Tavily web search.
+  tavily_api_key_env: "TAVILY_API_KEY"
+
+  # optional, default: "". Inline Tavily key; prefer env var for secrets.
+  # tavily_api_key: "tvly-..."
+
+  # optional, default: true. Adds Google Scholar-style web discovery.
+  enable_scholar: true
+
+  # optional, default: true. Enables page crawling for web context.
+  enable_crawling: true
+
+  # optional, default: true. Enables PDF extraction from crawled results.
+  enable_pdf_extraction: true
+
+  # optional, default: 10. Max general web results per search.
+  max_web_results: 10
+
+  # optional, default: 10. Max scholar results per search.
+  max_scholar_results: 10
+
+  # optional, default: 5. Max URLs to crawl for extracted context.
+  max_crawl_urls: 5
 
 security:
+  # optional, default: [5, 9, 20]. Legacy approval gate stages when inline
+  # HITL is not active. Valid stage numbers: 1-23.
   hitl_required_stages: [5, 9, 20]
-  allow_publish_without_approval: false
-  redact_sensitive_logs: true
+
+# Optional inline HITL. Uncomment when you want config-driven human review
+# instead of only CLI --mode / legacy security.hitl_required_stages gates.
+#
+# hitl:
+#   # optional, default: false. Enables HITL session policy checks.
+#   enabled: true
+#
+#   # optional, default: "full-auto". Valid values: full-auto, gate-only,
+#   # checkpoint, step-by-step, co-pilot, custom.
+#   mode: "gate-only"
+#
+#   # optional, default: 0.0. 0 disables cost-budget pauses.
+#   cost_budget_usd: 0.0
+#
+#   timeouts:
+#     # optional, default: 86400. File-polling timeout for human responses.
+#     default_human_timeout_sec: 86400
+#
+#     # optional, default: false. Auto-approve when timeout expires.
+#     auto_proceed_on_timeout: false
+#
+#   stage_policies:
+#     "8":
+#       # optional, default: false. Pause before running this stage.
+#       pause_before: false
+#
+#       # optional, default: false. Pause after this stage completes.
+#       pause_after: true
+#
+#       # optional, default: false. Require explicit human approval.
+#       require_approval: true
+#
+#       # optional, default: false. Enter interactive collaboration mode.
+#       enable_collaboration: true
+#
+#       # optional, default: 0.0. Pause if stage quality falls below this score.
+#       min_quality_score: 0.7
 
 experiment:
-  # ★ mode 决定实验结果的真实性
-  #   "sandbox"   — 在本地沙盒中实际执行生成的 Python 代码，产出真实实验数据
-  #   "docker"    — 在 Docker 容器中执行，支持 GPU 直通、依赖自动安装、内存隔离
-  #   "simulated" — 不执行代码，使用公式生成假数据（仅用于框架开发调试，不应用于论文生成）
-  mode: "sandbox"
+  # optional, default: "workspace". Current runtime path is workspace-native.
+  mode: "workspace"
+
+  # optional, default: 300. Used in task planning and as submitter timeout fallback.
   time_budget_sec: 300
-  max_iterations: 10
+
+  # optional, default: "primary_metric". Primary metric to report/compare.
   metric_key: "primary_metric"
+
+  # optional, default: "minimize". Valid values: "minimize", "maximize".
   metric_direction: "minimize"
+
   repair:
+    # optional, default: true. Enables experiment diagnosis and repair routing.
     enabled: true
-    # Max automatic Stage 10-13 experiment repair/rerun cycles before the
-    # pipeline stops trying to fix the experiment automatically.
+
+    # optional, default: 3. Maximum automatic Stage 10-13 repair/rerun cycles.
     max_cycles: 3
-  sandbox:
-    # Use ".venv/Scripts/python.exe" on Windows
-    python_path: ".venv/bin/python3"
-    gpu_required: false
-    max_memory_mb: 4096
-  # Docker sandbox settings (only used when mode: "docker")
-  # Build image first: docker build -t researchclaw/experiment:latest researchclaw/docker/
-  docker:
-    image: "researchclaw/experiment:latest"
-    gpu_enabled: true
-    # gpu_device_ids: [0]        # empty = all GPUs
-    memory_limit_mb: 8192
-    network_policy: "setup_only"  # none | setup_only | pip_only | full
-    # pip_pre_install: ["torchdiffeq", "einops"]
-    auto_install_deps: true
-    shm_size_mb: 2048
-    keep_containers: false
-  ssh_remote:
-    host: ""                # SSH hostname or IP
-    user: ""                # SSH username (default: current user)
-    port: 22                # SSH port
-    key_path: ""            # Path to private key (default: ~/.ssh/id_rsa)
-    gpu_ids: []             # e.g. [0, 1] for CUDA_VISIBLE_DEVICES
-    remote_workdir: "/tmp/researchclaw_experiments"
-    remote_python: "python3"
-    setup_commands: []      # e.g. ["source ~/venv/bin/activate", "pip install torch"]
-    # Docker-over-SSH (most secure remote execution)
-    use_docker: false       # Set true to run experiments inside Docker on remote host
-    docker_image: "researchclaw/experiment:latest"
-    docker_network_policy: "none"   # none | full
-    docker_memory_limit_mb: 8192
-    docker_shm_size_mb: 2048
-  # OpenCode Beast Mode — external AI coding agent for complex experiments
-  # Install: npm i -g opencode-ai@latest  (or use `researchclaw setup`)
-  opencode:
-    enabled: true                # Master switch (default: true)
-    auto: true                   # Auto-trigger without confirmation (default: true)
-    complexity_threshold: 0.2    # 0.0-1.0 — higher = only trigger on complex experiments
-    model: ""                    # Override model (empty = use llm.primary_model)
-    timeout_sec: 600             # Max seconds for OpenCode generation
-    max_retries: 1               # Retry count on failure
-    workspace_cleanup: true      # Remove temp workspace after collection
-  # Existing-workspace ACP code agent path (Stages 10, 13, and repairs).
-  # The code agent edits workspace_path directly, commits with git, and writes
-  # run_manifest.json. ResearchClaw records provenance and submits via submitter.
-  # workspace_agent:
-  #   enabled: true
-  #   transport: "acp"
-  #   workspace_path: "/path/to/existing/repo"
-  #   session_name: "researchclaw-code-${run_id}"
-  #   agent: "claude"        # or "codex"
-  #   acpx_command: ""       # empty = auto-detect acpx
-  #   timeout_sec: 1800
-  #   max_turns: 50
-  #   manifest_filename: "run_manifest.json"
-  #   close_policy: "keep"   # keep | close
-  # submitter:
-  #   type: "local"          # local | slurm | ssh_slurm | manual | custom_python
 
-# ============================================================================
-# SSH Remote Examples
-# ============================================================================
-#
-# 1. Lab server (bare Python, basic sandboxing):
-#   experiment:
-#     mode: "ssh_remote"
-#     ssh_remote:
-#       host: "gpu-server.lab.edu"
-#       user: "researcher"
-#       key_path: "~/.ssh/id_rsa"
-#       gpu_ids: [0]
-#       remote_python: "python3"
-#
-# 2. Lab server (Docker — most secure):
-#   experiment:
-#     mode: "ssh_remote"
-#     ssh_remote:
-#       host: "gpu-server.lab.edu"
-#       user: "researcher"
-#       key_path: "~/.ssh/id_rsa"
-#       gpu_ids: [0]
-#       use_docker: true
-#       docker_image: "researchclaw/experiment:latest"
-#       docker_network_policy: "none"
-#
-# 3. Colab via SSH tunnel:
-#   experiment:
-#     mode: "ssh_remote"
-#     ssh_remote:
-#       host: "localhost"
-#       port: 12345
-#       user: "root"
-#       remote_python: "python3"
-#       setup_commands:
-#         - "pip install torch torchvision -q"
-#
-# 4. Colab via Google Drive (most robust, no SSH needed):
-#   experiment:
-#     mode: "colab_drive"
-#     colab_drive:
-#       drive_root: "~/Library/CloudStorage/GoogleDrive-you@gmail.com/My Drive/researchclaw"
-#       poll_interval_sec: 30
-#       timeout_sec: 3600
-#       setup_script: "pip install torch torchvision -q"
-#   # Then in Colab: run the colab_worker.py that appears in your Drive
-
-  colab_drive:
-    drive_root: ""          # Local path to Google Drive mount
-    poll_interval_sec: 30   # How often to check for results
-    timeout_sec: 3600       # Max wait per experiment (1 hour)
-    setup_script: ""        # Shell commands to run before each experiment
-
-  # Scientific Visualization Agent (Code-to-Viz + Nano Banana)
-  # Uses a Decision Agent to analyze paper content and determine:
-  #   - Code figures (bar charts, line plots) → Matplotlib/TikZ
-  #   - Image figures (architecture, flowcharts) → Gemini Nano Banana
-  figure_agent:
+  workspace_agent:
+    # optional, default: false. Doctor uses this to verify workspace-agent setup.
     enabled: true
-    min_figures: 3
-    max_figures: 10
-    max_iterations: 3
-    render_timeout_sec: 30
-    # Security: Docker sandbox for visualization code execution
-    # use_docker: null  # null = auto-detect, true = force, false = disable
-    docker_image: "researchclaw/experiment:latest"
-    # Output format: "python" (Matplotlib/Seaborn) or "latex" (TikZ/PGFPlots)
-    output_format: "python"
-    # Nano Banana (Gemini native image generation)
-    nano_banana_enabled: true
-    # gemini_api_key: ""  # or set GEMINI_API_KEY env var
-    gemini_model: "gemini-2.5-flash-image"
-    strict_mode: false
-    dpi: 300
 
-# === Prompts ===
-# Customize LLM prompts by pointing to your own YAML file.
-# Copy prompts.default.yaml, edit the prompts you want, and set the path here.
-prompts:
-  custom_file: ""  # e.g. "my_prompts.yaml" (empty = use built-in defaults)
+    # optional, default: "acp". Current supported value: "acp".
+    transport: "acp"
 
-  # Per-stage additional guidance. Each key is a stage name (run
-  # `researchclaw info` to see the full stage list); each value is either
-  # an inline instruction or a path to a text/markdown file. The text is
-  # appended to that stage's user prompt under "## Additional Stage
-  # Guidance". Unknown stage names emit a warning and are dropped.
-  #
-  #   extra_prompts:
-  #     code_generation: "Favour MadGraph5 + Pythia8 + Delphes toolchains."
-  #     paper_outline: ./prompts/jhep_outline_rules.md
-  extra_prompts: {}
+    # conditionally required for pipeline experiment stages: existing git repo
+    # that the code agent edits. Code default is ".".
+    workspace_path: "/path/to/experiment-workspace"
 
+    # optional, default: "" (runtime falls back to "researchclaw-code").
+    session_name: "researchclaw-code"
 
-# === MetaClaw Integration ===
-# Enable the MetaClaw bridge to get skill injection, PRM quality gates,
-# and continuous learning from research pipeline failures.
-# Requires MetaClaw to be running: metaclaw start --mode skills_only
-metaclaw_bridge:
-  enabled: false
-  proxy_url: "http://localhost:30000"    # MetaClaw proxy endpoint
-  skills_dir: "~/.metaclaw/skills"       # MetaClaw skills directory
-  fallback_url: ""                       # Direct LLM URL if proxy is down
-  fallback_api_key: ""
+    # optional, default: "claude". ACP agent command, e.g. "claude" or "codex".
+    agent: "claude"
 
-  # PRM quality gate: LLM-as-judge scoring at gate stages
-  prm:
-    enabled: false
-    api_base: ""                         # OpenAI-compatible API for PRM judge
-    api_key_env: "PRM_API_KEY"
-    api_key: ""
-    model: "gpt-5.4"
-    votes: 3                             # Majority vote count
-    gate_stages: [5, 9, 15, 20]          # Stages to apply PRM gating
+    # optional, default: "" (auto-detect acpx).
+    # acpx_command: "/path/to/acpx"
 
-  # Lesson-to-skill: auto-convert pipeline failures into MetaClaw skills
-  lesson_to_skill:
-    enabled: true
-    min_severity: "error"                # Only convert error-level lessons
-    max_skills_per_run: 3
+    # optional, default: "run_manifest.json". Manifest the agent must write.
+    manifest_filename: "run_manifest.json"
+
+    # optional, default: 1800. Code-agent timeout in seconds.
+    timeout_sec: 1800
+
+    # optional, default: 50. Maximum ACP turns for the workspace agent.
+    max_turns: 50
+
+  submitter:
+    # optional, default: "local". Valid values:
+    # "local", "slurm", "ssh_slurm", "manual", "custom_python".
+    type: "local"
+
+    # optional, default: true. Poll until the submitted run completes.
+    wait_for_completion: true
+
+    # optional, default: 15. Poll interval in seconds.
+    poll_interval_sec: 15
+
+    # optional, default: 0. 0 falls back to experiment.time_budget_sec.
+    wait_timeout_sec: 0
+
+    # conditionally required when type: "custom_python". Python callable path.
+    # custom_callable: "my_package.submitters:submit"
+
+    # conditionally required when type: "ssh_slurm". Remote SSH target.
+    # ssh_host: "gpu-server.example.edu"
+    #
+    # optional, default: "". SSH username; empty lets ssh use local defaults.
+    # ssh_user: "alice"
+    #
+    # optional, default: 22. SSH port.
+    # ssh_port: 22
+    #
+    # optional, default: "". SSH private key path; empty uses ssh defaults.
+    # ssh_key_path: "~/.ssh/id_rsa"
+
+export:
+  # optional, default: "neurips_2025". Paper template/conference target.
+  target_conference: "neurips_2025"
+
+  # optional, default: "Anonymous". Author line for exported paper.
+  authors: "Anonymous"
+
+  # optional, default: "references". BibTeX basename without .bib.
+  bib_file: "references"
+
+server:
+  # optional, default: "0.0.0.0". Host used by `researchclaw serve/dashboard`.
+  host: "0.0.0.0"
+
+  # optional, default: 8080. Port used by `researchclaw serve/dashboard`.
+  port: 8080
+
+  # optional, default: ["*"]. FastAPI CORS allowed origins.
+  cors_origins:
+    - "*"
+
+  # optional, default: "". Enables token auth when non-empty.
+  # auth_token: "change-me"
+
+  # optional, default: false. Mounts voice routes when true.
+  voice_enabled: false
+
+  # optional, default: "whisper-1". Voice transcription model.
+  whisper_model: "whisper-1"
+
+  # optional, default: "" (OpenAI default). Custom Whisper-compatible API URL.
+  # whisper_api_url: "https://api.openai.com/v1/audio/transcriptions"
+
+dashboard:
+  # optional, default: true. Starts dashboard background broadcaster in server.
+  enabled: true
+
+  # optional, default: 5. Dashboard refresh interval in seconds.
+  refresh_interval_sec: 5
+
+trends:
+  # optional, default: ["arxiv", "semantic_scholar"]. Feed sources for trends CLI.
+  sources:
+    - "arxiv"
+    - "semantic_scholar"
+
+  # optional, default: 20. Max papers per domain for `researchclaw trends --digest`.
+  max_papers_per_day: 20
+
+  # optional, default: 30. Window in days for `researchclaw trends --analyze`.
+  trend_window_days: 30
+
+multi_project:
+  # optional, default: ".researchclaw/projects". Root used by project CLI commands.
+  projects_dir: ".researchclaw/projects"
+
+mcp:
+  # optional, default: false. When true, adapters use local MCP message/fetch URI.
+  server_enabled: false
+
+  # optional, default: 3000. Port used for adapter MCP URI construction.
+  server_port: 3000
+
+# Optional Overleaf sync. Uncomment when using `researchclaw overleaf`.
+#
+# overleaf:
+#   # optional, default: false. Enables overleaf sync command.
+#   enabled: true
+#
+#   # conditionally required when enabled: Overleaf git remote URL.
+#   git_url: "https://git.overleaf.com/project-id"
+#
+#   # optional, default: "main". Branch passed to OverleafSync.
+#   branch: "main"

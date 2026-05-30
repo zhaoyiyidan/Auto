@@ -416,14 +416,6 @@ class ACPClient:
         "e2big",          # POSIX
     )
 
-    # Error patterns that indicate a dead/stale session (retryable)
-    _RECONNECT_ERRORS = (
-        "agent needs reconnect",
-        "session not found",
-        "Query closed",
-    )
-    _MAX_RECONNECT_ATTEMPTS = 2
-
     @classmethod
     def _cli_prompt_limit(cls, acpx: str | None) -> int:
         """Return the safe inline-prompt size for the resolved ACP launcher."""
@@ -441,8 +433,10 @@ class ACPClient:
         (``E2BIG``), the prompt is written to a temp file and the agent
         is asked to read it.
 
-        If the session has died (common after long-running stages), retries
-        up to ``_MAX_RECONNECT_ATTEMPTS`` times with automatic reconnection.
+        If the session has died (common after long-running stages) or the
+        upstream stream disconnects transiently, retries up to
+        ``self.config.max_retries`` times with session reset and exponential
+        backoff (see ``acp_retry.run_acp_with_retry``).
         """
         # Sanitize null bytes that may originate from web-scraped content
         # or OpenAlex API responses — subprocess.run() rejects \x00 because

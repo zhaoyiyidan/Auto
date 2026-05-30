@@ -218,6 +218,40 @@ def test_run_task_retries_on_transient_stdout_returncode_zero(tmp_path: Path) ->
     assert calls["n"] == 2
 
 
+def test_run_task_resend_includes_continuation_preface(tmp_path: Path) -> None:
+    """FIX#2 idempotency: the resent prompt tells the agent to continue, not restart."""
+    session = AcpWorkspaceSession(
+        agent="claude",
+        cwd=tmp_path,
+        acpx_command="acpx",
+        session_name="researchclaw-code-run-1",
+        max_retries=3,
+    )
+    session.ensure_session = lambda: None  # type: ignore[method-assign]
+    session.close = lambda: None  # type: ignore[method-assign]
+    session._retry_sleep = lambda _s: None  # type: ignore[attr-defined]
+
+    sent: list[str] = []
+    calls = {"n": 0}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls["n"] += 1
+        sent.append(cmd[-1])  # cli transport passes the prompt as the last arg
+        if calls["n"] == 1:
+            return subprocess.CompletedProcess(
+                cmd, 0, "stream closed before response.completed", ""
+            )
+        return subprocess.CompletedProcess(cmd, 0, "done", "")
+
+    session._run_acp_with_heartbeat = fake_run  # type: ignore[method-assign]
+
+    session.run_task("implement the experiment")
+    assert len(sent) == 2
+    assert sent[0] == "implement the experiment"  # first attempt: bare prompt
+    assert "duplicate commits" in sent[1].lower()
+    assert sent[1].endswith("implement the experiment")
+
+
 def test_run_task_no_retry_on_real_failure(tmp_path: Path) -> None:
     """FIX#2: a non-zero exit without a transient signature is NOT retried."""
     session = AcpWorkspaceSession(

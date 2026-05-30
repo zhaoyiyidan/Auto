@@ -313,7 +313,9 @@ def _route_from_experiment_evidence(
         if not any(bool(item.get("exists")) for item in artifact_rows if isinstance(item, dict)):
             return ("fix_code", "result_artifacts_missing", ["all declared result artifacts are missing"])
 
-    if _diagnosis_sufficient(diagnosis) is False and _has_real_deficiency(diagnosis):
+    if _diagnosis_sufficient(diagnosis) is False and (
+        _has_real_deficiency(diagnosis) or not _metrics_have_numeric_value(metrics)
+    ):
         return (
             "fix_code",
             "diagnosis_insufficient",
@@ -322,6 +324,31 @@ def _route_from_experiment_evidence(
         )
 
     return ("continue", "metrics meet objective; artifacts available", [])
+
+
+def _metrics_have_numeric_value(metrics: Any) -> bool:
+    """True if *metrics* (the execution_record.metrics dict) holds any finite number.
+
+    Guards the phantom-deficiency relaxation: a non-empty metrics dict that
+    nonetheless carries no real numeric result (e.g. ``{"status": "ok"}``) is a
+    genuinely empty run, so ``no_conditions`` alone should still route fix_code.
+    """
+    if not isinstance(metrics, dict):
+        return False
+
+    def _finite(value: Any) -> bool:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        return value == value and value not in (float("inf"), float("-inf"))
+
+    for value in metrics.values():
+        if _finite(value):
+            return True
+        if isinstance(value, dict):
+            for sub in value.values():
+                if _finite(sub):
+                    return True
+    return False
 
 
 # FIX#3: deficiency types that, ON THEIR OWN, must NOT trigger a fix_code

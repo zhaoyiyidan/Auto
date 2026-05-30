@@ -1151,6 +1151,46 @@ class TestWorkspaceAgentStageWiring:
         assert result.status is StageStatus.DONE
         assert result.decision == "fix_code"
 
+    def test_stage13_route_fix_code_when_phantom_and_no_numeric_metric(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        """FIX#3 guard: a 'successful' run whose metrics carry no numeric value
+        (only the no_conditions phantom) must still route to fix_code."""
+        cfg = _workspace_agent_rc_config(tmp_path)
+        self._write_stage12_execution(run_dir, metrics={"status": "ok"})
+        (run_dir / "experiment_diagnosis.json").write_text(
+            json.dumps(
+                {
+                    "quality_assessment": {
+                        "mode": "technical_report",
+                        "sufficient": False,
+                        "repair_possible": True,
+                        "deficiency_types": ["no_conditions"],
+                    },
+                    "diagnosis": {
+                        "deficiencies": [
+                            {
+                                "type": "no_conditions",
+                                "description": "No experimental conditions completed successfully.",
+                            }
+                        ]
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        stage_dir = run_dir / "stage-13"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_experiment_route_decision(
+            stage_dir, run_dir, cfg, adapters, llm=None
+        )
+        assert result.status is StageStatus.DONE
+        assert result.decision == "fix_code"
+
     def test_stage13_route_never_invokes_workspace_agent(
         self,
         tmp_path: Path,

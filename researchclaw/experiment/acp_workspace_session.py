@@ -145,34 +145,50 @@ class AcpWorkspaceSession:
         Transient ACP stream disconnects (including the case where acpx exits 0
         but leaves a disconnect banner in stdout) are retried up to
         ``config.max_retries`` times. Each retry closes and re-ensures the SAME
-        named session so the agent resumes its own partial workspace state; the
-        prompt instructs the agent to inspect existing changes and continue
-        rather than start over, so a resend does not duplicate commits. Genuine
-        failures (non-zero exit without a transient signature) are not retried.
+        named session so the agent resumes its own partial workspace state, and
+        the resent prompt is prefixed with a continuation instruction telling the
+        agent to inspect existing uncommitted/committed changes and continue
+        rather than start over — so a resend does not duplicate work. If a retry
+        leaves more than one new commit on top of the pre-task HEAD, a warning is
+        logged so stacked commits are visible. Genuine failures (non-zero exit
+        without a transient signature) are not retried.
         """
         prompt = prompt.replace("\x00", "")
         acpx = self._resolve_acpx()
         if not acpx:
             raise RuntimeError("acpx not found")
 
+        base_head = self._git_head()
+        attempt = {"n": 0}
+
+        _CONTINUATION_PREFACE = (
+            "NOTE: a previous attempt at this task was interrupted by a transient "
+            "connection drop and has been resumed. FIRST inspect the current "
+            "workspace state (`git status`, `git log`, and any uncommitted "
+            "changes) and CONTINUE from there. Do NOT restart from scratch and do "
+            "NOT create duplicate commits for work that is already committed.\n\n"
+        )
+
         def _do_call() -> str:
+            send_prompt = prompt if attempt["n"] == 0 else _CONTINUATION_PREFACE + prompt
+            attempt["n"] += 1
             self.ensure_session()
-            prompt_bytes = len(prompt.encode("utf-8"))
+            prompt_bytes = len(send_prompt.encode("utf-8"))
             use_stdin = prompt_bytes > self._cli_prompt_limit(acpx) or (
-                sys.platform == "win32" and "\n" in prompt
+                sys.platform == "win32" and "\n" in send_prompt
             )
             try:
                 if use_stdin:
-                    result = self._send_prompt_via_stdin(acpx, prompt)
+                    result = self._send_prompt_via_stdin(acpx, send_prompt)
                 else:
-                    result = self._send_prompt_cli(acpx, prompt)
+                    result = self._send_prompt_cli(acpx, send_prompt)
             except RuntimeError as exc:
                 exc_lower = str(exc).lower()
                 if use_stdin or not any(
                     hint in exc_lower for hint in self._CMD_TOO_LONG_HINTS
                 ):
                     raise
-                result = self._send_prompt_via_stdin(acpx, prompt)
+                result = self._send_prompt_via_stdin(acpx, send_prompt)
             if result.returncode != 0:
                 detail = (result.stderr or "").strip()
                 # A non-zero exit that carries a transient-disconnect signature
@@ -199,12 +215,59 @@ class AcpWorkspaceSession:
             self._session_ready = False
             self.ensure_session()
 
-        return run_acp_with_retry(
+        output = run_acp_with_retry(
             _do_call,
             reset=_reset,
             max_retries=self.config.max_retries,
             sleep=self._retry_sleep,
         )
+        if attempt["n"] > 1:
+            self._warn_if_stacked_commits(base_head)
+        return output
+
+    def _git_head(self) -> str | None:
+        """Return the current git HEAD sha of the workspace, or None."""
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(self.config.cwd), "rev-parse", "HEAD"],
+                capture_output=True, text=True, timeout=10,
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        if result.returncode != 0:
+            return None
+        return (result.stdout or "").strip() or None
+
+    def _warn_if_stacked_commits(self, base_head: str | None) -> None:
+        """Log a warning if more than one new commit landed since *base_head*.
+
+        After a transient-disconnect retry the agent resumes the same session; if
+        it created a fresh commit on a retry in addition to one from the
+        interrupted attempt, the ``base..HEAD`` range will contain >1 commit.
+        This surfaces that for review (it does not modify history).
+        """
+        if not base_head:
+            return
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(self.config.cwd),
+                 "rev-list", "--count", f"{base_head}..HEAD"],
+                capture_output=True, text=True, timeout=10,
+            )
+        except Exception:  # noqa: BLE001
+            return
+        if result.returncode != 0:
+            return
+        try:
+            count = int((result.stdout or "0").strip())
+        except ValueError:
+            return
+        if count > 1:
+            logger.warning(
+                "ACP workspace task added %d commits after a transient-disconnect "
+                "retry (base %s); review for duplicated/stacked commits.",
+                count, base_head[:12],
+            )
 
     def export_session(self, output_path: Path) -> None:
         """Export the current named ACP session to *output_path*."""

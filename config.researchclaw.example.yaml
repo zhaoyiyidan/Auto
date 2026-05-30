@@ -400,6 +400,27 @@ experiment:
     # cannot confirm completion. Reaching this limit fails the stage.
     max_reruns: 3
 
+  result_analysis_agent:
+    # optional, default: "researchclaw-analysis". Independent ACP session used
+    # only by Stage 14 to organize evidence into analysis.md.
+    session_name: "researchclaw-analysis"
+
+    # optional, default: "claude". ACP agent command for the evidence organizer.
+    agent: "claude"
+
+    # optional, default: "" (auto-detect acpx, or fall back to llm.acp setting).
+    # acpx_command: "/path/to/acpx"
+
+    # optional, default: 1800. Stage 14 organizer timeout in seconds.
+    timeout_sec: 1800
+
+    # optional, default: 50. Maximum ACP turns for the organizer session.
+    max_turns: 50
+
+    # optional, default: 1. If analysis.md crosses organizer boundaries,
+    # Stage 14 re-prompts this many times before failing with decision: retry.
+    max_postcheck_retries: 1
+
   submitter:
     # optional, default: "local". Valid values:
     # "local", "slurm", "ssh_slurm", "manual", "custom_python".

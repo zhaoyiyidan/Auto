@@ -309,6 +309,18 @@ class WorkspaceAgentConfig:
 
 
 @dataclass(frozen=True)
+class ResultAnalysisAgentConfig:
+    """Independent Stage 14 evidence-organizer agent session."""
+
+    session_name: str = "researchclaw-analysis"
+    agent: str = "claude"
+    acpx_command: str = ""
+    timeout_sec: int = 1800
+    max_turns: int = 50
+    max_postcheck_retries: int = 1
+
+
+@dataclass(frozen=True)
 class SubmitterConfig:
     """Training job submitter for workspace-native agent runs."""
 
@@ -336,6 +348,9 @@ class ExperimentConfig:
     figure_agent: FigureAgentConfig = field(default_factory=FigureAgentConfig)
     repair: ExperimentRepairConfig = field(default_factory=ExperimentRepairConfig)
     workspace_agent: WorkspaceAgentConfig = field(default_factory=WorkspaceAgentConfig)
+    result_analysis_agent: ResultAnalysisAgentConfig = field(
+        default_factory=ResultAnalysisAgentConfig
+    )
     submitter: SubmitterConfig = field(default_factory=SubmitterConfig)
 
 
@@ -948,6 +963,9 @@ def _parse_experiment_config(data: dict[str, Any]) -> ExperimentConfig:
         workspace_agent=_parse_workspace_agent_config(
             data.get("workspace_agent") or {}
         ),
+        result_analysis_agent=_parse_result_analysis_agent_config(
+            data.get("result_analysis_agent") or {}
+        ),
         submitter=_parse_submitter_config(data.get("submitter") or {}),
     )
 
@@ -1022,6 +1040,21 @@ def _parse_workspace_agent_config(data: dict[str, Any]) -> WorkspaceAgentConfig:
         ),
         max_reruns=_safe_int(data.get("max_reruns"), 3),
         close_policy=data.get("close_policy", "keep"),
+    )
+
+
+def _parse_result_analysis_agent_config(
+    data: dict[str, Any],
+) -> ResultAnalysisAgentConfig:
+    if not data:
+        return ResultAnalysisAgentConfig()
+    return ResultAnalysisAgentConfig(
+        session_name=data.get("session_name", "researchclaw-analysis"),
+        agent=data.get("agent", "claude"),
+        acpx_command=data.get("acpx_command", ""),
+        timeout_sec=_safe_int(data.get("timeout_sec"), 1800),
+        max_turns=_safe_int(data.get("max_turns"), 50),
+        max_postcheck_retries=_safe_int(data.get("max_postcheck_retries"), 1),
     )
 
 

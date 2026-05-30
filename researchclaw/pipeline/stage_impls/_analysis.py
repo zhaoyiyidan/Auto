@@ -25,6 +25,13 @@ from researchclaw.pipeline._helpers import (
     _synthesize_perspectives,
     _utcnow_iso,
 )
+from researchclaw.pipeline.evidence_organizer import (
+    build_evidence_bundle,
+    build_organizer_prompt,
+    create_evidence_organizer_agent,
+    postcheck_analysis,
+    run_evidence_organizer,
+)
 from researchclaw.pipeline.stages import Stage, StageStatus
 from researchclaw.prompts import PromptManager
 
@@ -279,23 +286,6 @@ def _unique_commits(
     return commits
 
 
-def _workspace_analysis_markdown(
-    summary: dict[str, Any],
-    provenance: dict[str, Any],
-) -> str:
-    metric = summary.get("primary_metric", "primary_metric")
-    best = summary.get("best_metric")
-    commit = summary.get("best_commit", "")
-    return (
-        "# Result Analysis\n\n"
-        f"- Primary metric: `{metric}`\n"
-        f"- Best metric: `{best}`\n"
-        f"- Best commit: `{commit}`\n"
-        f"- Runs analyzed: `{summary.get('n_runs', 0)}`\n"
-        f"- Result artifacts hashed: `{len(provenance.get('result_hashes', {}))}`\n"
-    )
-
-
 def _execute_result_analysis(
     stage_dir: Path,
     run_dir: Path,
@@ -348,8 +338,7 @@ def _execute_result_analysis(
         "result_hashes": result_hashes,
         "registry_records": registry_records,
     }
-    analysis_md = _workspace_analysis_markdown(summary, provenance)
-    (stage_dir / "analysis.md").write_text(analysis_md, encoding="utf-8")
+    stage_dir.mkdir(parents=True, exist_ok=True)
     (stage_dir / "experiment_summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True),
         encoding="utf-8",
@@ -358,11 +347,111 @@ def _execute_result_analysis(
         json.dumps(provenance, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+
+    try:
+        bundle = build_evidence_bundle(run_dir, config)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Stage 14 failed to build evidence bundle")
+        return StageResult(
+            stage=Stage.RESULT_ANALYSIS,
+            status=StageStatus.FAILED,
+            artifacts=("experiment_summary.json", "provenance.json"),
+            error=f"E14_ANALYSIS_ERR: failed to build evidence bundle: {exc}",
+        )
+
+    try:
+        session = create_evidence_organizer_agent(config, run_dir)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Stage 14 failed to create evidence organizer agent")
+        return StageResult(
+            stage=Stage.RESULT_ANALYSIS,
+            status=StageStatus.FAILED,
+            artifacts=("experiment_summary.json", "provenance.json"),
+            error=f"E14_ANALYSIS_ERR: evidence organizer agent unavailable: {exc}",
+        )
+    if session is None:
+        return StageResult(
+            stage=Stage.RESULT_ANALYSIS,
+            status=StageStatus.FAILED,
+            artifacts=("experiment_summary.json", "provenance.json"),
+            error="E14_ANALYSIS_ERR: evidence organizer agent unavailable",
+        )
+
+    agent_cfg = config.experiment.result_analysis_agent
+    max_postcheck_retries = max(
+        0,
+        int(getattr(agent_cfg, "max_postcheck_retries", 1)),
+    )
+    timeout_sec = int(getattr(agent_cfg, "timeout_sec", 1800))
+    analysis_path = stage_dir / "analysis.md"
+    attempts: list[dict[str, Any]] = []
+    violations: tuple[str, ...] = ()
+    for attempt_index in range(max_postcheck_retries + 1):
+        prompt = build_organizer_prompt(bundle, violations if attempt_index else ())
+        try:
+            run_evidence_organizer(session, prompt, timeout_sec)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Stage 14 evidence organizer agent failed")
+            _write_analysis_postcheck(
+                stage_dir,
+                {
+                    "ok": False,
+                    "attempts": attempts,
+                    "error": f"agent failed: {exc}",
+                },
+            )
+            return StageResult(
+                stage=Stage.RESULT_ANALYSIS,
+                status=StageStatus.FAILED,
+                artifacts=("experiment_summary.json", "provenance.json"),
+                error=f"E14_ANALYSIS_ERR: evidence organizer agent failed: {exc}",
+            )
+        try:
+            analysis_text = analysis_path.read_text(encoding="utf-8")
+        except OSError:
+            analysis_text = ""
+        postcheck = postcheck_analysis(analysis_text, run_dir)
+        attempts.append(
+            {
+                "attempt": attempt_index + 1,
+                "ok": postcheck.ok,
+                "violations": list(postcheck.violations),
+                "strict_retry": attempt_index > 0,
+            }
+        )
+        if postcheck.ok:
+            _write_analysis_postcheck(
+                stage_dir,
+                {"ok": True, "attempts": attempts},
+            )
+            return StageResult(
+                stage=Stage.RESULT_ANALYSIS,
+                status=StageStatus.DONE,
+                artifacts=("analysis.md", "experiment_summary.json", "provenance.json"),
+                evidence_refs=("stage-14/analysis.md", "stage-14/provenance.json"),
+            )
+        violations = postcheck.violations
+
+    _write_analysis_postcheck(
+        stage_dir,
+        {"ok": False, "attempts": attempts, "violations": list(violations)},
+    )
     return StageResult(
         stage=Stage.RESULT_ANALYSIS,
-        status=StageStatus.DONE,
+        status=StageStatus.FAILED,
         artifacts=("analysis.md", "experiment_summary.json", "provenance.json"),
-        evidence_refs=("stage-14/analysis.md", "stage-14/provenance.json"),
+        error=(
+            "E14_ANALYSIS_ERR: analysis.md crossed organizer boundaries: "
+            + ", ".join(violations)
+        ),
+        decision="retry",
+    )
+
+
+def _write_analysis_postcheck(stage_dir: Path, payload: dict[str, Any]) -> None:
+    (stage_dir / "analysis_postcheck.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True),
+        encoding="utf-8",
     )
 
 

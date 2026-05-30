@@ -207,14 +207,20 @@ def _select_paper_mode(
     conditions_with_enough_seeds = 0
     for cond_name in diagnosis.conditions_completed:
         cond_data = cond_summaries.get(cond_name, {})
-        n_seeds = cond_data.get("n_seeds", 1)
-        # Heuristic: count per-seed keys in best_run metrics
-        metrics = experiment_summary.get("best_run", {}).get("metrics", {})
-        seed_keys = [k for k in metrics if k.startswith(f"{cond_name}/") and re.match(r".*/\d+/", k)]
-        # BUG-R6-05: Guard against re.match returning None
-        actual_seeds = len(set(
-            m.group(1) for k in seed_keys if (m := re.match(r".*/(\d+)/", k)) is not None
-        )) if seed_keys else 1
+        # FIX#3: prefer the explicit per-condition n_seeds emitted by the
+        # workspace writer; fall back to the legacy per-seed-key heuristic for
+        # the old non-workspace structure.
+        explicit_seeds = cond_data.get("n_seeds") if isinstance(cond_data, dict) else None
+        if isinstance(explicit_seeds, (int, float)) and explicit_seeds >= 1:
+            actual_seeds = int(explicit_seeds)
+        else:
+            # Heuristic: count per-seed keys in best_run metrics
+            metrics = experiment_summary.get("best_run", {}).get("metrics", {})
+            seed_keys = [k for k in metrics if k.startswith(f"{cond_name}/") and re.match(r".*/\d+/", k)]
+            # BUG-R6-05: Guard against re.match returning None
+            actual_seeds = len(set(
+                m.group(1) for k in seed_keys if (m := re.match(r".*/(\d+)/", k)) is not None
+            )) if seed_keys else 1
         if actual_seeds >= min_seeds:
             conditions_with_enough_seeds += 1
 
@@ -308,7 +314,7 @@ def diagnose_experiment(
     _check_near_random_accuracy(diag, experiment_summary)
 
     # 12. No conditions at all
-    if not completed_conditions:
+    if not completed_conditions and not _has_any_numeric_metric(experiment_summary):
         diag.deficiencies.append(Deficiency(
             type=DeficiencyType.NO_CONDITIONS_COMPLETED,
             severity="critical",
@@ -541,6 +547,12 @@ def _check_near_random_accuracy(diag: ExperimentDiagnosis, summary: dict) -> Non
 
     If the metric name suggests accuracy/top-1 and the best value is below
     15%, the model likely isn't learning (wrong LR, broken forward pass, etc.).
+
+    FIX#1: accuracy is unit-agnostic. Workspace agents store accuracy as a
+    fraction (1.0 == 100%), so values are normalized to percent before the
+    threshold test: a ``*_percent`` key is taken as-is, a value in [0, 1] is
+    treated as a fraction and scaled by 100, anything else is assumed to be
+    legacy percent. This prevents a perfect 1.0 from being misread as "1.0%".
     """
     ms = summary.get("metrics_summary", {})
     if not ms:
@@ -548,7 +560,7 @@ def _check_near_random_accuracy(diag: ExperimentDiagnosis, summary: dict) -> Non
 
     # Find accuracy-like metrics
     _ACC_KEYS = {"accuracy", "acc", "top1", "top1_accuracy", "val_acc", "test_acc"}
-    best_acc: float | None = None
+    best_pct: float | None = None
     acc_key: str = ""
     for key, val in ms.items():
         key_lower = key.lower().split("/")[-1]  # strip condition prefix
@@ -558,16 +570,23 @@ def _check_near_random_accuracy(diag: ExperimentDiagnosis, summary: dict) -> Non
                 fv = float(v)
             except (TypeError, ValueError):
                 continue
-            if best_acc is None or fv > best_acc:
-                best_acc = fv
+            # Normalize to percent units before comparing.
+            if key_lower.endswith("_percent"):
+                pct = fv                  # already a percentage
+            elif 0.0 <= fv <= 1.0:
+                pct = fv * 100.0          # fraction -> percent
+            else:
+                pct = fv                  # legacy percent (e.g. 8.91, 73.07)
+            if best_pct is None or pct > best_pct:
+                best_pct = pct
                 acc_key = key
 
-    if best_acc is not None and 0 < best_acc < 15.0:
+    if best_pct is not None and 0 < best_pct < 15.0:
         diag.deficiencies.append(Deficiency(
             type=DeficiencyType.HYPERPARAMETER_ISSUE,
             severity="critical",
             description=(
-                f"Best accuracy is {best_acc:.1f}% ({acc_key}), near random chance. "
+                f"Best accuracy is {best_pct:.1f}% ({acc_key}), near random chance. "
                 f"The model is not learning."
             ),
             suggested_fix=(
@@ -601,10 +620,62 @@ def _check_identical_conditions(diag: ExperimentDiagnosis, summary: dict) -> Non
                 "The condition parameter must affect the forward pass, not just be logged."
             ),
         ))
+        return
+
+    # FIX#3: workspace-mode fallback — no ablation_warnings are emitted, so
+    # compare per-condition primary-metric values directly. If >=2 conditions
+    # report an identical primary metric, the differentiating parameter is
+    # likely not wired into the model.
+    cond_summaries = summary.get("condition_summaries", {})
+    if not isinstance(cond_summaries, dict) or len(cond_summaries) < 2:
+        return
+    primary_values: list[float] = []
+    for data in cond_summaries.values():
+        if not isinstance(data, dict):
+            continue
+        metrics = data.get("metrics", {})
+        if not isinstance(metrics, dict):
+            continue
+        pm = metrics.get("primary_metric", metrics.get("primary_metric_mean"))
+        if isinstance(pm, (int, float)) and math.isfinite(pm):
+            primary_values.append(float(pm))
+    if len(primary_values) >= 2 and len(set(primary_values)) == 1:
+        diag.deficiencies.append(Deficiency(
+            type=DeficiencyType.IDENTICAL_CONDITIONS,
+            severity="major",
+            description=(
+                f"All {len(primary_values)} conditions report an identical primary "
+                "metric. The differentiating parameter is likely not wired into the code."
+            ),
+            affected_conditions=sorted(cond_summaries.keys()),
+            suggested_fix=(
+                "Check that each ablation condition actually modifies the model/training. "
+                "The condition parameter must affect the forward pass, not just be logged."
+            ),
+        ))
 
 
 def _check_insufficient_seeds(diag: ExperimentDiagnosis, summary: dict) -> None:
     """Check if completed conditions have too few seeds."""
+    # FIX#3: prefer the explicit per-condition n_seeds emitted by the workspace
+    # writer; fall back to the legacy 'cond/seed/metric' key parsing.
+    cond_summaries = summary.get("condition_summaries", {})
+    if isinstance(cond_summaries, dict) and cond_summaries:
+        single_seed_conds = [
+            name
+            for name, data in cond_summaries.items()
+            if isinstance(data, dict) and int(data.get("n_seeds", 1) or 1) < 2
+        ]
+        if single_seed_conds:
+            diag.deficiencies.append(Deficiency(
+                type=DeficiencyType.INSUFFICIENT_SEEDS,
+                severity="minor",
+                description=f"{len(single_seed_conds)} condition(s) have only 1 seed (no variance estimate).",
+                affected_conditions=sorted(single_seed_conds),
+                suggested_fix="Increase seeds to at least 2 per condition, or reduce epoch count to fit time budget.",
+            ))
+        return
+
     metrics = summary.get("best_run", {}).get("metrics", {})
     seed_pattern = re.compile(r"^(.+)/(\d+)/(.+)$")
     cond_seeds: dict[str, set[int]] = {}
@@ -651,6 +722,32 @@ def _get_completed_conditions(summary: dict) -> set[str]:
         ):
             completed.add(cond_name)
     return completed
+
+
+def _has_any_numeric_metric(summary: dict) -> bool:
+    """True if the summary carries any finite numeric metric anywhere.
+
+    FIX#3: guards the NO_CONDITIONS_COMPLETED critical so it does not fire when
+    a run produced real numbers but lacks a per-condition breakdown (e.g. a
+    workspace run reporting only top-level / metrics_summary scalars).
+    """
+    def _finite(value: Any) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+    # metrics_summary: {metric: number | {min,max,mean,count}}
+    for val in (summary.get("metrics_summary", {}) or {}).values():
+        if isinstance(val, dict):
+            if any(_finite(v) for v in val.values()):
+                return True
+        elif _finite(val):
+            return True
+
+    # best_run.metrics: {metric: number}
+    best_metrics = summary.get("best_run", {}).get("metrics", {})
+    if isinstance(best_metrics, dict) and any(_finite(v) for v in best_metrics.values()):
+        return True
+
+    return False
 
 
 def _extract_stdout(summary: dict) -> str:

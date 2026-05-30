@@ -113,6 +113,147 @@ def _metrics_summary(records: list[dict[str, Any]]) -> dict[str, dict[str, float
     }
 
 
+def _aggregate_stat_mean(stats: Any) -> float | None:
+    """Return the mean of an aggregate stat block, or a bare numeric value."""
+    if isinstance(stats, dict):
+        return _numeric_metric(stats.get("mean"))
+    return _numeric_metric(stats)
+
+
+def _condition_summaries(
+    records: list[dict[str, Any]],
+    primary_metric: str,
+) -> dict[str, dict[str, Any]]:
+    """Build per-condition summaries from ``metrics.aggregates`` of each record.
+
+    FIX#3: workspace agents emit per-condition statistics under
+    ``metrics.aggregates`` keyed by OPAQUE composite strings (the exact naming
+    varies across agent iterations, e.g. ``noise_0.00/epsilon_0.00/temp_False``
+    or ``condition_cross_entropy/.../logit_penalty_0/temp_False``). Keys are
+    treated as opaque and copied verbatim — never split or parsed.
+
+    The emitted ``metrics`` dict contains only FLAT FLOAT values because three
+    downstream consumers require ``isinstance(value, (int, float))``:
+    ``experiment_diagnosis._get_completed_conditions``,
+    ``verified_registry.from_summary``, and the runner variance gate. The raw
+    nested stats are preserved separately under ``aggregates`` for richer
+    downstream use (figures, prose) without breaking those consumers.
+
+    Records without an ``aggregates`` block contribute nothing, so legacy /
+    non-aggregate runs yield ``{}`` (preserving prior behavior).
+    """
+    summaries: dict[str, dict[str, Any]] = {}
+    for record in records:
+        metrics = record.get("metrics")
+        if not isinstance(metrics, dict):
+            continue
+        aggregates = metrics.get("aggregates")
+        if not isinstance(aggregates, dict) or not aggregates:
+            continue
+        # primary_metric in the record is a STRING pointer (e.g. "accuracy");
+        # resolve it to the numeric metric name to alias per condition.
+        pm_name = metrics.get("primary_metric")
+        if not isinstance(pm_name, str):
+            pm_name = primary_metric if isinstance(primary_metric, str) else None
+
+        for cond_key, per_metric in aggregates.items():
+            if not isinstance(per_metric, dict):
+                continue
+            flat: dict[str, float] = {}
+            n_seeds: int | None = None
+            for metric_name, stats in per_metric.items():
+                mean = _aggregate_stat_mean(stats)
+                if mean is None:
+                    continue
+                flat[str(metric_name)] = mean
+                flat[f"{metric_name}_mean"] = mean
+                if isinstance(stats, dict):
+                    for stat_key in ("std", "min", "max"):
+                        sv = _numeric_metric(stats.get(stat_key))
+                        if sv is not None:
+                            flat[f"{metric_name}_{stat_key}"] = sv
+                    nv = stats.get("n")
+                    if isinstance(nv, (int, float)) and n_seeds is None:
+                        n_seeds = int(nv)
+            if not flat:
+                continue
+            # Alias the primary metric to its numeric value (never a string).
+            if pm_name and pm_name in flat:
+                flat["primary_metric"] = flat[pm_name]
+                flat["primary_metric_mean"] = flat[pm_name]
+            seeds = n_seeds if n_seeds is not None else 1
+            summaries[str(cond_key)] = {
+                "status": "completed",
+                "n_runs": seeds,
+                "n_seeds": seeds,
+                "metrics": flat,
+                "aggregates": per_metric,
+            }
+    return summaries
+
+
+def _aggregates_into_metrics_summary(
+    metrics_summary: dict[str, dict[str, float | int]],
+    records: list[dict[str, Any]],
+) -> None:
+    """Fold per-condition aggregate stats into ``metrics_summary`` in place.
+
+    This exposes per-condition accuracy (and ``accuracy_percent``) to the
+    near-random-accuracy check, which reads ``metrics_summary`` only.
+    """
+    values: dict[str, list[float]] = {}
+    for record in records:
+        metrics = record.get("metrics")
+        if not isinstance(metrics, dict):
+            continue
+        aggregates = metrics.get("aggregates")
+        if not isinstance(aggregates, dict):
+            continue
+        for per_metric in aggregates.values():
+            if not isinstance(per_metric, dict):
+                continue
+            for metric_name, stats in per_metric.items():
+                mean = _aggregate_stat_mean(stats)
+                if mean is not None:
+                    values.setdefault(str(metric_name), []).append(mean)
+    for key, items in values.items():
+        if key in metrics_summary:
+            continue
+        metrics_summary[key] = {
+            "min": min(items),
+            "max": max(items),
+            "mean": sum(items) / len(items),
+            "count": len(items),
+        }
+
+
+def _attach_experiment_provenance(
+    summary: dict[str, Any],
+    best_execution: dict[str, Any],
+    records: list[dict[str, Any]],
+) -> None:
+    """Surface the agent's ``condition_plan`` / ``hypothesis_checks`` into summary.
+
+    These describe the planned experimental grid and the agent's own hypothesis
+    verification results. They were previously dropped, leaving downstream
+    trustworthiness judgments blind. Prefer the best execution's metrics, then
+    fall back to the most recent record that carries each field.
+    """
+    candidates: list[dict[str, Any]] = []
+    if isinstance(best_execution, dict):
+        candidates.append(best_execution)
+    candidates.extend(reversed(records))
+    for field_name in ("condition_plan", "hypothesis_checks"):
+        for record in candidates:
+            metrics = record.get("metrics") if isinstance(record, dict) else None
+            if not isinstance(metrics, dict):
+                continue
+            value = metrics.get(field_name)
+            if value:
+                summary[field_name] = value
+                break
+
+
 def _merge_result_hashes(
     execution_records: list[dict[str, Any]],
     registry_records: list[dict[str, Any]],
@@ -182,6 +323,8 @@ def _execute_result_analysis(
     )
     best_commit = str(best_execution.get("code_commit", "")) if best_execution else ""
     metrics_summary = _metrics_summary(execution_records)
+    _aggregates_into_metrics_summary(metrics_summary, execution_records)
+    condition_summaries = _condition_summaries(execution_records, primary_metric)
     summary = {
         "primary_metric": primary_metric,
         "metric_direction": metric_direction,
@@ -192,8 +335,12 @@ def _execute_result_analysis(
         "n_runs": len(execution_records),
         "best_run": best_execution,
         "runs": execution_records,
-        "condition_summaries": {},
+        "condition_summaries": condition_summaries,
     }
+    # FIX#3: pass through the agent's planned-condition grid and hypothesis
+    # checks (previously discarded) so downstream stages can judge whether the
+    # experiment actually answered the research question.
+    _attach_experiment_provenance(summary, best_execution, execution_records)
     provenance = {
         "base_sha": str(registry_records[0].get("base_sha", "")) if registry_records else "",
         "commits": _unique_commits(execution_records, registry_records),

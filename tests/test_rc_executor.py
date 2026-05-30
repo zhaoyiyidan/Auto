@@ -1072,6 +1072,85 @@ class TestWorkspaceAgentStageWiring:
         assert payload["origin_stage"] == 13
         assert payload["suggested_changes"]
 
+    def test_stage13_route_does_not_fix_code_on_phantom_empty_conditions(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        """FIX#3: a successful run whose ONLY deficiency is the empty-condition
+        phantom must NOT be routed to fix_code."""
+        cfg = _workspace_agent_rc_config(tmp_path)
+        self._write_stage12_execution(run_dir, metrics={"accuracy": 0.999})
+        (run_dir / "experiment_diagnosis.json").write_text(
+            json.dumps(
+                {
+                    "quality_assessment": {
+                        "mode": "technical_report",
+                        "sufficient": False,
+                        "repair_possible": True,
+                        "deficiency_types": ["no_conditions"],
+                    },
+                    "diagnosis": {
+                        "deficiencies": [
+                            {
+                                "type": "no_conditions",
+                                "description": "No experimental conditions completed successfully.",
+                            }
+                        ]
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        stage_dir = run_dir / "stage-13"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_experiment_route_decision(
+            stage_dir, run_dir, cfg, adapters, llm=None
+        )
+        assert result.status is StageStatus.DONE
+        assert result.decision == "continue"
+
+    def test_stage13_route_still_fix_code_on_real_deficiency(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        """FIX#3: a real deficiency (code crash) still routes to fix_code."""
+        cfg = _workspace_agent_rc_config(tmp_path)
+        self._write_stage12_execution(run_dir, metrics={"accuracy": 0.999})
+        (run_dir / "experiment_diagnosis.json").write_text(
+            json.dumps(
+                {
+                    "quality_assessment": {
+                        "mode": "technical_report",
+                        "sufficient": False,
+                        "repair_possible": True,
+                        "deficiency_types": ["code_crash"],
+                    },
+                    "diagnosis": {
+                        "deficiencies": [
+                            {
+                                "type": "code_crash",
+                                "description": "Traceback: ZeroDivisionError in train loop",
+                            }
+                        ]
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        stage_dir = run_dir / "stage-13"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_experiment_route_decision(
+            stage_dir, run_dir, cfg, adapters, llm=None
+        )
+        assert result.status is StageStatus.DONE
+        assert result.decision == "fix_code"
+
     def test_stage13_route_never_invokes_workspace_agent(
         self,
         tmp_path: Path,
@@ -1234,6 +1313,105 @@ class TestWorkspaceAgentStageWiring:
             (stage_dir / "experiment_summary.json").read_text(encoding="utf-8")
         )
         assert summary["best_metric"] == 0.91
+
+    def test_stage14_condition_summaries_from_aggregates(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        """FIX#3: writer must populate condition_summaries from metrics.aggregates.
+
+        Workspace agents emit per-condition stats under metrics.aggregates keyed
+        by opaque composite strings. The writer must flatten these into a
+        condition_summaries map of FLAT-FLOAT metrics so the diagnosis can count
+        completed conditions (instead of the hardcoded {} that made every
+        workspace run look like '0 conditions completed').
+        """
+        cfg = _workspace_agent_rc_config(tmp_path)
+        metrics = {
+            "accuracy": 1.0,
+            "primary_metric": "accuracy",
+            "aggregates": {
+                "condition_cross_entropy/noise_0.00/epsilon_0.00/temp_False": {
+                    "accuracy": {"min": 0.99, "max": 1.0, "mean": 0.999, "n": 5, "std": 0.004},
+                    "accuracy_percent": {"min": 99.0, "max": 100.0, "mean": 99.9, "n": 5, "std": 0.4},
+                    "ece": {"min": 0.005, "max": 0.011, "mean": 0.007, "n": 5, "std": 0.002},
+                },
+                "condition_label_smoothing/noise_0.00/epsilon_0.10/temp_False": {
+                    "accuracy": {"min": 0.97, "max": 0.99, "mean": 0.985, "n": 5, "std": 0.006},
+                    "accuracy_percent": {"min": 97.0, "max": 99.0, "mean": 98.5, "n": 5, "std": 0.6},
+                    "ece": {"min": 0.02, "max": 0.05, "mean": 0.035, "n": 5, "std": 0.01},
+                },
+            },
+        }
+        self._write_stage12_execution(run_dir, metrics=metrics)
+        stage_dir = run_dir / "stage-14"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_result_analysis(
+            stage_dir, run_dir, cfg, adapters, llm=None
+        )
+        assert result.status is StageStatus.DONE
+        summary = json.loads(
+            (stage_dir / "experiment_summary.json").read_text(encoding="utf-8")
+        )
+        cs = summary["condition_summaries"]
+        # both opaque keys preserved verbatim (no '/' splitting)
+        assert set(cs.keys()) == set(metrics["aggregates"].keys())
+        cond = cs["condition_cross_entropy/noise_0.00/epsilon_0.00/temp_False"]
+        # FLAT FLOAT metrics only — three downstream consumers require isinstance(int/float)
+        assert all(isinstance(v, (int, float)) for v in cond["metrics"].values())
+        assert cond["metrics"]["accuracy"] == 0.999
+        assert cond["metrics"]["accuracy_mean"] == 0.999
+        assert cond["metrics"]["primary_metric"] == 0.999  # resolves "accuracy" -> numeric
+        assert cond["status"] == "completed"
+        assert cond["n_seeds"] == 5
+        assert cond["n_runs"] == 5
+        # raw nested aggregates preserved as a sibling for downstream richness
+        assert cond["aggregates"]["ece"]["mean"] == 0.007
+
+    def test_stage14_condition_summaries_keys_opaque(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        """FIX#3: aggregate keys are opaque — copied byte-for-byte, never parsed."""
+        cfg = _workspace_agent_rc_config(tmp_path)
+        key = "noise_0.00/epsilon_0.00/temp_False"
+        metrics = {
+            "accuracy": 0.999,
+            "primary_metric": "accuracy",
+            "aggregates": {
+                key: {"accuracy": {"mean": 0.999, "n": 3}},
+            },
+        }
+        self._write_stage12_execution(run_dir, metrics=metrics)
+        stage_dir = run_dir / "stage-14"
+        stage_dir.mkdir()
+        rc_executor._execute_result_analysis(stage_dir, run_dir, cfg, adapters, llm=None)
+        summary = json.loads(
+            (stage_dir / "experiment_summary.json").read_text(encoding="utf-8")
+        )
+        assert list(summary["condition_summaries"].keys()) == [key]
+
+    def test_stage14_legacy_record_yields_empty_condition_summaries(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        """FIX#3 regression guard: records without aggregates keep the old {} behavior."""
+        cfg = _workspace_agent_rc_config(tmp_path)
+        self._write_stage12_execution(run_dir, metrics={"accuracy": 0.91})
+        stage_dir = run_dir / "stage-14"
+        stage_dir.mkdir()
+        rc_executor._execute_result_analysis(stage_dir, run_dir, cfg, adapters, llm=None)
+        summary = json.loads(
+            (stage_dir / "experiment_summary.json").read_text(encoding="utf-8")
+        )
+        assert summary["condition_summaries"] == {}
 
     def test_stage14_analysis_has_no_r13_merge_block(self) -> None:
         import inspect

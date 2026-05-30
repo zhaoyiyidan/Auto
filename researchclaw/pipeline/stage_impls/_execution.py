@@ -313,7 +313,7 @@ def _route_from_experiment_evidence(
         if not any(bool(item.get("exists")) for item in artifact_rows if isinstance(item, dict)):
             return ("fix_code", "result_artifacts_missing", ["all declared result artifacts are missing"])
 
-    if _diagnosis_sufficient(diagnosis) is False:
+    if _diagnosis_sufficient(diagnosis) is False and _has_real_deficiency(diagnosis):
         return (
             "fix_code",
             "diagnosis_insufficient",
@@ -322,6 +322,33 @@ def _route_from_experiment_evidence(
         )
 
     return ("continue", "metrics meet objective; artifacts available", [])
+
+
+# FIX#3: deficiency types that, ON THEIR OWN, must NOT trigger a fix_code
+# repair when the run otherwise succeeded (successful final_status, non-empty
+# metrics, artifacts present). The empty-condition phantom was produced by the
+# old hardcoded condition_summaries={}; with that fixed it should rarely appear,
+# but this guards against a spurious diagnosis re-triggering a needless repair.
+_PHANTOM_ONLY_DEFICIENCIES = frozenset({"no_conditions"})
+
+
+def _has_real_deficiency(diagnosis: dict[str, Any]) -> bool:
+    """True if the diagnosis carries a deficiency beyond the empty-condition phantom."""
+    types: set[str] = set()
+    diag = diagnosis.get("diagnosis")
+    if isinstance(diag, dict):
+        for item in diag.get("deficiencies", []) or []:
+            if isinstance(item, dict) and item.get("type"):
+                types.add(str(item.get("type")))
+    quality = diagnosis.get("quality_assessment")
+    if isinstance(quality, dict):
+        for t in quality.get("deficiency_types", []) or []:
+            types.add(str(t))
+    if not types:
+        # No enumerable deficiency types but sufficient is False — be
+        # conservative and treat it as real so genuine problems still route.
+        return True
+    return bool(types - _PHANTOM_ONLY_DEFICIENCIES)
 
 
 def _diagnosis_sufficient(diagnosis: dict[str, Any]) -> bool | None:

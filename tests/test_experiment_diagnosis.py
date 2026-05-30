@@ -320,6 +320,56 @@ class TestNearRandomAccuracy:
         hp_issues = [d for d in diag.deficiencies if d.type == DeficiencyType.HYPERPARAMETER_ISSUE]
         assert not any("random chance" in d.description for d in hp_issues)
 
+    def test_fraction_accuracy_not_flagged_when_high(self):
+        """FIX#1: a perfect fractional accuracy (1.0 == 100%) must NOT be flagged.
+
+        Reproduces the real arc-test bug: workspace agents store accuracy as a
+        fraction, so 1.0 was misread as '1.0%' and flagged near-random.
+        """
+        diag = diagnose_experiment(
+            experiment_summary={
+                "condition_summaries": {"cond_a": {"metrics": {"accuracy": 0.999}}},
+                "metrics_summary": {"accuracy": {"min": 0.99, "max": 1.0, "mean": 0.999}},
+                "best_run": {"metrics": {}},
+            },
+        )
+        hp_issues = [d for d in diag.deficiencies if d.type == DeficiencyType.HYPERPARAMETER_ISSUE]
+        assert not any("random chance" in d.description for d in hp_issues)
+
+    def test_fraction_accuracy_flagged_when_near_random(self):
+        """FIX#1: a genuinely low fractional accuracy (0.089 == 8.9%) IS flagged."""
+        diag = diagnose_experiment(
+            experiment_summary={
+                "condition_summaries": {"cond_a": {"metrics": {"accuracy": 0.089}}},
+                "metrics_summary": {"accuracy": {"min": 0.08, "max": 0.089, "mean": 0.085}},
+                "best_run": {"metrics": {}},
+            },
+        )
+        hp_issues = [d for d in diag.deficiencies if d.type == DeficiencyType.HYPERPARAMETER_ISSUE]
+        assert any("random chance" in d.description for d in hp_issues)
+
+    def test_percent_suffix_key_treated_as_percent(self):
+        """FIX#1: a '*_percent' key is always interpreted as percent, never rescaled."""
+        diag_high = diagnose_experiment(
+            experiment_summary={
+                "condition_summaries": {"cond_a": {"metrics": {"accuracy_percent": 99.0}}},
+                "metrics_summary": {"accuracy_percent": {"min": 98.0, "max": 99.0, "mean": 98.5}},
+                "best_run": {"metrics": {}},
+            },
+        )
+        hp_high = [d for d in diag_high.deficiencies if d.type == DeficiencyType.HYPERPARAMETER_ISSUE]
+        assert not any("random chance" in d.description for d in hp_high)
+
+        diag_low = diagnose_experiment(
+            experiment_summary={
+                "condition_summaries": {"cond_a": {"metrics": {"accuracy_percent": 8.0}}},
+                "metrics_summary": {"accuracy_percent": {"min": 7.0, "max": 8.0, "mean": 7.5}},
+                "best_run": {"metrics": {}},
+            },
+        )
+        hp_low = [d for d in diag_low.deficiencies if d.type == DeficiencyType.HYPERPARAMETER_ISSUE]
+        assert any("random chance" in d.description for d in hp_low)
+
 
 class TestRealArtifactsContinued(TestRealArtifacts):
     """Continuation of real artifact tests (after TestDatasetNotFoundError)."""
@@ -333,3 +383,126 @@ class TestRealArtifactsContinued(TestRealArtifacts):
             stderr=summary.get("best_run", {}).get("stderr", ""),
         )
         assert diag.completion_rate > 0
+
+
+class TestConditionCountingWorkspace:
+    """FIX#3: workspace-mode condition counting from flat-float condition_summaries."""
+
+    @staticmethod
+    def _flat_condition(accuracy: float, n_seeds: int = 5) -> dict:
+        return {
+            "status": "completed",
+            "n_runs": n_seeds,
+            "n_seeds": n_seeds,
+            "metrics": {
+                "accuracy": accuracy,
+                "accuracy_mean": accuracy,
+                "primary_metric": accuracy,
+                "primary_metric_mean": accuracy,
+            },
+        }
+
+    def test_completed_conditions_from_flat_aggregate_summaries(self):
+        summary = {
+            "condition_summaries": {
+                "cond_a": self._flat_condition(0.999),
+                "cond_b": self._flat_condition(0.985),
+            },
+            "metrics_summary": {"accuracy": {"max": 1.0, "mean": 0.99}},
+            "best_run": {"metrics": {}},
+        }
+        diag = diagnose_experiment(experiment_summary=summary)
+        assert len(diag.conditions_completed) == 2
+        assert diag.completion_rate == 1.0
+        assert not any(
+            d.type == DeficiencyType.NO_CONDITIONS_COMPLETED for d in diag.deficiencies
+        )
+
+    def test_no_conditions_guard_suppressed_when_top_level_numeric_metric(self):
+        """Empty condition_summaries but a usable top-level metric => no phantom critical."""
+        summary = {
+            "condition_summaries": {},
+            "metrics_summary": {"accuracy": {"max": 0.99, "mean": 0.98}},
+            "best_run": {"metrics": {"accuracy": 0.99}},
+        }
+        diag = diagnose_experiment(experiment_summary=summary)
+        assert not any(
+            d.type == DeficiencyType.NO_CONDITIONS_COMPLETED for d in diag.deficiencies
+        )
+
+    def test_no_conditions_guard_fires_when_truly_empty(self):
+        summary = {
+            "condition_summaries": {},
+            "metrics_summary": {},
+            "best_run": {"metrics": {}},
+        }
+        diag = diagnose_experiment(experiment_summary=summary)
+        assert any(
+            d.type == DeficiencyType.NO_CONDITIONS_COMPLETED for d in diag.deficiencies
+        )
+
+    def test_insufficient_seeds_prefers_n_seeds(self):
+        # n_seeds=5 => not flagged
+        ok = {
+            "condition_summaries": {"cond_a": self._flat_condition(0.99, n_seeds=5)},
+            "metrics_summary": {"accuracy": {"max": 0.99}},
+            "best_run": {"metrics": {}},
+        }
+        diag_ok = diagnose_experiment(experiment_summary=ok)
+        assert not any(
+            d.type == DeficiencyType.INSUFFICIENT_SEEDS for d in diag_ok.deficiencies
+        )
+        # n_seeds=1 => flagged
+        bad = {
+            "condition_summaries": {"cond_a": self._flat_condition(0.99, n_seeds=1)},
+            "metrics_summary": {"accuracy": {"max": 0.99}},
+            "best_run": {"metrics": {}},
+        }
+        diag_bad = diagnose_experiment(experiment_summary=bad)
+        assert any(
+            d.type == DeficiencyType.INSUFFICIENT_SEEDS for d in diag_bad.deficiencies
+        )
+
+    def test_identical_conditions_workspace_aware(self):
+        # distinct primary metrics => not flagged
+        distinct = {
+            "condition_summaries": {
+                "cond_a": self._flat_condition(0.99),
+                "cond_b": self._flat_condition(0.95),
+            },
+            "metrics_summary": {"accuracy": {"max": 0.99}},
+            "best_run": {"metrics": {}},
+        }
+        diag_distinct = diagnose_experiment(experiment_summary=distinct)
+        assert not any(
+            d.type == DeficiencyType.IDENTICAL_CONDITIONS for d in diag_distinct.deficiencies
+        )
+        # identical primary metrics across >=2 conditions => flagged
+        identical = {
+            "condition_summaries": {
+                "cond_a": self._flat_condition(0.90),
+                "cond_b": self._flat_condition(0.90),
+            },
+            "metrics_summary": {"accuracy": {"max": 0.90}},
+            "best_run": {"metrics": {}},
+        }
+        diag_identical = diagnose_experiment(experiment_summary=identical)
+        assert any(
+            d.type == DeficiencyType.IDENTICAL_CONDITIONS for d in diag_identical.deficiencies
+        )
+
+    def test_full_paper_mode_uses_explicit_n_seeds(self):
+        """FIX#3: a workspace run with >=3 conditions x >=2 seeds reaches FULL_PAPER
+        (sufficient=True), even though there are no legacy per-seed metric keys."""
+        cs = {
+            f"cond_{i}": self._flat_condition(0.90 + i * 0.01, n_seeds=5)
+            for i in range(3)
+        }
+        summary = {
+            "condition_summaries": cs,
+            "metrics_summary": {"accuracy": {"max": 0.92, "mean": 0.91}},
+            "best_run": {"metrics": {}},
+        }
+        q = assess_experiment_quality(summary)
+        assert q.mode == PaperMode.FULL_PAPER
+        assert q.sufficient is True

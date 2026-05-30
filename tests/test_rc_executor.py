@@ -1095,6 +1095,173 @@ class TestWorkspaceAgentStageWiring:
         )
         assert artifacts["artifacts"][0]["exists"] is False
 
+    def test_stage12_writes_contract_evidence_json(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from researchclaw.experiment.workspace import (
+            LaunchCommand,
+            ManifestValidation,
+            RunManifest,
+        )
+        from tests.test_workspace_orchestrator import PollingDummySubmitterWithResults
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        workspace = Path(cfg.experiment.workspace_agent.workspace_path)
+        head = _init_workspace_git(workspace)
+        manifest = RunManifest(
+            code_commit=head,
+            launch=LaunchCommand(command="python train.py"),
+            result_paths=["outputs/metrics.json"],
+        )
+        _write_prior_artifact(run_dir, 11, "run_manifest.json", manifest.to_json())
+        _write_prior_artifact(
+            run_dir,
+            11,
+            "manifest_validation.json",
+            json.dumps(
+                ManifestValidation(
+                    ok=True,
+                    schema_version=manifest.schema_version,
+                    code_commit=head,
+                    commit_exists=True,
+                    workspace_dirty=False,
+                    launch_command=manifest.launch.command,
+                    launch_cwd=manifest.launch.cwd,
+                    result_paths=manifest.result_paths,
+                ).to_dict()
+            ),
+        )
+        monkeypatch.setattr(
+            "researchclaw.experiment.submitter.create_submitter",
+            lambda *args, **kwargs: PollingDummySubmitterWithResults(["completed"]),
+        )
+        stage_dir = run_dir / "stage-12"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_experiment_run(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.DONE
+        assert "contract_evidence.json" not in result.artifacts
+        evidence = json.loads(
+            (stage_dir / "contract_evidence.json").read_text(encoding="utf-8")
+        )
+        assert evidence["schema_version"] == "researchclaw.contract_evidence.v1"
+        assert evidence["completion_status"] == "complete"
+        assert evidence["ok"] is True
+
+    def test_stage12_contract_evidence_records_violation_without_failing(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from researchclaw.experiment.execution_contract import (
+            ExecutionContract,
+            MetricCheck,
+            MetricsContract,
+            PrimaryMetric,
+        )
+        from researchclaw.experiment.workspace import (
+            LaunchCommand,
+            ManifestValidation,
+            MetricsSpec,
+            RunManifest,
+            SubmitRequest,
+            SubmitResult,
+            TaskSpec,
+        )
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        workspace = Path(cfg.experiment.workspace_agent.workspace_path)
+        head = _init_workspace_git(workspace)
+        manifest = RunManifest(
+            code_commit=head,
+            launch=LaunchCommand(command="python train.py"),
+            result_paths=["outputs/metrics.json"],
+            metrics=MetricsSpec(primary="accuracy", direction="maximize"),
+        )
+        spec = TaskSpec(
+            workspace=str(workspace),
+            objective="improve",
+            constraints=[],
+            primary_metric="accuracy",
+            metric_direction="maximize",
+            allowed_scope=["."],
+            forbidden_scope=[],
+            expected_outputs=["outputs/metrics.json"],
+            execution_contract=ExecutionContract(
+                metrics=MetricsContract(
+                    primary=PrimaryMetric("accuracy", "maximize"),
+                    required=(MetricCheck("accuracy", "number"),),
+                )
+            ),
+        )
+        _write_prior_artifact(run_dir, 9, "task_spec.yaml", spec.to_yaml())
+        _write_prior_artifact(run_dir, 11, "run_manifest.json", manifest.to_json())
+        _write_prior_artifact(
+            run_dir,
+            11,
+            "manifest_validation.json",
+            json.dumps(
+                ManifestValidation(
+                    ok=True,
+                    schema_version=manifest.schema_version,
+                    code_commit=head,
+                    commit_exists=True,
+                    workspace_dirty=False,
+                    launch_command=manifest.launch.command,
+                    launch_cwd=manifest.launch.cwd,
+                    result_paths=manifest.result_paths,
+                ).to_dict()
+            ),
+        )
+
+        class StringMetricSubmitter:
+            name = "string-metric"
+
+            def submit(self, request: SubmitRequest) -> SubmitResult:
+                result_path = request.workspace_path / "outputs" / "metrics.json"
+                result_path.parent.mkdir(parents=True, exist_ok=True)
+                result_path.write_text('{"accuracy": "bad"}\n', encoding="utf-8")
+                return SubmitResult("job-1", self.name, "submitted")
+
+            def poll(self, result: SubmitResult) -> str:
+                _ = result
+                return "completed"
+
+        monkeypatch.setattr(
+            "researchclaw.experiment.submitter.create_submitter",
+            lambda *args, **kwargs: StringMetricSubmitter(),
+        )
+        stage_dir = run_dir / "stage-12"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_experiment_run(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.DONE
+        evidence = json.loads(
+            (stage_dir / "contract_evidence.json").read_text(encoding="utf-8")
+        )
+        assert evidence["ok"] is False
+        assert "metric:accuracy:wrong_type" in evidence["violations"]
+
     def _write_stage12_execution(
         self,
         run_dir: Path,

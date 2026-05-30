@@ -9,8 +9,13 @@ from typing import Any
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
+from researchclaw.experiment.execution_contract import (
+    ExecutionContract,
+    default_contract,
+    evaluate_contract,
+)
 from researchclaw.experiment.manifest_validation import validate_manifest
-from researchclaw.experiment.workspace import RunManifest
+from researchclaw.experiment.workspace import RunManifest, TaskSpec
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._helpers import StageResult, _read_prior_artifact
 from researchclaw.pipeline.stages import Stage, StageStatus
@@ -206,11 +211,13 @@ def _execute_experiment_route_decision(
     validation = _load_json_text(_read_prior_artifact(run_dir, "manifest_validation.json"))
     diagnosis_path = run_dir / "experiment_diagnosis.json"
     diagnosis = _load_json_file(diagnosis_path)
+    contract = _load_execution_contract(run_dir, config)
     route, reason, details = _route_from_experiment_evidence(
         execution=execution,
         artifacts=artifacts,
         validation=validation,
         diagnosis=diagnosis,
+        contract=contract,
     )
     iteration = _read_experiment_iteration_count(run_dir)
     generated = _utcnow_iso()
@@ -226,6 +233,7 @@ def _execute_experiment_route_decision(
         "iteration": iteration,
         "max_iterations": 3,
         "generated": generated,
+        "contract_schema_version": contract.schema_version,
     }
     (stage_dir / "experiment_decision.json").write_text(
         json.dumps(decision, indent=2, sort_keys=True),
@@ -279,12 +287,40 @@ def _load_json_file(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _load_task_spec(run_dir: Path) -> TaskSpec | None:
+    text = _read_prior_artifact(run_dir, "task_spec.yaml")
+    if not text:
+        return None
+    try:
+        return TaskSpec.from_yaml(text)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _load_execution_contract(run_dir: Path, config: RCConfig) -> ExecutionContract:
+    task_spec = _load_task_spec(run_dir)
+    if task_spec is not None and task_spec.execution_contract is not None:
+        return task_spec.execution_contract
+
+    expected_outputs = (
+        task_spec.expected_outputs
+        if task_spec is not None and task_spec.expected_outputs
+        else ["outputs/metrics.json"]
+    )
+    return default_contract(
+        primary_metric=str(getattr(config.experiment, "metric_key", "primary_metric")),
+        metric_direction=str(getattr(config.experiment, "metric_direction", "maximize")),
+        expected_outputs=expected_outputs,
+    )
+
+
 def _route_from_experiment_evidence(
     *,
     execution: dict[str, Any],
     artifacts: dict[str, Any],
     validation: dict[str, Any],
     diagnosis: dict[str, Any],
+    contract: ExecutionContract,
 ) -> tuple[str, str, list[str]]:
     _ = validation
     if _diagnosis_requires_task_spec_revision(diagnosis):
@@ -295,26 +331,45 @@ def _route_from_experiment_evidence(
             or ["Revise the experiment task spec to align objective, metrics, and expected outputs."],
         )
 
+    evidence = evaluate_contract(contract, execution, artifacts)
     final_status = str(execution.get("final_status", "")).strip().lower()
-    if final_status in {"queued", "pending", "running", "submitted"}:
+    if evidence.completion_status == "incomplete":
         return ("rerun", "execution_incomplete", [f"final_status={final_status}"])
 
-    successful = {"completed", "complete", "succeeded", "success", "done", "passed"}
-    if final_status not in successful:
+    if evidence.completion_status == "failed":
         status = final_status or "missing"
         return ("fix_code", "execution_failed", [f"final_status={status}"])
 
     metrics = execution.get("metrics")
-    if not isinstance(metrics, dict) or not metrics:
-        return ("fix_code", "metrics_missing", ["execution_record.metrics is empty"])
+    metric_violations = [
+        item
+        for item in evidence.violations
+        if item == "metrics:empty" or item.startswith("metric:")
+    ]
+    if metric_violations:
+        if metric_violations == ["metrics:empty"]:
+            return ("fix_code", "metrics_missing", ["execution_record.metrics is empty"])
+        return ("fix_code", "metrics_missing", metric_violations)
 
-    artifact_rows = artifacts.get("artifacts")
-    if isinstance(artifact_rows, list) and artifact_rows:
-        if not any(bool(item.get("exists")) for item in artifact_rows if isinstance(item, dict)):
-            return ("fix_code", "result_artifacts_missing", ["all declared result artifacts are missing"])
+    if not isinstance(metrics, dict):
+        metrics = {}
+
+    artifact_violations = [
+        item
+        for item in evidence.violations
+        if item == "artifacts:all_missing" or item.startswith("artifact:")
+    ]
+    if artifact_violations:
+        if artifact_violations == ["artifacts:all_missing"]:
+            return (
+                "fix_code",
+                "result_artifacts_missing",
+                ["all declared result artifacts are missing"],
+            )
+        return ("fix_code", "result_artifacts_missing", artifact_violations)
 
     if _diagnosis_sufficient(diagnosis) is False and (
-        _has_real_deficiency(diagnosis) or not _metrics_have_numeric_value(metrics)
+        _has_real_deficiency(diagnosis) or not evidence.metrics_have_numeric
     ):
         return (
             "fix_code",
@@ -324,31 +379,6 @@ def _route_from_experiment_evidence(
         )
 
     return ("continue", "metrics meet objective; artifacts available", [])
-
-
-def _metrics_have_numeric_value(metrics: Any) -> bool:
-    """True if *metrics* (the execution_record.metrics dict) holds any finite number.
-
-    Guards the phantom-deficiency relaxation: a non-empty metrics dict that
-    nonetheless carries no real numeric result (e.g. ``{"status": "ok"}``) is a
-    genuinely empty run, so ``no_conditions`` alone should still route fix_code.
-    """
-    if not isinstance(metrics, dict):
-        return False
-
-    def _finite(value: Any) -> bool:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return False
-        return value == value and value not in (float("inf"), float("-inf"))
-
-    for value in metrics.values():
-        if _finite(value):
-            return True
-        if isinstance(value, dict):
-            for sub in value.values():
-                if _finite(sub):
-                    return True
-    return False
 
 
 # FIX#3: deficiency types that, ON THEIR OWN, must NOT trigger a fix_code

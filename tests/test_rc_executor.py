@@ -922,7 +922,6 @@ class TestWorkspaceAgentStageWiring:
         )
         from researchclaw.experiment.workspace import (
             LaunchCommand,
-            MetricsSpec,
             RunManifest,
             TaskSpec,
         )
@@ -934,8 +933,11 @@ class TestWorkspaceAgentStageWiring:
             code_commit=head,
             launch=LaunchCommand(command="python train.py"),
             result_paths=["outputs/metrics.json"],
-            metrics=MetricsSpec(primary="accuracy", direction="maximize"),
         )
+        manifest_payload = json.loads(manifest.to_json())
+        manifest_payload["metrics"] = {
+            "primary": {"name": "accuracy", "direction": "maximize"}
+        }
         spec = TaskSpec(
             workspace=str(workspace),
             objective="improve",
@@ -955,7 +957,9 @@ class TestWorkspaceAgentStageWiring:
             ),
         )
         _write_prior_artifact(run_dir, 9, "task_spec.yaml", spec.to_yaml())
-        _write_prior_artifact(run_dir, 10, "run_manifest.json", manifest.to_json())
+        _write_prior_artifact(
+            run_dir, 10, "run_manifest.json", json.dumps(manifest_payload)
+        )
         stage_dir = run_dir / "stage-11"
         stage_dir.mkdir()
 
@@ -969,6 +973,73 @@ class TestWorkspaceAgentStageWiring:
 
         assert result.status is StageStatus.DONE
         assert (stage_dir / "run_manifest.json").is_file()
+
+    def test_stage11_accepts_manifest_nested_primary_metric(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        from researchclaw.experiment.execution_contract import (
+            ExecutionContract,
+            MetricsContract,
+            PrimaryMetric,
+        )
+        from researchclaw.experiment.workspace import TaskSpec
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        workspace = Path(cfg.experiment.workspace_agent.workspace_path)
+        head = _init_workspace_git(workspace)
+        manifest_payload = {
+            "schema_version": "researchclaw.run_manifest.v1",
+            "code_commit": head,
+            "launch": {"command": "python train.py"},
+            "result_paths": ["outputs/metrics.json"],
+            "metrics": {
+                "primary": {"name": "accuracy", "direction": "maximize"},
+            },
+        }
+        spec = TaskSpec(
+            workspace=str(workspace),
+            objective="improve",
+            constraints=[],
+            primary_metric="accuracy",
+            metric_direction="maximize",
+            allowed_scope=["."],
+            forbidden_scope=[],
+            expected_outputs=["outputs/metrics.json"],
+            execution_contract=ExecutionContract(
+                metrics=MetricsContract(
+                    primary=PrimaryMetric("accuracy", "maximize")
+                ),
+            ),
+        )
+        _write_prior_artifact(run_dir, 9, "task_spec.yaml", spec.to_yaml())
+        _write_prior_artifact(
+            run_dir,
+            10,
+            "run_manifest.json",
+            json.dumps(manifest_payload),
+        )
+        stage_dir = run_dir / "stage-11"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_resource_planning(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.DONE
+        written = json.loads(
+            (stage_dir / "run_manifest.json").read_text(encoding="utf-8")
+        )
+        assert written["metrics"]["primary"] == {
+            "name": "accuracy",
+            "direction": "maximize",
+        }
 
     def test_stage12_submits_waits_collects_hashed_results(
         self,

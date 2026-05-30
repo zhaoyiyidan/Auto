@@ -49,10 +49,13 @@ def _execute_manifest_validate_and_prepare(
     manifest_text = _read_prior_artifact(run_dir, "run_manifest.json")
     if not manifest_text:
         return _failed(Stage.MANIFEST_VALIDATE_AND_PREPARE, "E11_MANIFEST_INVALID: missing run_manifest.json")
+    manifest_payload = _load_json_text(manifest_text)
     try:
         manifest = RunManifest.from_json(manifest_text)
     except Exception as exc:  # noqa: BLE001
         return _failed(Stage.MANIFEST_VALIDATE_AND_PREPARE, f"E11_MANIFEST_INVALID: invalid run_manifest.json: {exc}")
+    if not manifest_payload:
+        return _failed(Stage.MANIFEST_VALIDATE_AND_PREPARE, "E11_MANIFEST_INVALID: invalid run_manifest.json")
 
     workspace = Path(config.experiment.workspace_agent.workspace_path).resolve()
     validation = validate_manifest(manifest, workspace, allow_dirty=False)
@@ -85,7 +88,7 @@ def _execute_manifest_validate_and_prepare(
     task_spec = _load_task_spec(run_dir)
     if task_spec is not None and task_spec.execution_contract is not None:
         contract_errors = _contract_manifest_errors(
-            task_spec.execution_contract, manifest
+            task_spec.execution_contract, manifest, manifest_payload
         )
         if contract_errors:
             _write_repair_request(
@@ -109,7 +112,10 @@ def _execute_manifest_validate_and_prepare(
                 decision="fix_code",
             )
 
-    (stage_dir / "run_manifest.json").write_text(manifest.to_json(), encoding="utf-8")
+    (stage_dir / "run_manifest.json").write_text(
+        json.dumps(manifest_payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     return StageResult(
         stage=Stage.MANIFEST_VALIDATE_AND_PREPARE,
         status=StageStatus.DONE,
@@ -355,6 +361,7 @@ def _load_execution_contract(run_dir: Path, config: RCConfig) -> ExecutionContra
 def _contract_manifest_errors(
     contract: ExecutionContract,
     manifest: RunManifest,
+    manifest_payload: dict[str, Any],
 ) -> list[str]:
     errors: list[str] = []
     manifest_paths = set(manifest.result_paths)
@@ -365,20 +372,41 @@ def _contract_manifest_errors(
             )
 
     primary = contract.metrics.primary
-    if primary.name != manifest.metrics.primary:
+    nested_primary = _nested_manifest_primary(manifest_payload)
+    if nested_primary is None:
+        errors.append(
+            "manifest.metrics.primary must be an object with name and direction"
+        )
+        return errors
+    manifest_primary_name, manifest_primary_direction = nested_primary
+    if primary.name != manifest_primary_name:
         errors.append(
             "contract primary metric "
-            f"{primary.name!r} does not match manifest.metrics.primary "
-            f"{manifest.metrics.primary!r}"
+            f"{primary.name!r} does not match manifest.metrics.primary.name "
+            f"{manifest_primary_name!r}"
         )
-    if primary.direction != manifest.metrics.direction:
+    if primary.direction != manifest_primary_direction:
         errors.append(
             "contract metric direction "
-            f"{primary.direction!r} does not match manifest.metrics.direction "
-            f"{manifest.metrics.direction!r}"
+            f"{primary.direction!r} does not match manifest.metrics.primary.direction "
+            f"{manifest_primary_direction!r}"
         )
     return errors
 
+
+def _nested_manifest_primary(data: dict[str, Any]) -> tuple[str, str] | None:
+    metrics = data.get("metrics")
+    if not isinstance(metrics, dict):
+        return None
+    primary = metrics.get("primary")
+    if not isinstance(primary, dict):
+        return None
+    if not primary.get("name") or not primary.get("direction"):
+        return None
+    return (
+        str(primary["name"]),
+        str(primary["direction"]),
+    )
 
 def _write_contract_evidence(stage_dir: Path, run_dir: Path, config: RCConfig) -> None:
     execution = _load_json_file(stage_dir / "execution_record.json")

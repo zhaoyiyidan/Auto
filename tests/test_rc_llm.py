@@ -675,6 +675,49 @@ def test_acp_send_prompt_via_file_error_includes_stdout(
     assert "Authentication required" in str(excinfo.value)
 
 
+def test_acp_preflight_fails_when_generation_fails(monkeypatch: pytest.MonkeyPatch):
+    """bug #2: preflight must round-trip a real generation, not just create a session."""
+    from researchclaw.llm import acp_client
+    from researchclaw.llm.acp_client import ACPClient, ACPConfig
+
+    monkeypatch.setattr(acp_client.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    client = ACPClient(ACPConfig(agent="codex"))
+    client._acpx = "acpx"
+    client._ensure_session = lambda: None  # type: ignore[assignment]
+
+    def _boom(prompt: str) -> str:
+        raise RuntimeError(
+            "ACP prompt failed (exit 1): RUNTIME ERROR: Authentication required (401)"
+        )
+
+    client._send_prompt = _boom  # type: ignore[assignment]
+
+    ok, msg = client.preflight()
+
+    assert ok is False
+    assert "Authentication required" in msg
+
+
+def test_acp_preflight_succeeds_with_real_roundtrip(monkeypatch: pytest.MonkeyPatch):
+    """bug #2: a working generation round-trip should report ready."""
+    from researchclaw.llm import acp_client
+    from researchclaw.llm.acp_client import ACPClient, ACPConfig
+
+    monkeypatch.setattr(acp_client.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    sent: list[str] = []
+    client = ACPClient(ACPConfig(agent="codex"))
+    client._acpx = "acpx"
+    client._ensure_session = lambda: None  # type: ignore[assignment]
+    client._send_prompt = lambda prompt: sent.append(prompt) or "OK"  # type: ignore[assignment]
+
+    ok, msg = client.preflight()
+
+    assert ok is True
+    assert sent, "preflight must actually send a generation prompt"
+
+
 def test_new_param_models_contains_expected_models():
     expected = {"gpt-5", "gpt-5.1", "gpt-5.2", "gpt-5.4", "o3", "o3-mini", "o4-mini"}
     assert expected.issubset(_NEW_PARAM_MODELS)

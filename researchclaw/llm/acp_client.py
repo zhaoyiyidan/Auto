@@ -139,7 +139,15 @@ class ACPClient:
         )
 
     def preflight(self) -> tuple[bool, str]:
-        """Check that acpx and the agent are available."""
+        """Check that acpx, the agent, AND a real generation all work.
+
+        Beyond resolving binaries and creating the session, this sends a
+        minimal generation prompt and round-trips it.  Without that, a broken
+        provider/auth (e.g. acpx-codex falling back to api.openai.com and
+        401ing) would still report "session ready" — the failure would only
+        surface mid-pipeline at Stage 1.  Round-tripping here fails fast with
+        the real error.
+        """
         acpx = self._resolve_acpx()
         if not acpx:
             return False, (
@@ -150,12 +158,20 @@ class ACPClient:
         agent = self.config.agent
         if not shutil.which(agent):
             return False, f"ACP agent CLI not found: {agent!r} (not on PATH)"
-        # Create the session
+        # Create the session and round-trip a real generation.
         try:
             self._ensure_session()
-            return True, f"OK - ACP session ready ({agent} via acpx)"
+            reply = self._send_prompt(
+                "Preflight check. Reply with exactly: OK"
+            )
         except Exception as exc:  # noqa: BLE001
-            return False, f"ACP session init failed: {exc}"
+            return False, f"ACP generation failed: {exc}"
+        if not (reply or "").strip():
+            return False, (
+                f"ACP agent {agent!r} returned an empty response during "
+                "preflight (provider/auth may be misconfigured)."
+            )
+        return True, f"OK - ACP generation ready ({agent} via acpx)"
 
     def close(self) -> None:
         """Close the acpx session."""

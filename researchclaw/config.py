@@ -341,8 +341,6 @@ class ExperimentConfig:
     time_budget_sec: int = 300
     max_iterations: int = 10
     max_refine_duration_sec: int = 0  # 0 = auto (3× time_budget_sec)
-    metric_key: str = "primary_metric"
-    metric_direction: str = "minimize"
     keep_threshold: float = 0.0
     benchmark_agent: BenchmarkAgentConfig = field(default_factory=BenchmarkAgentConfig)
     figure_agent: FigureAgentConfig = field(default_factory=FigureAgentConfig)
@@ -891,10 +889,6 @@ def validate_config(
                         f"Invalid security.hitl_required_stages entry: {stage}"
                     )
 
-    exp_direction = _get_by_path(data, "experiment.metric_direction")
-    if not _is_blank(exp_direction) and exp_direction not in ("minimize", "maximize"):
-        errors.append(f"Invalid experiment.metric_direction: {exp_direction}")
-
     submitter_type = _get_by_path(data, "experiment.submitter.type")
     if not _is_blank(submitter_type) and submitter_type not in SUBMITTER_TYPES:
         errors.append(f"Invalid experiment.submitter.type: {submitter_type}")
@@ -952,8 +946,6 @@ def _parse_experiment_config(data: dict[str, Any]) -> ExperimentConfig:
         time_budget_sec=_safe_int(data.get("time_budget_sec"), 300),
         max_iterations=_safe_int(data.get("max_iterations"), 10),
         max_refine_duration_sec=_safe_int(data.get("max_refine_duration_sec"), 0),
-        metric_key=data.get("metric_key", "primary_metric"),
-        metric_direction=data.get("metric_direction", "minimize"),
         keep_threshold=_safe_float(data.get("keep_threshold"), 0.0),
         benchmark_agent=_parse_benchmark_agent_config(
             data.get("benchmark_agent") or {}

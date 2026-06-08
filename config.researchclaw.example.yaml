@@ -345,12 +345,6 @@ experiment:
   # optional, default: 300. Used in task planning and as submitter timeout fallback.
   time_budget_sec: 300
 
-  # optional, default: "primary_metric". Primary metric to report/compare.
-  metric_key: "primary_metric"
-
-  # optional, default: "minimize". Valid values: "minimize", "maximize".
-  metric_direction: "minimize"
-
   repair:
     # optional, default: true. Enables experiment diagnosis and repair routing.
     enabled: true

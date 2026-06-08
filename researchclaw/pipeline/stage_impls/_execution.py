@@ -15,6 +15,7 @@ from researchclaw.experiment.execution_contract import (
     evaluate_contract,
 )
 from researchclaw.experiment.manifest_validation import validate_manifest
+from researchclaw.experiment.metric_resolution import resolve_experiment_metric
 from researchclaw.experiment.workspace import RunManifest, TaskSpec
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._helpers import StageResult, _read_prior_artifact
@@ -262,6 +263,7 @@ def _execute_experiment_route_decision(
         "evidence": _experiment_decision_evidence(
             execution=execution,
             diagnosis=diagnosis,
+            run_dir=run_dir,
             config=config,
         ),
         "iteration": iteration,
@@ -351,9 +353,10 @@ def _load_execution_contract(run_dir: Path, config: RCConfig) -> ExecutionContra
         if task_spec is not None and task_spec.expected_outputs
         else ["outputs/metrics.json"]
     )
+    primary_metric, metric_direction = resolve_experiment_metric(run_dir)
     return default_contract(
-        primary_metric=str(getattr(config.experiment, "metric_key", "primary_metric")),
-        metric_direction=str(getattr(config.experiment, "metric_direction", "maximize")),
+        primary_metric=primary_metric,
+        metric_direction=metric_direction,
         expected_outputs=expected_outputs,
     )
 
@@ -588,10 +591,12 @@ def _experiment_decision_evidence(
     *,
     execution: dict[str, Any],
     diagnosis: dict[str, Any],
+    run_dir: Path,
     config: RCConfig,
 ) -> dict[str, Any]:
+    _ = config
     metrics = execution.get("metrics") if isinstance(execution.get("metrics"), dict) else {}
-    metric_key = str(getattr(config.experiment, "metric_key", "primary_metric"))
+    metric_key, metric_direction = resolve_experiment_metric(run_dir)
     best_metric = metrics.get(metric_key)
     if best_metric is None:
         for value in metrics.values():
@@ -604,7 +609,7 @@ def _experiment_decision_evidence(
     return {
         "primary_metric": metric_key,
         "best_metric": best_metric,
-        "metric_direction": str(getattr(config.experiment, "metric_direction", "maximize")),
+        "metric_direction": metric_direction,
         "n_runs": int(execution.get("n_runs", 1 if metrics else 0) or 0),
         "diagnosis_mode": quality.get("mode"),
         "diagnosis_sufficient": _diagnosis_sufficient(diagnosis),

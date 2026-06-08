@@ -14,6 +14,7 @@ from pathlib import Path
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
 from researchclaw.evolution import EvolutionStore, extract_lessons
+from researchclaw.experiment.metric_resolution import resolve_experiment_metric
 from researchclaw.knowledge.base import write_stage_to_kb
 from researchclaw.pipeline.executor import StageResult, execute_stage
 from researchclaw.pipeline.stages import (
@@ -730,13 +731,14 @@ def execute_pipeline(
                 import time as _time_mod
                 results_path = run_dir / "results.json"
                 metric_val = 0.0
+                metric_name, _metric_dir = resolve_experiment_metric(run_dir)
                 if results_path.exists():
                     rdata = json.loads(results_path.read_text(encoding="utf-8"))
-                    metric_val = rdata.get(config.experiment.metric_key, 0.0)
+                    metric_val = rdata.get(metric_name, 0.0)
                 exp_memory.record_outcome(ExperimentOutcome(
                     run_id=run_id, stage=stage.name,
                     hypothesis=config.research.topic, config={},
-                    metric_name=config.experiment.metric_key,
+                    metric_name=metric_name,
                     metric_value=float(metric_val) if metric_val else 0.0,
                     baseline_value=0.0, improvement=0.0,
                     success=result.status == StageStatus.DONE,
@@ -1484,8 +1486,8 @@ def _promote_best_stage14(run_dir: Path, config: RCConfig) -> None:
     """
     import shutil
 
-    metric_key = config.experiment.metric_key or "primary_metric"
-    metric_dir = config.experiment.metric_direction or "maximize"
+    _ = config
+    metric_key, metric_dir = resolve_experiment_metric(run_dir)
 
     candidates: list[tuple[float, Path]] = []
     for d in sorted(run_dir.glob("stage-14*")):

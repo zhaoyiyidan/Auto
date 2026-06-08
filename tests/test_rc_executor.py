@@ -1795,6 +1795,7 @@ class TestWorkspaceAgentStageWiring:
         run_dir: Path,
         adapters: AdapterBundle,
     ) -> None:
+        from researchclaw.experiment.protocol import ExperimentProtocol, MetricSpec
         from researchclaw.experiment.workspace import (
             ExecutionRecord,
             ExperimentRecord,
@@ -1803,6 +1804,16 @@ class TestWorkspaceAgentStageWiring:
         )
 
         cfg = _workspace_agent_rc_config(tmp_path)
+        s9 = run_dir / "stage-09"
+        s9.mkdir(parents=True, exist_ok=True)
+        (s9 / "experiment_protocol.json").write_text(
+            ExperimentProtocol(
+                metrics=(
+                    MetricSpec(name="accuracy", direction="maximize", is_primary=True),
+                )
+            ).to_json(),
+            encoding="utf-8",
+        )
         execution = ExecutionRecord(
             stage=12,
             code_commit="commit-1",
@@ -2052,8 +2063,6 @@ def _workspace_agent_rc_config(tmp_path: Path) -> RCConfig:
         "security": {"hitl_required_stages": [5, 9, 20]},
         "experiment": {
             "mode": "sandbox",
-            "metric_key": "accuracy",
-            "metric_direction": "maximize",
             "workspace_agent": {
                 "enabled": True,
                 "transport": "acp",

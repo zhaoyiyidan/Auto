@@ -10,6 +10,7 @@ import pytest
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
+from researchclaw.experiment.protocol import ExperimentProtocol, MetricSpec
 from researchclaw.pipeline import executor as rc_executor
 from researchclaw.pipeline import runner as rc_runner
 from researchclaw.pipeline.executor import StageResult
@@ -1588,14 +1589,30 @@ def _make_stage14_summary(run_dir: Path, suffix: str, pm_value: float) -> None:
     (d / "experiment_summary.json").write_text(json.dumps(data), encoding="utf-8")
 
 
+def _write_stage9_metric_protocol(run_dir: Path, *, direction: str) -> None:
+    d = run_dir / "stage-09"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "experiment_protocol.json").write_text(
+        ExperimentProtocol(
+            metrics=(
+                MetricSpec(
+                    name="primary_metric",
+                    direction=direction,
+                    is_primary=True,
+                ),
+            )
+        ).to_json(),
+        encoding="utf-8",
+    )
+
+
 class TestPromoteBestStage14BestJson:
     """BUG-223: experiment_summary_best.json must be written even when
     stage-14/ already has the best result (early-return path)."""
 
     @pytest.fixture()
     def max_config(self, rc_config: RCConfig) -> RCConfig:
-        """Config with metric_direction=maximize (accuracy-like metrics)."""
-        object.__setattr__(rc_config.experiment, "metric_direction", "maximize")
+        """Compatibility fixture; artifact resolver defaults to maximize."""
         return rc_config
 
     def test_best_json_written_when_current_is_best(
@@ -1652,7 +1669,6 @@ class TestPromoteBestStage14AnalysisBest:
 
     @pytest.fixture()
     def max_config(self, rc_config: RCConfig) -> RCConfig:
-        object.__setattr__(rc_config.experiment, "metric_direction", "maximize")
         return rc_config
 
     def test_analysis_best_written_from_best_iteration(
@@ -1702,7 +1718,7 @@ class TestPromoteBestStage14DegenerateDetection:
 
     def test_degenerate_minimize_skipped(self, run_dir: Path, rc_config: RCConfig) -> None:
         """When minimize, a value 1000x smaller than second-best is degenerate."""
-        # metric_direction defaults to "minimize"
+        _write_stage9_metric_protocol(run_dir, direction="minimize")
         _make_stage14_summary(run_dir, "", 7.26e-8)   # degenerate (broken normalization)
         _make_stage14_summary(run_dir, "_v2", 0.37)   # valid
 
@@ -1716,6 +1732,7 @@ class TestPromoteBestStage14DegenerateDetection:
 
     def test_legitimate_minimize_not_skipped(self, run_dir: Path, rc_config: RCConfig) -> None:
         """When values are within normal range, smaller is legitimately best."""
+        _write_stage9_metric_protocol(run_dir, direction="minimize")
         _make_stage14_summary(run_dir, "", 0.15)
         _make_stage14_summary(run_dir, "_v1", 0.37)
 

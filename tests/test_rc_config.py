@@ -91,10 +91,7 @@ def _valid_config_data() -> dict[str, dict[str, object]]:
             "fallback_models": ["gpt-4o-mini", "gpt-4o"],
         },
         "security": {"hitl_required_stages": [5, 9, 20]},
-        "experiment": {
-            "mode": "workspace",
-            "metric_direction": "minimize",
-        },
+        "experiment": {"mode": "workspace"},
     }
 
 
@@ -187,14 +184,18 @@ def test_validate_config_rejects_non_list_hitl_required_stages(tmp_path: Path):
     assert "security.hitl_required_stages must be a list" in result.errors
 
 
-def test_validate_config_rejects_invalid_metric_direction(tmp_path: Path):
+def test_validate_config_ignores_legacy_metric_fields(tmp_path: Path):
     data = _valid_config_data()
+    data["experiment"]["metric_key"] = "accuracy"
     data["experiment"]["metric_direction"] = "upward"
 
     result = validate_config(data, project_root=tmp_path, check_paths=False)
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
 
-    assert result.ok is False
-    assert "Invalid experiment.metric_direction: upward" in result.errors
+    assert result.ok is True
+    assert result.errors == ()
+    assert not hasattr(config.experiment, "metric_key")
+    assert not hasattr(config.experiment, "metric_direction")
 
 
 def test_rcconfig_from_dict_happy_path(tmp_path: Path):
@@ -417,7 +418,8 @@ def test_experiment_config_defaults_mode_is_workspace_native():
     defaults = ExperimentConfig()
 
     assert defaults.mode == "workspace"
-    assert defaults.metric_direction == "minimize"
+    assert not hasattr(defaults, "metric_key")
+    assert not hasattr(defaults, "metric_direction")
 
 
 def test_to_dict_roundtrip_rehydrates_equivalent_rcconfig(tmp_path: Path):

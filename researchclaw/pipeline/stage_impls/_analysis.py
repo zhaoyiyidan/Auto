@@ -10,6 +10,7 @@ from typing import Any
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
+from researchclaw.experiment.metric_resolution import resolve_experiment_metric
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._domain import _detect_domain, _is_ml_domain
 from researchclaw.pipeline._helpers import (
@@ -296,48 +297,7 @@ def _execute_result_analysis(
     prompts: PromptManager | None = None,
 ) -> StageResult:
     _ = adapters, llm, prompts
-    execution_records = _load_execution_records(run_dir)
-    registry_records = _load_workspace_registry(run_dir)
-    result_hashes = _merge_result_hashes(execution_records, registry_records)
-    primary_metric = config.experiment.metric_key
-    metric_direction = config.experiment.metric_direction
-    best_execution = _best_execution(
-        execution_records,
-        primary_metric=primary_metric,
-        metric_direction=metric_direction,
-    )
-    best_metric = (
-        _numeric_metric(best_execution.get("metrics", {}).get(primary_metric))
-        if best_execution
-        else None
-    )
-    best_commit = str(best_execution.get("code_commit", "")) if best_execution else ""
-    metrics_summary = _metrics_summary(execution_records)
-    _aggregates_into_metrics_summary(metrics_summary, execution_records)
-    condition_summaries = _condition_summaries(execution_records, primary_metric)
-    summary = {
-        "primary_metric": primary_metric,
-        "metric_direction": metric_direction,
-        "best_metric": best_metric,
-        "best_commit": best_commit,
-        "metrics_summary": metrics_summary,
-        "iterations": len([r for r in registry_records if int(r.get("stage", 0)) == 13]),
-        "n_runs": len(execution_records),
-        "best_run": best_execution,
-        "runs": execution_records,
-        "condition_summaries": condition_summaries,
-    }
-    # FIX#3: pass through the agent's planned-condition grid and hypothesis
-    # checks (previously discarded) so downstream stages can judge whether the
-    # experiment actually answered the research question.
-    _attach_experiment_provenance(summary, best_execution, execution_records)
-    provenance = {
-        "base_sha": str(registry_records[0].get("base_sha", "")) if registry_records else "",
-        "commits": _unique_commits(execution_records, registry_records),
-        "session_name": str(registry_records[0].get("session_name", "")) if registry_records else "",
-        "result_hashes": result_hashes,
-        "registry_records": registry_records,
-    }
+    summary, provenance = _build_experiment_summary(run_dir, config)
     stage_dir.mkdir(parents=True, exist_ok=True)
     (stage_dir / "experiment_summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True),
@@ -446,6 +406,55 @@ def _execute_result_analysis(
         ),
         decision="retry",
     )
+
+
+def _build_experiment_summary(
+    run_dir: Path,
+    config: RCConfig,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    _ = config
+    execution_records = _load_execution_records(run_dir)
+    registry_records = _load_workspace_registry(run_dir)
+    result_hashes = _merge_result_hashes(execution_records, registry_records)
+    primary_metric, metric_direction = resolve_experiment_metric(run_dir)
+    best_execution = _best_execution(
+        execution_records,
+        primary_metric=primary_metric,
+        metric_direction=metric_direction,
+    )
+    best_metric = (
+        _numeric_metric(best_execution.get("metrics", {}).get(primary_metric))
+        if best_execution
+        else None
+    )
+    best_commit = str(best_execution.get("code_commit", "")) if best_execution else ""
+    metrics_summary = _metrics_summary(execution_records)
+    _aggregates_into_metrics_summary(metrics_summary, execution_records)
+    condition_summaries = _condition_summaries(execution_records, primary_metric)
+    summary = {
+        "primary_metric": primary_metric,
+        "metric_direction": metric_direction,
+        "best_metric": best_metric,
+        "best_commit": best_commit,
+        "metrics_summary": metrics_summary,
+        "iterations": len([r for r in registry_records if int(r.get("stage", 0)) == 13]),
+        "n_runs": len(execution_records),
+        "best_run": best_execution,
+        "runs": execution_records,
+        "condition_summaries": condition_summaries,
+    }
+    # FIX#3: pass through the agent's planned-condition grid and hypothesis
+    # checks (previously discarded) so downstream stages can judge whether the
+    # experiment actually answered the research question.
+    _attach_experiment_provenance(summary, best_execution, execution_records)
+    provenance = {
+        "base_sha": str(registry_records[0].get("base_sha", "")) if registry_records else "",
+        "commits": _unique_commits(execution_records, registry_records),
+        "session_name": str(registry_records[0].get("session_name", "")) if registry_records else "",
+        "result_hashes": result_hashes,
+        "registry_records": registry_records,
+    }
+    return summary, provenance
 
 
 def _write_analysis_postcheck(stage_dir: Path, payload: dict[str, Any]) -> None:

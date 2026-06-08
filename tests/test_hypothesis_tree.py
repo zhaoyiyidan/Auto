@@ -393,7 +393,7 @@ def _pipeline_config(tmp_path: Path) -> Any:
             "api_key_env": "RC_TEST_KEY",
             "api_key": "inline",
         },
-        "experiment": {"metric_key": "accuracy", "metric_direction": "maximize"},
+        "experiment": {},
     }
     return RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
 

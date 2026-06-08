@@ -181,8 +181,6 @@ _SCALAR_FIELD_MAP: dict[str, str] = {
     "preferred_target_conference": "export.target_conference",
     "default_time_budget_sec": "experiment.time_budget_sec",
     "default_max_iterations": "experiment.max_iterations",
-    "default_metric_key": "experiment.metric_key",
-    "default_metric_direction": "experiment.metric_direction",
     "docker_image": "experiment.docker.image",
     "gpu_required": "experiment.docker.gpu_enabled",
 }

@@ -13,6 +13,7 @@ import yaml
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
+from researchclaw.experiment.metric_resolution import resolve_experiment_metric
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._domain import _detect_domain, _is_ml_domain
 from researchclaw.pipeline._helpers import (
@@ -1322,11 +1323,12 @@ def _execute_paper_draft(
         if isinstance(exp_summary, dict):
             try:
                 from researchclaw.pipeline.verified_registry import VerifiedRegistry
+                _metric_key, _metric_dir = resolve_experiment_metric(run_dir)
                 # BUG-222: Use best_only=True to ensure paper tables reflect
                 # only the promoted best iteration, not regressed data
                 _verified_registry = VerifiedRegistry.from_run_dir(
                     run_dir,
-                    metric_direction=config.experiment.metric_direction,
+                    metric_direction=_metric_dir,
                     best_only=True,
                 )
                 logger.info(
@@ -1580,8 +1582,9 @@ def _execute_paper_draft(
     if exp_summary_text:
         _exp_parsed_p10 = _safe_json_loads(exp_summary_text, {})
         if isinstance(_exp_parsed_p10, dict):
+            _metric_key, _metric_dir = resolve_experiment_metric(run_dir)
             _contradictions = _detect_result_contradictions(
-                _exp_parsed_p10, metric_direction=config.experiment.metric_direction
+                _exp_parsed_p10, metric_direction=_metric_dir
             )
             if _contradictions:
                 _contra_block = (

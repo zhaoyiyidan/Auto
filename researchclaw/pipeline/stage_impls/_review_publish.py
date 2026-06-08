@@ -14,6 +14,7 @@ import yaml  # noqa: F401 — available for downstream use
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
+from researchclaw.experiment.metric_resolution import resolve_experiment_metric
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._domain import _detect_domain  # noqa: F401
 from researchclaw.pipeline._helpers import (
@@ -536,7 +537,8 @@ def _execute_quality_gate(
     # Phase 1: Enhanced fabrication detection via VerifiedRegistry
     try:
         from researchclaw.pipeline.verified_registry import VerifiedRegistry as _VR20
-        _vr20 = _VR20.from_run_dir(run_dir, metric_direction=config.experiment.metric_direction, best_only=True) if isinstance(_exp_summary, dict) else None
+        _metric_key, _metric_dir = resolve_experiment_metric(run_dir)
+        _vr20 = _VR20.from_run_dir(run_dir, metric_direction=_metric_dir, best_only=True) if isinstance(_exp_summary, dict) else None
         if _vr20:
             _fabrication_info["verified_values_count"] = len(_vr20.values)
             _fabrication_info["verified_conditions"] = sorted(_vr20.condition_names)
@@ -2062,9 +2064,10 @@ def _execute_export_publish(
             from researchclaw.pipeline.verified_registry import (
                 VerifiedRegistry as _VR22,
             )
+            _metric_key, _metric_dir = resolve_experiment_metric(run_dir)
             _vr22 = _VR22.from_run_dir(
                 run_dir,
-                metric_direction=config.experiment.metric_direction,
+                metric_direction=_metric_dir,
                 best_only=True,
             )
             if _vr22.values:
@@ -2218,11 +2221,11 @@ def _execute_export_publish(
 
             # Generate structured charts from visualize.py
             from researchclaw.experiment.visualize import generate_all_charts
-            _metric_dir = getattr(config.experiment, "metric_direction", "minimize")
+            _metric_key, _metric_dir = resolve_experiment_metric(run_dir)
             _viz_charts = generate_all_charts(
                 run_dir,
                 chart_dir,
-                metric_key=config.experiment.metric_key,
+                metric_key=_metric_key,
                 metric_direction=_metric_dir,
             )
             charts.extend(_viz_charts)

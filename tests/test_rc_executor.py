@@ -248,13 +248,14 @@ class TestWorkspaceAgentStageWiring:
         )
 
         assert result.status is StageStatus.DONE
-        assert result.artifacts == ("task_spec.yaml",)
+        assert result.artifacts == ("experiment_protocol.json", "task_spec.yaml")
         spec = TaskSpec.from_path(stage_dir / "task_spec.yaml")
         assert spec.workspace == cfg.experiment.workspace_agent.workspace_path
-        assert spec.primary_metric == cfg.experiment.metric_key
-        assert spec.metric_direction == cfg.experiment.metric_direction
+        assert spec.primary_metric == "primary_metric"
+        assert spec.metric_direction == "maximize"
         assert spec.objective
         assert spec.expected_outputs
+        assert (stage_dir / "experiment_protocol.json").is_file()
 
     def test_stage9_uses_llm_task_spec_fields(
         self,
@@ -269,21 +270,33 @@ class TestWorkspaceAgentStageWiring:
         stage_dir = run_dir / "stage-09"
         stage_dir.mkdir()
         llm = FakeLLMClient(
-            "\n".join(
-                [
-                    "workspace: /model/workspace",
-                    "objective: model objective",
-                    "constraints:",
-                    "  - single GPU",
-                    "primary_metric: f1",
-                    "metric_direction: minimize",
-                    "allowed_scope:",
-                    "  - src/",
-                    "forbidden_scope:",
-                    "  - data/raw/",
-                    "expected_outputs:",
-                    "  - outputs/f1.json",
-                ]
+            json.dumps(
+                {
+                    "objective": "model-designed protocol",
+                    "hypotheses": [
+                        {"id": "H1", "statement": "Improve classification."}
+                    ],
+                    "metrics": [
+                        {
+                            "name": "f1",
+                            "direction": "maximize",
+                            "hypothesis_ids": ["H1"],
+                            "is_primary": True,
+                        }
+                    ],
+                    "comparisons": [
+                        {
+                            "id": "C1",
+                            "baseline": "baseline",
+                            "treatment": "model",
+                            "metric": "f1",
+                            "hypothesis_ids": ["H1"],
+                        }
+                    ],
+                    "decision_rules": [
+                        {"hypothesis_id": "H1", "metric": "f1", "comparator": "gt"}
+                    ],
+                }
             )
         )
 
@@ -297,10 +310,10 @@ class TestWorkspaceAgentStageWiring:
 
         assert result.status is StageStatus.DONE
         spec = TaskSpec.from_path(stage_dir / "task_spec.yaml")
-        assert spec.workspace == "/model/workspace"
-        assert spec.objective == "model objective"
+        assert spec.workspace == cfg.experiment.workspace_agent.workspace_path
+        assert "model-designed protocol" in spec.objective
         assert spec.primary_metric == "f1"
-        assert spec.expected_outputs == ["outputs/f1.json"]
+        assert spec.expected_outputs == ["outputs/metrics.json"]
 
     def test_stage9_template_includes_execution_contract(
         self,
@@ -325,8 +338,8 @@ class TestWorkspaceAgentStageWiring:
         assert result.status is StageStatus.DONE
         spec = TaskSpec.from_path(stage_dir / "task_spec.yaml")
         assert spec.execution_contract is not None
-        assert spec.execution_contract.metrics.primary.name == cfg.experiment.metric_key
-        assert spec.execution_contract.metrics.primary.direction == cfg.experiment.metric_direction
+        assert spec.execution_contract.metrics.primary.name == "primary_metric"
+        assert spec.execution_contract.metrics.primary.direction == "maximize"
 
     def test_stage9_llm_without_contract_gets_default(
         self,
@@ -339,24 +352,7 @@ class TestWorkspaceAgentStageWiring:
         cfg = _workspace_agent_rc_config(tmp_path)
         stage_dir = run_dir / "stage-09"
         stage_dir.mkdir()
-        llm = FakeLLMClient(
-            "\n".join(
-                [
-                    "workspace: /model/workspace",
-                    "objective: model objective",
-                    "constraints:",
-                    "  - single GPU",
-                    "primary_metric: f1",
-                    "metric_direction: minimize",
-                    "allowed_scope:",
-                    "  - src/",
-                    "forbidden_scope:",
-                    "  - data/raw/",
-                    "expected_outputs:",
-                    "  - outputs/f1.json",
-                ]
-            )
-        )
+        llm = FakeLLMClient("not json")
 
         result = rc_executor._execute_experiment_design(
             stage_dir,
@@ -369,8 +365,8 @@ class TestWorkspaceAgentStageWiring:
         assert result.status is StageStatus.DONE
         spec = TaskSpec.from_path(stage_dir / "task_spec.yaml")
         assert spec.execution_contract is not None
-        assert spec.execution_contract.metrics.primary.name == "f1"
-        assert spec.execution_contract.metrics.primary.direction == "minimize"
+        assert spec.execution_contract.metrics.primary.name == "primary_metric"
+        assert spec.execution_contract.metrics.primary.direction == "maximize"
 
     def test_workspace_codegen_prompt_has_agent_contract(self) -> None:
         from researchclaw.pipeline.stage_impls._code_generation import (

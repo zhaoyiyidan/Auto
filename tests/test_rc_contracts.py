@@ -71,7 +71,7 @@ def test_workspace_native_stage_contracts_are_exact():
     expected = {
         Stage.EXPERIMENT_TASK_SPEC: (
             ("hypotheses.md",),
-            ("task_spec.yaml",),
+            ("experiment_protocol.json", "task_spec.yaml"),
             "E09_TASKSPEC_REJECT",
             0,
         ),

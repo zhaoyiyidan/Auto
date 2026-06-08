@@ -471,7 +471,7 @@ def test_acp_codex_prompt_env_injects_openai_base_url_and_api_key(
 ):
     from researchclaw.llm.acp_client import ACPClient, ACPConfig
 
-    captured: dict[str, object] = {}
+    captures: list[dict[str, object]] = []
 
     class FakeProcess:
         returncode = 0
@@ -488,8 +488,7 @@ def test_acp_codex_prompt_env_injects_openai_base_url_and_api_key(
             return None
 
     def fake_popen(cmd: list[str], **kwargs: object) -> FakeProcess:
-        captured["cmd"] = cmd
-        captured["env"] = kwargs.get("env")
+        captures.append({"cmd": cmd, "env": kwargs.get("env")})
         return FakeProcess()
 
     monkeypatch.setenv("MY_ACP_CODEX_KEY", "secret-key")
@@ -507,7 +506,13 @@ def test_acp_codex_prompt_env_injects_openai_base_url_and_api_key(
 
     assert client._send_prompt_cli("acpx", "hello") == "answer"
 
-    env = captured["env"]
+    target = next(
+        item
+        for item in captures
+        if "codex" in [str(part) for part in item["cmd"]]
+        and "hello" in [str(part) for part in item["cmd"]]
+    )
+    env = target["env"]
     assert isinstance(env, dict)
     assert env["OPENAI_BASE_URL"] == "https://provider.example.com/v1"
     assert env["OPENAI_API_KEY"] == "secret-key"

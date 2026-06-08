@@ -1439,7 +1439,19 @@ class TestWorkspaceAgentStageWiring:
         run_dir: Path,
         adapters: AdapterBundle,
     ) -> None:
+        from researchclaw.experiment.protocol import ExperimentProtocol, MetricSpec
+
         cfg = _workspace_agent_rc_config(tmp_path)
+        s9 = run_dir / "stage-09"
+        s9.mkdir(parents=True, exist_ok=True)
+        (s9 / "experiment_protocol.json").write_text(
+            ExperimentProtocol(
+                metrics=(
+                    MetricSpec(name="accuracy", direction="maximize", is_primary=True),
+                )
+            ).to_json(),
+            encoding="utf-8",
+        )
         self._write_stage12_execution(run_dir, metrics={"accuracy": 0.91})
         stage_dir = run_dir / "stage-13"
         stage_dir.mkdir()
@@ -1904,7 +1916,19 @@ class TestWorkspaceAgentStageWiring:
         run_dir: Path,
         adapters: AdapterBundle,
     ) -> None:
+        from researchclaw.experiment.protocol import ExperimentProtocol, MetricSpec
+
         cfg = _workspace_agent_rc_config(tmp_path)
+        s9 = run_dir / "stage-09"
+        s9.mkdir(parents=True, exist_ok=True)
+        (s9 / "experiment_protocol.json").write_text(
+            ExperimentProtocol(
+                metrics=(
+                    MetricSpec(name="accuracy", direction="maximize", is_primary=True),
+                )
+            ).to_json(),
+            encoding="utf-8",
+        )
         self._write_stage12_execution(run_dir, metrics={"accuracy": 0.91})
         _write_prior_artifact(
             run_dir,
@@ -3652,8 +3676,6 @@ PIVOT
             experiment=replace(
                 rc_config.experiment,
                 mode="workspace",
-                metric_key="accuracy",
-                metric_direction="maximize",
                 workspace_agent=replace(
                     rc_config.experiment.workspace_agent,
                     workspace_path=str(workspace),
@@ -3662,6 +3684,18 @@ PIVOT
         )
 
     def _seed_result_analysis_inputs(self, run_dir: Path, workspace: Path) -> None:
+        from researchclaw.experiment.protocol import ExperimentProtocol, MetricSpec
+
+        stage9 = run_dir / "stage-09"
+        stage9.mkdir(parents=True, exist_ok=True)
+        (stage9 / "experiment_protocol.json").write_text(
+            ExperimentProtocol(
+                metrics=(
+                    MetricSpec(name="accuracy", direction="maximize", is_primary=True),
+                )
+            ).to_json(),
+            encoding="utf-8",
+        )
         (workspace / "outputs").mkdir(parents=True, exist_ok=True)
         (workspace / "outputs" / "metrics.json").write_text(
             json.dumps(

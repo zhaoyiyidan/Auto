@@ -82,15 +82,23 @@ class TestLocalSubmitter:
         )
 
         assert submitter.poll(running_result) == "running"
-        time.sleep(0.3)
-        assert submitter.poll(running_result) == "completed"
+        deadline = time.monotonic() + 3.0
+        status = submitter.poll(running_result)
+        while status == "running" and time.monotonic() < deadline:
+            time.sleep(0.05)
+            status = submitter.poll(running_result)
+        assert status == "completed"
 
         failed_result = submitter.submit(
             _request(tmp_path, command="python -c 'raise SystemExit(3)'")
         )
-        time.sleep(0.1)
+        deadline = time.monotonic() + 3.0
+        status = submitter.poll(failed_result)
+        while status == "running" and time.monotonic() < deadline:
+            time.sleep(0.05)
+            status = submitter.poll(failed_result)
 
-        assert submitter.poll(failed_result) == "failed"
+        assert status == "failed"
 
 
 class TestSlurmSubmitter:

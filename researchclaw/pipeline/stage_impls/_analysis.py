@@ -11,6 +11,7 @@ from typing import Any
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
 from researchclaw.experiment.metric_resolution import resolve_experiment_metric
+from researchclaw.experiment.protocol import ExperimentProtocol
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._domain import _detect_domain, _is_ml_domain
 from researchclaw.pipeline._helpers import (
@@ -19,6 +20,7 @@ from researchclaw.pipeline._helpers import (
     _chat_with_prompt,
     _collect_experiment_results,
     _collect_json_context,
+    _find_prior_file,
     _get_evolution_overlay,
     _multi_perspective_generate,
     _read_prior_artifact,
@@ -755,6 +757,102 @@ def _format_agent_decision_md(
     return "\n".join(lines) + "\n"
 
 
+def _format_hypothesis_decision_md(verdict: dict[str, Any]) -> str:
+    decision = str(verdict.get("decision") or "extend").lower()
+    lines = [
+        "# Research Decision (hypothesis protocol judge)",
+        "",
+        f"## Decision: {decision.upper()}",
+        "",
+        "## Hypothesis Verdicts",
+        "",
+        "| hypothesis | verdict |",
+        "|---|---|",
+    ]
+    per_hypothesis = verdict.get("per_hypothesis")
+    if isinstance(per_hypothesis, dict):
+        for hypothesis_id, item in per_hypothesis.items():
+            row = item if isinstance(item, dict) else {}
+            lines.append(
+                f"| {hypothesis_id} | {str(row.get('verdict', 'inconclusive'))} |"
+            )
+    counts = verdict.get("counts")
+    if isinstance(counts, dict):
+        lines += [
+            "",
+            "## Counts",
+            "",
+            f"- supported: {int(counts.get('supported', 0) or 0)}",
+            f"- refuted: {int(counts.get('refuted', 0) or 0)}",
+            f"- inconclusive: {int(counts.get('inconclusive', 0) or 0)}",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def _hypothesis_protocol_decision(
+    *,
+    stage_dir: Path,
+    run_dir: Path,
+    llm: LLMClient | None,
+) -> StageResult | None:
+    protocol_path = _find_prior_file(run_dir, "experiment_protocol.json")
+    if protocol_path is None:
+        return None
+    protocol = ExperimentProtocol.from_path(protocol_path)
+    if not protocol.decision_rules:
+        return None
+
+    from researchclaw.pipeline.hypothesis_judge import judge_hypotheses
+
+    summary = _read_experiment_summary(run_dir)
+    analysis = _read_prior_artifact(run_dir, "analysis.md") or ""
+    if analysis:
+        summary = dict(summary)
+        summary["analysis"] = analysis
+    verdict = judge_hypotheses(protocol, summary, llm=llm)
+    decision = str(verdict.get("decision") or "extend").lower()
+    decision_md = _format_hypothesis_decision_md(verdict)
+
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    (stage_dir / "decision.md").write_text(decision_md, encoding="utf-8")
+    decision_payload = {
+        "decision": decision,
+        "source": "hypothesis_judge",
+        "per_hypothesis": verdict.get("per_hypothesis", {}),
+        "counts": verdict.get("counts", {}),
+        "generated": _utcnow_iso(),
+    }
+    (stage_dir / "decision_structured.json").write_text(
+        json.dumps(decision_payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    verdict_payload = {
+        "source": "hypothesis_judge",
+        **verdict,
+        "generated": _utcnow_iso(),
+    }
+    (run_dir / "hypothesis_verdict.json").write_text(
+        json.dumps(verdict_payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    try:
+        from researchclaw.pipeline.hypothesis_tree import record_stage15_decision
+
+        record_stage15_decision(run_dir, decision, decision_md, human_edited=False)
+    except Exception:
+        logger.warning(
+            "Failed to record hypothesis tree decision (hypothesis judge)",
+            exc_info=True,
+        )
+    return StageResult(
+        stage=Stage.RESEARCH_DECISION,
+        status=StageStatus.DONE,
+        artifacts=("decision.md", "decision_structured.json"),
+        evidence_refs=("stage-15/decision.md",),
+        decision=decision,
+    )
+
+
 def _agent_requirements_decision(
     *,
     stage_dir: Path,
@@ -844,6 +942,12 @@ def _execute_research_decision(
     )
     if agent_decision is not None:
         return agent_decision
+
+    hypothesis_decision = _hypothesis_protocol_decision(
+        stage_dir=stage_dir, run_dir=run_dir, llm=llm
+    )
+    if hypothesis_decision is not None:
+        return hypothesis_decision
 
     analysis = _read_prior_artifact(run_dir, "analysis.md") or ""
 

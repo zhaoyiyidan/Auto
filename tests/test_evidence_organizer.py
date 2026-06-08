@@ -65,6 +65,15 @@ def _seed_bundle_inputs(tmp_path: Path) -> tuple[Path, Path, RCConfig]:
     _write_stage_artifact(run_dir, 9, "task_spec.yaml", "objective: test\n")
     _write_stage_artifact(
         run_dir,
+        9,
+        "experiment_protocol.json",
+        {
+            "schema_version": "researchclaw.experiment_protocol.v1",
+            "metrics": [{"name": "accuracy", "direction": "maximize", "is_primary": True}],
+        },
+    )
+    _write_stage_artifact(
+        run_dir,
         10,
         "run_manifest.json",
         {
@@ -155,6 +164,7 @@ def test_build_evidence_bundle_lists_current_declared_result_paths_only(
     assert not any("old_smoke" in path for path in result_paths)
 
     optionals = {entry["label"]: entry for entry in bundle["optional_inputs"]}
+    assert optionals["experiment_protocol"]["exists"] is True
     assert optionals["stage_12_local_log"]["exists"] is False
     assert optionals["workspace_agent_result"]["exists"] is False
     assert optionals["manifest_validation"]["exists"] is False
@@ -166,6 +176,19 @@ def test_build_evidence_bundle_lists_current_declared_result_paths_only(
     assert bundle["reproducibility"]["elapsed_sec"] == 42.5
     assert bundle["reproducibility"]["submitter"] == {"type": "slurm"}
     assert not any("stage-15" in path for path in _all_bundle_paths(bundle))
+
+
+def test_bundle_includes_protocol_when_present(tmp_path: Path) -> None:
+    run_dir, _workspace, config = _seed_bundle_inputs(tmp_path)
+
+    bundle = build_evidence_bundle(run_dir, config)
+    optionals = {entry["label"]: entry for entry in bundle["optional_inputs"]}
+
+    assert optionals["experiment_protocol"]["exists"] is True
+    assert optionals["experiment_protocol"]["filename"] == "experiment_protocol.json"
+    assert optionals["experiment_protocol"]["path"].endswith(
+        "stage-09/experiment_protocol.json"
+    )
 
 
 def test_build_organizer_prompt_contains_fixed_sections_and_boundaries() -> None:
@@ -343,3 +366,23 @@ def test_postcheck_analysis_rejects_boundary_violations(
 
     assert result.ok is False
     assert expected_violation in result.violations
+
+
+def test_postcheck_still_blocks_decision_language(tmp_path: Path) -> None:
+    text = """# Experiment Analysis
+
+## Experiment Objective
+Measure the run.
+
+## Results Summary
+The result is sufficient.
+
+## Decision
+PROCEED
+"""
+
+    result = postcheck_analysis(text, tmp_path)
+
+    assert result.ok is False
+    assert "forbidden_heading:decision" in result.violations
+    assert "standalone_decision_token:proceed" in result.violations

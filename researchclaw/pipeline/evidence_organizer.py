@@ -30,6 +30,7 @@ _DEFAULT_INPUTS: tuple[tuple[str, str], ...] = (
 )
 
 _OPTIONAL_INPUTS: tuple[tuple[str, str], ...] = (
+    ("experiment_protocol", "experiment_protocol.json"),
     ("stage_12_local_log", "stage-12-local.log"),
     ("workspace_agent_result", "stage-10-workspace-agent-result.json"),
     ("manifest_validation", "manifest_validation.json"),

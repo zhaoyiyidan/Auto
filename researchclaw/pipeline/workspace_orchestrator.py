@@ -134,7 +134,15 @@ def run_workspace_agent_implement(
         _close_session_if_requested(agent, close_policy)
         return result
 
-    manifest = _manifest_from_result(workspace, result) or read_agent_manifest(workspace)
+    try:
+        manifest = _manifest_from_result(workspace, result) or read_agent_manifest(
+            workspace
+        )
+    except Exception as exc:  # noqa: BLE001
+        manifest = None
+        manifest_error = f"Agent manifest could not be read: {exc}"
+    else:
+        manifest_error = "Agent manifest could not be read"
     if manifest is None:
         failed = WorkspaceAgentResult(
             base_sha=result.base_sha,
@@ -144,7 +152,7 @@ def run_workspace_agent_implement(
             raw_log=result.raw_log,
             provider_name=result.provider_name,
             elapsed_sec=result.elapsed_sec,
-            error="Agent manifest could not be read",
+            error=manifest_error,
         )
         _write_workspace_agent_result(run_dir, stage, failed)
         ledger.write_agent_result(stage_ledger_dir, failed)
@@ -292,7 +300,15 @@ def run_workspace_agent_task(
         _close_session_if_requested(agent, close_policy)
         return result
 
-    manifest = _manifest_from_result(workspace, result) or read_agent_manifest(workspace)
+    try:
+        manifest = _manifest_from_result(workspace, result) or read_agent_manifest(
+            workspace
+        )
+    except Exception as exc:  # noqa: BLE001
+        manifest = None
+        manifest_error = f"Agent manifest could not be read: {exc}"
+    else:
+        manifest_error = "Agent manifest could not be read"
     if manifest is None:
         failed = WorkspaceAgentResult(
             base_sha=result.base_sha,
@@ -302,7 +318,7 @@ def run_workspace_agent_task(
             raw_log=result.raw_log,
             provider_name=result.provider_name,
             elapsed_sec=result.elapsed_sec,
-            error="Agent manifest could not be read",
+            error=manifest_error,
         )
         (run_dir / f"stage-{stage:02d}-workspace-agent-result.json").write_text(
             json.dumps(asdict(failed), indent=2, sort_keys=True),

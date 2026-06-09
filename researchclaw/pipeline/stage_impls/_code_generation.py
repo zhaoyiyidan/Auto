@@ -51,6 +51,50 @@ _STAGE10_VALIDATION_BOUNDARY = (
 )
 
 
+def _run_manifest_schema_example(
+    *,
+    primary_metric: str,
+    metric_direction: str,
+) -> str:
+    direction = (
+        metric_direction
+        if metric_direction in {"maximize", "minimize"}
+        else "maximize"
+    )
+    example = {
+        "schema_version": "researchclaw.run_manifest.v1",
+        "code_commit": "ACTUAL_GIT_COMMIT_SHA",
+        "launch": {
+            "command": (
+                "python scripts/run_experiment.py "
+                "--metrics-path outputs/metrics.json"
+            ),
+            "cwd": "/absolute/path/to/workspace",
+            "env": {
+                "PYTHONPATH": "/absolute/path/to/workspace:${PYTHONPATH:-}",
+            },
+            "resources": {
+                "gpus": 0,
+                "time": "01:00:00",
+                "partition": "",
+                "mem_gb": 16,
+            },
+        },
+        "result_paths": [
+            "outputs/metrics.json",
+        ],
+        "metrics": {
+            "primary": primary_metric or "primary_metric",
+            "direction": direction,
+        },
+    }
+    return (
+        "Required run_manifest.json format example (MUST match this field shape; "
+        "replace placeholder values with actual run values):\n"
+        f"{json.dumps(example, indent=2)}\n\n"
+    )
+
+
 def _workspace_codegen_prompt(
     *,
     topic: str,
@@ -60,6 +104,7 @@ def _workspace_codegen_prompt(
     compute_budget: str,
     extra_guidance: str,
     manifest_filename: str,
+    metric_direction: str = "maximize",
 ) -> str:
     return (
         "You are a workspace-native code agent working inside an existing git "
@@ -79,6 +124,7 @@ def _workspace_codegen_prompt(
         f"5. MUST write {manifest_filename} in the workspace root or .researchclaw/.\n"
         "6. MUST include schema_version, code_commit, launch.command, launch.cwd, "
         "launch.env, launch.resources, result_paths, and metrics in the manifest.\n\n"
+        f"{_run_manifest_schema_example(primary_metric=metric, metric_direction=metric_direction)}"
         f"{_STAGE10_VALIDATION_BOUNDARY}"
         "Boundaries (MUST NOT):\n"
         "1. MUST NOT submit the job yourself. Do not submit the job yourself; "
@@ -137,6 +183,7 @@ def _repair_or_refine_prompt(
         f"5. MUST write {manifest_filename} in the workspace root or .researchclaw/.\n"
         "6. MUST include code_commit, launch.command, launch.cwd, launch.env, "
         "launch.resources, and result_paths in the manifest.\n\n"
+        f"{_run_manifest_schema_example(primary_metric=metric_key, metric_direction=metric_direction)}"
         f"{_STAGE10_VALIDATION_BOUNDARY}"
         "Boundaries (MUST NOT):\n"
         "1. MUST NOT submit the job yourself. Do not submit the job yourself; "
@@ -210,6 +257,7 @@ def _execute_code_agent_implement_or_repair(
             compute_budget="\n".join(task_spec.constraints),
             extra_guidance="",
             manifest_filename=manifest_filename,
+            metric_direction=task_spec.metric_direction,
         )
     agent = workspace_agent_factory.create_workspace_agent(
         config,

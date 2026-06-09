@@ -82,6 +82,41 @@ class DummyWorkspaceAgent:
         )
 
 
+class InvalidManifestWorkspaceAgent(DummyWorkspaceAgent):
+    def generate_in_workspace(
+        self,
+        workspace_path: Path,
+        prompt: str,
+        workdir: Path | None = None,
+        timeout_sec: int = 600,
+    ) -> WorkspaceAgentResult:
+        self.prompts.append(prompt)
+        base_sha = _git(workspace_path, "rev-parse", "HEAD")
+        (workspace_path / "train.py").write_text("print('train')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "train.py"], cwd=workspace_path, check=True)
+        subprocess.run(["git", "commit", "-m", "agent update"], cwd=workspace_path, check=True)
+        head_sha = _git(workspace_path, "rev-parse", "HEAD")
+        (workspace_path / "run_manifest.json").write_text(
+            json.dumps(
+                {
+                    "code_commit": head_sha,
+                    "launch": {"command": "python train.py"},
+                    "result_paths": [{"path": "outputs/metrics.json"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return WorkspaceAgentResult(
+            base_sha=base_sha,
+            agent_commit_sha=head_sha,
+            manifest_path="run_manifest.json",
+            diff_stat=_git(workspace_path, "diff", "--stat", base_sha, "HEAD"),
+            raw_log="agent done",
+            provider_name=self.name,
+            elapsed_sec=0.1,
+        )
+
+
 class DummySubmitter:
     name = "dummy"
 
@@ -202,6 +237,38 @@ def test_run_workspace_agent_implement_records_provenance_without_submitting(
     assert not (stage_dir / "registry_record.json").exists()
     assert not (run_dir / "workspace_experiment_registry.jsonl").exists()
     assert not (run_dir / "execution_record.json").exists()
+
+
+def test_run_workspace_agent_implement_reports_invalid_manifest(tmp_path: Path) -> None:
+    workspace = _tmp_git_repo(tmp_path)
+    run_dir = tmp_path / "run"
+    agent = InvalidManifestWorkspaceAgent()
+    ledger = WorkspaceAgentLedger(run_dir)
+
+    result = run_workspace_agent_implement(
+        workspace_path=workspace,
+        run_dir=run_dir,
+        stage=10,
+        agent=agent,
+        prompt="implement the experiment",
+        timeout_sec=120,
+        ledger=ledger,
+        close_policy="keep",
+    )
+
+    assert result.ok is False
+    assert result.error is not None
+    assert "RunManifest.result_paths must be a list[str]" in result.error
+    stage_result = json.loads(
+        (run_dir / "stage-10-workspace-agent-result.json").read_text(encoding="utf-8")
+    )
+    assert stage_result["error"] == result.error
+    stage_dir = run_dir / ".researchclaw" / "workspace-agent" / "stage-10"
+    assert json.loads((stage_dir / "agent_result.json").read_text(encoding="utf-8"))[
+        "error"
+    ] == result.error
+    assert agent.session.exports == [stage_dir / "session_export.tar.gz"]
+    assert not (stage_dir / "run_manifest.json").exists()
 
 
 def test_submit_and_collect_waits_hashes_and_records_provenance(tmp_path: Path) -> None:
@@ -338,6 +405,34 @@ def test_run_workspace_agent_task_does_not_submit_failed_agent(tmp_path: Path) -
     assert result.ok is False
     assert submitter.requests == []
     assert not (run_dir / "workspace_experiment_registry.jsonl").exists()
+
+
+def test_run_workspace_agent_task_reports_invalid_manifest_without_submit(
+    tmp_path: Path,
+) -> None:
+    workspace = _tmp_git_repo(tmp_path)
+    run_dir = tmp_path / "run"
+    agent = InvalidManifestWorkspaceAgent()
+    submitter = DummySubmitter()
+    ledger = WorkspaceAgentLedger(run_dir)
+
+    result = run_workspace_agent_task(
+        workspace_path=workspace,
+        run_dir=run_dir,
+        stage=13,
+        agent=agent,
+        submitter=submitter,
+        prompt="improve the experiment",
+        timeout_sec=120,
+        ledger=ledger,
+        close_policy="keep",
+    )
+
+    assert result.ok is False
+    assert result.error is not None
+    assert "RunManifest.result_paths must be a list[str]" in result.error
+    assert submitter.requests == []
+    assert not (run_dir / "stage-13-submit-result.json").exists()
 
 
 def _tmp_git_repo(tmp_path: Path) -> Path:

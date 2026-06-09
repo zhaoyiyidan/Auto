@@ -225,6 +225,15 @@ def test_safe_filename_truncates_to_100_chars() -> None:
     assert cleaned == "x" * 100
 
 
+def _extract_run_manifest_example(prompt: str) -> dict[str, Any]:
+    marker = "Required run_manifest.json format example"
+    start = prompt.index("{", prompt.index(marker))
+    end = prompt.index("\n\nStage 10 validation boundary", start)
+    payload = json.loads(prompt[start:end])
+    assert isinstance(payload, dict)
+    return payload
+
+
 class TestWorkspaceAgentStageWiring:
     def test_stage9_emits_task_spec_template(
         self,
@@ -392,6 +401,29 @@ class TestWorkspaceAgentStageWiring:
         assert "grid search" in prompt
         assert "timing benchmark" in prompt
         assert "ResearchClaw Stage 12 will run the manifest command" in prompt
+        manifest_example = _extract_run_manifest_example(prompt)
+        assert manifest_example == {
+            "schema_version": "researchclaw.run_manifest.v1",
+            "code_commit": "ACTUAL_GIT_COMMIT_SHA",
+            "launch": {
+                "command": (
+                    "python scripts/run_experiment.py "
+                    "--metrics-path outputs/metrics.json"
+                ),
+                "cwd": "/absolute/path/to/workspace",
+                "env": {
+                    "PYTHONPATH": "/absolute/path/to/workspace:${PYTHONPATH:-}",
+                },
+                "resources": {
+                    "gpus": 0,
+                    "time": "01:00:00",
+                    "partition": "",
+                    "mem_gb": 16,
+                },
+            },
+            "result_paths": ["outputs/metrics.json"],
+            "metrics": {"primary": "accuracy", "direction": "maximize"},
+        }
         assert "run_manifest.json" in prompt
         assert "main.py" not in prompt
 
@@ -420,6 +452,17 @@ class TestWorkspaceAgentStageWiring:
         assert "grid search" in prompt
         assert "timing benchmark" in prompt
         assert "ResearchClaw Stage 12 will run the manifest command" in prompt
+        manifest_example = _extract_run_manifest_example(prompt)
+        assert manifest_example["schema_version"] == "researchclaw.run_manifest.v1"
+        assert manifest_example["code_commit"] == "ACTUAL_GIT_COMMIT_SHA"
+        assert manifest_example["launch"]["command"].startswith(
+            "python scripts/run_experiment.py"
+        )
+        assert manifest_example["result_paths"] == ["outputs/metrics.json"]
+        assert manifest_example["metrics"] == {
+            "primary": "accuracy",
+            "direction": "maximize",
+        }
         assert "run_manifest.json" in prompt
         assert "REPAIR REQUEST" in prompt
         assert "accuracy stuck at 0" in prompt

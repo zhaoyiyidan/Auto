@@ -1,4 +1,10 @@
 # pyright: reportPrivateUsage=false
+"""Legacy hypothesis compatibility tests.
+
+These tests pin the old single-mainline hypothesis_tree sidecars while the
+default pipeline path uses per-hypothesis validation.
+"""
+
 from __future__ import annotations
 
 import json

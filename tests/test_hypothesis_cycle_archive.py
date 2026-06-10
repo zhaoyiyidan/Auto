@@ -1,3 +1,9 @@
+"""Legacy hypothesis compatibility tests.
+
+These tests keep old hypothesis cycle archives readable without keeping the
+runner wired to create new archives.
+"""
+
 from __future__ import annotations
 
 import json

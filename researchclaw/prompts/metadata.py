@@ -283,6 +283,24 @@ SUB_PROMPT_METADATA: dict[str, dict[str, Any]] = {
         "purpose": "Synthesize accepted debate claims into the final hypotheses document.",
         "required_variables": ["topic", "synthesis", "claims_text"],
     },
+    "requirements_judge": {
+        "purpose": "Audit post-run results against manifest requirements and return a JSON verdict.",
+        "required_variables": [
+            "requirements_json",
+            "summary_excerpt",
+            "results_excerpt",
+        ],
+        "output_schema": "JSON object with per_requirement, verdict, delta_feedback.",
+        "json_mode": True,
+        "token_budget": 2000,
+    },
+    "hypothesis_verdict_fallback": {
+        "purpose": "Resolve inconclusive experiment-protocol decision rules with an LLM verdict.",
+        "required_variables": ["rule_json", "summary_json"],
+        "output_schema": "JSON object with verdict and rationale.",
+        "json_mode": True,
+        "token_budget": 1000,
+    },
     "hypothesis_synthesize": {
         "purpose": "Merge multiple hypothesis debate perspectives.",
         "required_variables": ["perspectives"],

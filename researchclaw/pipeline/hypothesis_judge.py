@@ -9,6 +9,7 @@ from typing import Any
 from researchclaw.experiment.protocol import DecisionRule, ExperimentProtocol
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._helpers import _safe_json_loads
+from researchclaw.prompts import PromptManager
 
 
 VERDICTS = ("supported", "refuted", "inconclusive")
@@ -189,23 +190,17 @@ def _llm_fallback(
     summary: dict[str, Any],
     llm: LLMClient,
 ) -> str:
-    prompt = (
-        "A deterministic experiment-protocol decision rule was inconclusive "
-        "because a metric was missing or non-numeric. Read the rule and summary, "
-        "then decide the hypothesis verdict. Return only JSON with keys "
-        '`verdict` ("supported", "refuted", or "inconclusive") and `rationale`.\n\n'
-        f"RULE:\n{json.dumps(rule.to_dict(), indent=2, sort_keys=True)}\n\n"
-        f"SUMMARY:\n{json.dumps(summary, indent=2, default=str, sort_keys=True)[:12000]}"
+    rendered = PromptManager().sub_prompt(
+        "hypothesis_verdict_fallback",
+        rule_json=json.dumps(rule.to_dict(), indent=2, sort_keys=True),
+        summary_json=json.dumps(summary, indent=2, default=str, sort_keys=True)[:12000],
     )
     try:
         response = llm.chat(
-            messages=[{"role": "user", "content": prompt}],
-            system=(
-                "You are a strict scientific hypothesis judge. You only use "
-                "the provided summary and never invent missing measurements."
-            ),
-            json_mode=True,
-            max_tokens=1000,
+            messages=[{"role": "user", "content": rendered.user}],
+            system=rendered.system,
+            json_mode=rendered.json_mode,
+            max_tokens=rendered.max_tokens,
         )
         text = response.content if hasattr(response, "content") else str(response)
         payload = _safe_json_loads(text, {})

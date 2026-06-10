@@ -954,6 +954,63 @@ _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
             "## Candidate Hypothesis Material\n{claims_text}"
         ),
     },
+    "requirements_judge": {
+        "system": (
+            "You are a strict research auditor. You read the requirements that a study "
+            "MUST satisfy, then audit the post-run experiment summary and the agent's "
+            "canonical results.json against each requirement. You quote concrete evidence "
+            "and only mark a requirement as met when there is direct, unambiguous support "
+            "in the data. You do not invent facts. You are terse and precise."
+        ),
+        "user": (
+            "REQUIREMENTS to verify (JSON list of objects):\n"
+            "{requirements_json}\n\n"
+            "EXPERIMENT_SUMMARY (post-run, built by stage-14):\n"
+            "```json\n{summary_excerpt}\n```\n\n"
+            "AGENT_RESULTS (results.json written by the agent at workspace root):\n"
+            "```json\n{results_excerpt}\n```\n\n"
+            "TASK\n"
+            "----\n"
+            "For each requirement, decide whether it is MET based ONLY on the data above.\n"
+            "Cite the concrete value or text you used as evidence (max 200 chars per cite).\n"
+            "When a must_pass requirement is unmet, write what is missing — concrete enough "
+            "that an agent could fix it in a follow-up run.\n\n"
+            "Then produce a single overall verdict:\n"
+            "  * \"proceed\"  — every must_pass requirement is met (any optional may fail)\n"
+            "  * \"reject\"   — at least one must_pass requirement is unmet\n"
+            "  * \"partial\"  — all must_pass met but ≥1 optional unmet\n\n"
+            "Finally produce delta_feedback: a short bulleted list of the must_pass items still "
+            "failing, phrased as instructions to the agent for a rerun (e.g. \"Compute X for "
+            "condition Y; report it under metrics.X\").  Empty string if nothing is failing.\n\n"
+            "OUTPUT — return ONLY a single JSON object, no prose, no fences:\n"
+            "{\n"
+            '  "per_requirement": [\n'
+            '    {"id": "<req-id>", "must_pass": <bool>, "met": <bool>, "evidence": "...", "missing": "..."},\n'
+            "    ...\n"
+            "  ],\n"
+            '  "verdict": "proceed" | "reject" | "partial",\n'
+            '  "delta_feedback": "..."\n'
+            "}\n"
+        ),
+        "json_mode": True,
+        "max_tokens": 2000,
+    },
+    "hypothesis_verdict_fallback": {
+        "system": (
+            "You are a strict scientific hypothesis judge. You only use "
+            "the provided summary and never invent missing measurements."
+        ),
+        "user": (
+            "A deterministic experiment-protocol decision rule was inconclusive "
+            "because a metric was missing or non-numeric. Read the rule and summary, "
+            "then decide the hypothesis verdict. Return only JSON with keys "
+            '`verdict` ("supported", "refuted", or "inconclusive") and `rationale`.\n\n'
+            "RULE:\n{rule_json}\n\n"
+            "SUMMARY:\n{summary_json}"
+        ),
+        "json_mode": True,
+        "max_tokens": 1000,
+    },
     "hypothesis_synthesize": {
         "system": (
             "You are a senior research director synthesizing multiple perspectives "

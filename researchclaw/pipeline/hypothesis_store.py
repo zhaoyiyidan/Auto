@@ -7,10 +7,19 @@ immutable hypothesis science separate from runtime validation attempts.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import hashlib
+import json
+from pathlib import Path
+import re
 from typing import Any
 
 from researchclaw.experiment.protocol import HypothesisSpec
+from researchclaw.pipeline.hypothesis_tree import _atomic_write_json, _atomic_write_text
+
+
+TREE_DIRNAME = "hypothesis_tree"
+_NODE_ID_RE = re.compile(r"^h-(\d+)$")
 
 
 NODE_STATUSES = {
@@ -34,6 +43,35 @@ def _hypothesis_hash(statement: str, prediction: str, falsification: str) -> str
         )
     )
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _node_markdown(node: "HypothesisNode") -> str:
+    lines = [
+        f"# Hypothesis {node.id}",
+        "",
+        "## Statement",
+        node.statement,
+        "",
+        "## Prediction",
+        node.prediction,
+        "",
+        "## Falsification",
+        node.falsification,
+        "",
+        "## Rationale",
+        node.rationale,
+        "",
+        "## Baselines",
+    ]
+    if node.baselines:
+        lines.extend(f"- {baseline}" for baseline in node.baselines)
+    else:
+        lines.append("_None specified._")
+    return "\n".join(lines) + "\n"
 
 
 @dataclass(frozen=True)
@@ -189,3 +227,79 @@ class ValidationAttempt:
             started_at=data.get("started_at"),
             finished_at=data.get("finished_at"),
         )
+
+
+class HypothesisStore:
+    def __init__(self, run_dir: Path) -> None:
+        self.run_dir = Path(run_dir)
+        self.tree_dir = self.run_dir / TREE_DIRNAME
+        self.nodes_dir = self.tree_dir / "nodes"
+        self.events_path = self.tree_dir / "events.jsonl"
+
+    def _next_node_id(self) -> str:
+        max_number = 0
+        if self.nodes_dir.exists():
+            for child in self.nodes_dir.iterdir():
+                match = _NODE_ID_RE.match(child.name)
+                if match:
+                    max_number = max(max_number, int(match.group(1)))
+        return f"h-{max_number + 1:03d}"
+
+    def _append_event(
+        self,
+        *,
+        event_type: str,
+        node_id: str | None,
+        data: dict[str, Any],
+        timestamp: str,
+    ) -> None:
+        self.tree_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "event_type": event_type,
+            "node_id": node_id,
+            "data": data,
+            "timestamp": timestamp,
+        }
+        with self.events_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+            fh.write("\n")
+
+    def create_node(
+        self,
+        *,
+        statement: str,
+        prediction: str = "",
+        falsification: str = "",
+        rationale: str = "",
+        baselines: tuple[str, ...] = (),
+        source: str = "stage8_batch",
+        parent_id: str | None = None,
+        created_at: str | None = None,
+    ) -> HypothesisNode:
+        created_at = created_at or _utcnow_iso()
+        node = HypothesisNode(
+            id=self._next_node_id(),
+            statement=statement,
+            prediction=prediction,
+            falsification=falsification,
+            rationale=rationale,
+            baselines=baselines,
+            source=source,
+            parent_id=parent_id,
+            created_at=created_at,
+        )
+        node_dir = self.nodes_dir / node.id
+        node_dir.mkdir(parents=True, exist_ok=False)
+        _atomic_write_json(node_dir / "node.json", node.to_dict())
+        _atomic_write_text(node_dir / "hypothesis.md", _node_markdown(node))
+        self._append_event(
+            event_type="node_proposed",
+            node_id=node.id,
+            data={
+                "parent_id": parent_id,
+                "source": node.source,
+                "hypothesis_hash": node.hypothesis_hash,
+            },
+            timestamp=created_at,
+        )
+        return node

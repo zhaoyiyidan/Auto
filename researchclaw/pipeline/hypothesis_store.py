@@ -32,6 +32,22 @@ NODE_STATUSES = {
     "superseded",
 }
 
+TERMINAL_NODE_STATUSES = {
+    "supported",
+    "refuted",
+    "inconclusive",
+    "superseded",
+}
+
+NODE_STATUS_TRANSITIONS = {
+    "proposed": {"validating"},
+    "validating": TERMINAL_NODE_STATUSES,
+    "supported": set(),
+    "refuted": set(),
+    "inconclusive": set(),
+    "superseded": set(),
+}
+
 ATTEMPT_STATUSES = {"queued", "running", "succeeded", "failed", "abandoned"}
 
 
@@ -272,6 +288,12 @@ class HypothesisStore:
             raise ValueError(f"Unknown validation attempt: {attempt_id}")
         return ValidationAttempt.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
+    def _read_node(self, node_id: str) -> HypothesisNode:
+        path = self._node_dir(node_id) / "node.json"
+        if not path.exists():
+            raise ValueError(f"Unknown hypothesis node: {node_id}")
+        return HypothesisNode.from_dict(json.loads(path.read_text(encoding="utf-8")))
+
     def _append_event(
         self,
         *,
@@ -415,4 +437,51 @@ class HypothesisStore:
                 },
                 timestamp=updated.finished_at or _utcnow_iso(),
             )
+        return updated
+
+    def set_node_status(
+        self,
+        node_id: str,
+        new_status: str,
+        *,
+        created_at: str | None = None,
+    ) -> HypothesisNode:
+        created_at = created_at or _utcnow_iso()
+        node = self._read_node(node_id)
+        new_status = str(new_status or "").strip().lower()
+        if new_status not in NODE_STATUSES:
+            raise ValueError(f"Invalid hypothesis node status: {new_status}")
+        if node.status == new_status:
+            return node
+        allowed = NODE_STATUS_TRANSITIONS.get(node.status, set())
+        if new_status not in allowed:
+            raise ValueError(
+                "Illegal hypothesis node transition: "
+                f"{node.status} -> {new_status}"
+            )
+        updated = HypothesisNode(
+            id=node.id,
+            statement=node.statement,
+            prediction=node.prediction,
+            falsification=node.falsification,
+            rationale=node.rationale,
+            baselines=node.baselines,
+            source=node.source,
+            parent_id=node.parent_id,
+            created_at=node.created_at,
+            hypothesis_hash=node.hypothesis_hash,
+            status=new_status,
+        )
+        _atomic_write_json(self._node_dir(node_id) / "node.json", updated.to_dict())
+        event_type = (
+            "node_verdict"
+            if new_status in TERMINAL_NODE_STATUSES
+            else "node_status_changed"
+        )
+        self._append_event(
+            event_type=event_type,
+            node_id=node_id,
+            data={"from": node.status, "to": new_status},
+            timestamp=created_at,
+        )
         return updated

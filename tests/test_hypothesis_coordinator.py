@@ -170,3 +170,119 @@ Rationale: Independent signal.
         ("h-001", "h-001/attempt-001", "proceed"),
         ("h-003", "h-003/attempt-001", "inconclusive"),
     ]
+
+
+def test_coordinator_maps_decisions_to_node_statuses_and_followup_nodes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    hypotheses_md = """
+## H1: Proceed hypothesis
+Statement: Proceeding hypothesis.
+Prediction: Proceed prediction.
+Falsification: Proceed falsification.
+Rationale: Proceed rationale.
+
+## H2: Inconclusive hypothesis
+Statement: Inconclusive hypothesis.
+Prediction: Inconclusive prediction.
+Falsification: Inconclusive falsification.
+Rationale: Inconclusive rationale.
+
+## H3: Extend hypothesis
+Statement: Extend source hypothesis.
+Prediction: Extend source prediction.
+Falsification: Extend source falsification.
+Rationale: Extend source rationale.
+
+## H4: Pivot hypothesis
+Statement: Pivot source hypothesis.
+Prediction: Pivot source prediction.
+Falsification: Pivot source falsification.
+Rationale: Pivot source rationale.
+"""
+    followups = {
+        "h-003": {
+            "statement": "Extended child hypothesis.",
+            "prediction": "Extended child prediction.",
+            "falsification": "Extended child falsification.",
+            "rationale": "Extended child rationale.",
+            "baselines": ("extended-baseline",),
+        },
+        "h-004": {
+            "statement": "Pivot sibling hypothesis.",
+            "prediction": "Pivot sibling prediction.",
+            "falsification": "Pivot sibling falsification.",
+            "rationale": "Pivot sibling rationale.",
+            "baselines": ("pivot-baseline",),
+        },
+    }
+
+    def fake_validate_branch(
+        node: Any,
+        attempt: Any,
+        config: Any,
+        adapters: Any,
+    ) -> Any:
+        decisions = {
+            "h-001": "proceed",
+            "h-002": "inconclusive",
+            "h-003": "extend",
+            "h-004": "pivot",
+        }
+        return SimpleNamespace(
+            decision=decisions[node.id],
+            artifacts=("stage-15/decision.md",),
+            metrics={"score": 0.9},
+            next_hypothesis=followups.get(node.id),
+        )
+
+    monkeypatch.setattr(
+        coordinator,
+        "validate_branch",
+        fake_validate_branch,
+        raising=False,
+    )
+
+    coordinator.split_and_validate_sequential(
+        hypotheses_md,
+        config=object(),
+        adapters=object(),
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+
+    assert _node_payload(tmp_path, "h-001")["status"] == "supported"
+    assert _node_payload(tmp_path, "h-002")["status"] == "inconclusive"
+    assert _node_payload(tmp_path, "h-003")["status"] == "superseded"
+    assert _node_payload(tmp_path, "h-004")["status"] == "superseded"
+
+    extend_child = _node_payload(tmp_path, "h-005")
+    assert extend_child["statement"] == "Extended child hypothesis."
+    assert extend_child["parent_id"] == "h-003"
+    assert extend_child["source"] == "extend"
+    assert extend_child["status"] == "proposed"
+
+    pivot_sibling = _node_payload(tmp_path, "h-006")
+    assert pivot_sibling["statement"] == "Pivot sibling hypothesis."
+    assert pivot_sibling["parent_id"] is None
+    assert pivot_sibling["source"] == "pivot"
+    assert pivot_sibling["status"] == "proposed"
+
+    verdicts = [
+        (
+            event["node_id"],
+            event["data"].get("attempt_id"),
+            event["data"].get("decision"),
+            event["data"].get("to"),
+        )
+        for event in _events(tmp_path)
+        if event["event_type"] == "node_verdict"
+    ]
+    assert verdicts == [
+        ("h-001", "h-001/attempt-001", "proceed", "supported"),
+        ("h-002", "h-002/attempt-001", "inconclusive", "inconclusive"),
+        ("h-003", "h-003/attempt-001", "extend", "superseded"),
+        ("h-004", "h-004/attempt-001", "pivot", "superseded"),
+    ]

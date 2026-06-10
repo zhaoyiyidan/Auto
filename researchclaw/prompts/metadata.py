@@ -301,6 +301,19 @@ SUB_PROMPT_METADATA: dict[str, dict[str, Any]] = {
         "json_mode": True,
         "token_budget": 1000,
     },
+    "search_agent": {
+        "purpose": "Hand off manual literature search to an external search agent.",
+        "required_variables": [
+            "topic",
+            "goal_text",
+            "problem_tree",
+            "query_lines",
+            "year_min",
+            "plan_text",
+            "fields",
+            "template",
+        ],
+    },
     "hypothesis_synthesize": {
         "purpose": "Merge multiple hypothesis debate perspectives.",
         "required_variables": ["perspectives"],

@@ -178,32 +178,18 @@ def _render_search_agent_prompt(
     fields = ", ".join(MANUAL_SEARCH_FIELDS)
     query_lines = "\n".join(f"- {q}" for q in queries)
     template = json.dumps(_manual_search_template_row(), ensure_ascii=False)
-    return (
-        "# Manual Literature Search Agent Prompt\n\n"
-        "You are a literature search agent. Find real, relevant papers for the "
-        "research topic below. Prefer peer-reviewed papers, strong preprints, "
-        "surveys, baselines, benchmarks, seminal work, and credible negative "
-        "or limitation evidence. Inspect the abstract and paper body whenever "
-        "a full text or PDF is available.\n\n"
-        f"## Topic\n{topic}\n\n"
-        f"## Research Goal\n{goal_text.strip() or '(not provided)'}\n\n"
-        f"## Problem Tree\n{problem_tree.strip() or '(not provided)'}\n\n"
-        f"## Search Queries\n{query_lines}\n\n"
-        f"Minimum publication year: {year_min}\n\n"
-        f"## Stage 3 Search Plan\n```yaml\n{plan_text.strip()}\n```\n\n"
-        "## Output Requirements\n"
-        "Return only JSONL. Each line must be one JSON object for one paper. "
-        "Do not wrap the output in Markdown. Use these fields exactly:\n\n"
-        f"{fields}\n\n"
-        "paper_type must be one of: seminal, survey, method, benchmark, "
-        "baseline, negative_result, related.\n\n"
-        "If full text is available, fill full_text_summary and key_evidence "
-        "with claims grounded in the paper body. If it is not available, set "
-        "full_text_available to false and explain the evidence limit in "
-        "quality_notes.\n\n"
-        "## Example JSONL Line\n"
-        f"{template}\n"
+    prompt = PromptManager().sub_prompt(
+        "search_agent",
+        topic=topic,
+        goal_text=goal_text.strip() or "(not provided)",
+        problem_tree=problem_tree.strip() or "(not provided)",
+        query_lines=query_lines,
+        year_min=str(year_min),
+        plan_text=plan_text.strip(),
+        fields=fields,
+        template=template,
     )
+    return f"{prompt.system}\n\n{prompt.user}" if prompt.system else prompt.user
 
 
 def _render_manual_instructions(stage_dir: Path) -> str:

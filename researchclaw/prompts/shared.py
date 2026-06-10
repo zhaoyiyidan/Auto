@@ -1011,6 +1011,34 @@ _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
         "json_mode": True,
         "max_tokens": 1000,
     },
+    "search_agent": {
+        "system": "# Manual Literature Search Agent Prompt",
+        "user": (
+            "You are a literature search agent. Find real, relevant papers for the "
+            "research topic below. Prefer peer-reviewed papers, strong preprints, "
+            "surveys, baselines, benchmarks, seminal work, and credible negative "
+            "or limitation evidence. Inspect the abstract and paper body whenever "
+            "a full text or PDF is available.\n\n"
+            "## Topic\n{topic}\n\n"
+            "## Research Goal\n{goal_text}\n\n"
+            "## Problem Tree\n{problem_tree}\n\n"
+            "## Search Queries\n{query_lines}\n\n"
+            "Minimum publication year: {year_min}\n\n"
+            "## Stage 3 Search Plan\n```yaml\n{plan_text}\n```\n\n"
+            "## Output Requirements\n"
+            "Return only JSONL. Each line must be one JSON object for one paper. "
+            "Do not wrap the output in Markdown. Use these fields exactly:\n\n"
+            "{fields}\n\n"
+            "paper_type must be one of: seminal, survey, method, benchmark, "
+            "baseline, negative_result, related.\n\n"
+            "If full text is available, fill full_text_summary and key_evidence "
+            "with claims grounded in the paper body. If it is not available, set "
+            "full_text_available to false and explain the evidence limit in "
+            "quality_notes.\n\n"
+            "## Example JSONL Line\n"
+            "{template}\n"
+        ),
+    },
     "hypothesis_synthesize": {
         "system": (
             "You are a senior research director synthesizing multiple perspectives "

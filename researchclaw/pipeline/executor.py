@@ -642,7 +642,7 @@ def _clear_gate_proposal_sentinel(stage_dir: Path) -> None:
 
 
 def _finalize_research_decision_from_artifact(
-    stage_dir: Path, run_dir: Path
+    stage_dir: Path, run_dir: Path, config: RCConfig | None = None
 ) -> StageResult:
     """Finalize a human-reviewed Stage 15 decision without re-running the LLM."""
     decision_path = stage_dir / "decision.md"
@@ -653,17 +653,22 @@ def _finalize_research_decision_from_artifact(
     decision = _parse_decision(decision_md)
     _write_decision_structured_json(stage_dir, decision_md, decision)
     _clear_gate_proposal_sentinel(stage_dir)
-    try:
-        from researchclaw.pipeline.hypothesis_tree import record_stage15_decision
+    from researchclaw.pipeline.hypothesis_mode import (
+        per_hypothesis_validation_enabled,
+    )
 
-        record_stage15_decision(
-            run_dir, decision, decision_md, human_edited=True
-        )
-    except Exception:
-        logger.warning(
-            "Failed to record hypothesis tree decision (human gate)",
-            exc_info=True,
-        )
+    if not per_hypothesis_validation_enabled(config):
+        try:
+            from researchclaw.pipeline.hypothesis_tree import record_stage15_decision
+
+            record_stage15_decision(
+                run_dir, decision, decision_md, human_edited=True
+            )
+        except Exception:
+            logger.warning(
+                "Failed to record hypothesis tree decision (human gate)",
+                exc_info=True,
+            )
     logger.info("Finalized human-gated research decision: %s", decision)
     return StageResult(
         stage=Stage.RESEARCH_DECISION,
@@ -702,7 +707,7 @@ def execute_stage(
     result: StageResult | None = None
     if stage is Stage.RESEARCH_DECISION and _gate_proposal_sentinel_exists(stage_dir):
         try:
-            result = _finalize_research_decision_from_artifact(stage_dir, run_dir)
+            result = _finalize_research_decision_from_artifact(stage_dir, run_dir, config)
             skip_gate_check = True
         except _GateProposalStale as exc:
             logger.warning("%s; re-running Stage 15 normally", exc)

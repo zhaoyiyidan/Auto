@@ -75,6 +75,16 @@ def _blocked(stage: Stage) -> StageResult:
     )
 
 
+def _rejected(stage: Stage) -> StageResult:
+    return StageResult(
+        stage=stage,
+        status=StageStatus.REJECTED,
+        artifacts=("review.md",),
+        decision="reject",
+        error="reviewer rejected",
+    )
+
+
 def _with_hitl_required_stages(
     config: RCConfig, stages: tuple[int, ...]
 ) -> RCConfig:
@@ -172,6 +182,78 @@ def test_execute_pipeline_stops_on_failed_stage(
     assert len(results) == int(fail_stage)
 
 
+def test_terminal_failure_notifies_on_critical_stage(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    fail_stage = Stage.SEARCH_STRATEGY
+    calls: list[dict[str, Any]] = []
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        if stage == fail_stage:
+            return _failed(stage, "forced failure")
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    monkeypatch.setattr(
+        rc_runner,
+        "notify_terminal_failure",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-terminal-fail",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["config"] is rc_config
+    assert calls[0]["run_id"] == "run-terminal-fail"
+    assert calls[0]["stage_name"] == fail_stage.name
+    assert calls[0]["stage_num"] == int(fail_stage)
+    assert calls[0]["error"] == "forced failure"
+    assert calls[0]["run_dir"] == run_dir
+
+
+def test_noncritical_skip_does_not_notify(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    fail_stage = Stage.KNOWLEDGE_ARCHIVE
+    calls: list[dict[str, Any]] = []
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        if stage == fail_stage:
+            return _failed(stage, "archive failed")
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    monkeypatch.setattr(
+        rc_runner,
+        "notify_terminal_failure",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    results = rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-noncritical-skip",
+        config=rc_config,
+        adapters=adapters,
+        skip_noncritical=True,
+    )
+
+    assert calls == []
+    assert results[-1].stage == Stage.CITATION_VERIFY
+
+
 def test_execute_pipeline_stops_on_paused_stage(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,
@@ -201,6 +283,70 @@ def test_execute_pipeline_stops_on_paused_stage(
     summary = json.loads((run_dir / "pipeline_summary.json").read_text(encoding="utf-8"))
     assert summary["stages_paused"] == 1
     assert summary["final_status"] == "paused"
+
+
+def test_paused_stage_does_not_notify(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    pause_stage = Stage.SEARCH_STRATEGY
+    calls: list[dict[str, Any]] = []
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        if stage == pause_stage:
+            return _paused(stage, "waiting for operator")
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    monkeypatch.setattr(
+        rc_runner,
+        "notify_terminal_failure",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-paused-no-notify",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    assert calls == []
+
+
+def test_rejected_stage_does_not_notify(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    rejected_stage = Stage.LITERATURE_SCREEN
+    calls: list[dict[str, Any]] = []
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        if stage == rejected_stage:
+            return _rejected(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    monkeypatch.setattr(
+        rc_runner,
+        "notify_terminal_failure",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-rejected-no-notify",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    assert calls == []
 
 
 def test_execute_pipeline_stops_on_gate_when_stop_on_gate_enabled(
@@ -688,6 +834,49 @@ def test_experiment_loop_stage11_invalid_rejumps_to_10(
     assert (run_dir / "stage-10_v1").is_dir()
 
 
+def test_experiment_loop_recoverable_failure_does_not_notify(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    invalid_once = True
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        _touch_stage_dir(run_dir, stage)
+        nonlocal invalid_once
+        if stage == Stage.MANIFEST_VALIDATE_AND_PREPARE and invalid_once:
+            invalid_once = False
+            return StageResult(
+                stage=stage,
+                status=StageStatus.FAILED,
+                artifacts=("manifest_validation.json",),
+                decision="fix_code",
+                error="invalid manifest",
+            )
+        if stage == Stage.EXPERIMENT_ROUTE_DECISION:
+            return _route_result(stage, "continue")
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    monkeypatch.setattr(
+        rc_runner,
+        "notify_terminal_failure",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-stage11-fix-no-notify",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    assert calls == []
+
+
 def test_experiment_loop_route_fix_code_rejumps_to_10(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,
@@ -862,6 +1051,75 @@ def test_experiment_loop_abort_stops(
         adapters=adapters,
     )
     assert Stage.RESULT_ANALYSIS not in seen
+
+
+def test_experiment_loop_abort_does_not_notify(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        _touch_stage_dir(run_dir, stage)
+        if stage == Stage.EXPERIMENT_ROUTE_DECISION:
+            return _route_result(stage, "abort")
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    monkeypatch.setattr(
+        rc_runner,
+        "notify_terminal_failure",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-abort-no-notify",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    assert calls == []
+
+
+def test_experiment_loop_terminal_stop_notifies(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        _touch_stage_dir(run_dir, stage)
+        if stage == Stage.HARNESS_SUBMIT_AND_COLLECT:
+            return _failed(stage, "harness crashed")
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    monkeypatch.setattr(
+        rc_runner,
+        "notify_terminal_failure",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-loop-terminal-fail",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["run_id"] == "run-loop-terminal-fail"
+    assert calls[0]["stage_name"] == Stage.HARNESS_SUBMIT_AND_COLLECT.name
+    assert calls[0]["stage_num"] == int(Stage.HARNESS_SUBMIT_AND_COLLECT)
+    assert calls[0]["error"] == "harness crashed"
+    assert calls[0]["run_dir"] == run_dir
 
 
 def test_experiment_loop_history_persisted(

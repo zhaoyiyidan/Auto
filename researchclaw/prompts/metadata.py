@@ -384,6 +384,11 @@ SUB_PROMPT_METADATA: dict[str, dict[str, Any]] = {
         "output_schema": "JSON object mapping cite_key to relevance score.",
         "json_mode": True,
     },
+    "framework_diagram_prompt": {
+        "purpose": "Generate a text-to-image prompt for a paper methodology framework diagram.",
+        "required_variables": ["title", "topic", "method_section"],
+        "token_budget": 1024,
+    },
     "topic_quality_eval": {
         "purpose": "Non-blocking topic quality scoring for problem decomposition.",
         "required_variables": ["domain_label", "topic"],

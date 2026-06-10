@@ -1247,6 +1247,31 @@ _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
         ),
         "json_mode": True,
     },
+    "framework_diagram_prompt": {
+        "system": (
+            "You are an expert academic figure designer. Generate a detailed text-to-image "
+            "prompt for creating a methodology framework/architecture overview diagram.\n\n"
+            "Requirements:\n"
+            "- Academic style: clean, professional, suitable for a top-tier ML conference paper\n"
+            "- Color palette: sophisticated and harmonious (suggest specific hex colors, "
+            "prefer muted blues #4477AA, teals #44AA99, warm accents #CCBB44, soft purples #AA3377)\n"
+            "- Layout: left-to-right or top-to-bottom data flow, with clearly labeled components\n"
+            "- Components: boxes/modules with rounded corners, directional arrows, clear labels\n"
+            "- Information density: high but not cluttered — each box should have a short label\n"
+            "- Text on figure: minimal, only component names and key annotations\n"
+            "- Background: white or very light grey\n"
+            "- Style: vector-art look, flat design with subtle shadows, NO photorealism\n\n"
+            "Output ONLY the prompt text (no markdown headers, no explanations). "
+            "The prompt should be 150-300 words, highly specific and actionable."
+        ),
+        "user": (
+            "Paper title: {title}\n"
+            "Research topic: {topic}\n\n"
+            "Method section excerpt:\n{method_section}\n\n"
+            "Generate a detailed text-to-image prompt for the methodology framework diagram."
+        ),
+        "max_tokens": 1024,
+    },
     "topic_quality_eval": {
         "system": (
             "You are a senior {domain_label} researcher evaluating research topic quality."

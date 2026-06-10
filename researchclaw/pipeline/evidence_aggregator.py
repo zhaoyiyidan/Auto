@@ -8,8 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from researchclaw.pipeline.hypothesis_store import (
+    HypothesisNode,
     TREE_DIRNAME,
     ValidationAttempt,
+    _atomic_write_json,
+    _utcnow_iso,
 )
 
 
@@ -44,6 +47,19 @@ class EvidenceAggregator:
             attempts.append(ValidationAttempt.from_dict(payload))
         return attempts
 
+    def _read_nodes(self) -> list[HypothesisNode]:
+        nodes: list[HypothesisNode] = []
+        nodes_dir = self.tree_dir / "nodes"
+        if not nodes_dir.exists():
+            return nodes
+        for path in sorted(nodes_dir.glob("*/node.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            nodes.append(HypothesisNode.from_dict(payload))
+        return nodes
+
     def select_best_attempts(
         self,
         *,
@@ -75,3 +91,48 @@ class EvidenceAggregator:
             if candidates:
                 winners[node_id] = candidates[0][1]
         return winners
+
+    def write_validation_summary(
+        self,
+        *,
+        metric_name: str,
+        direction: str,
+        generated_at: str | None = None,
+    ) -> dict[str, Any]:
+        generated_at = generated_at or _utcnow_iso()
+        winners = self.select_best_attempts(
+            metric_name=metric_name,
+            direction=direction,
+        )
+        nodes = self._read_nodes()
+        counts = {
+            "total": len(nodes),
+            "supported": 0,
+            "refuted": 0,
+            "inconclusive": 0,
+            "superseded": 0,
+        }
+        rows: list[dict[str, Any]] = []
+        for node in nodes:
+            if node.status in counts:
+                counts[node.status] += 1
+            best = winners.get(node.id)
+            rows.append(
+                {
+                    "node_id": node.id,
+                    "status": node.status,
+                    "statement": node.statement,
+                    "best_attempt_id": best.attempt_id if best else None,
+                    "decision": best.decision if best else None,
+                    "metrics": best.metrics if best else {},
+                }
+            )
+        summary = {
+            "generated": generated_at,
+            "counts": counts,
+            "nodes": rows,
+        }
+        output_dir = self.run_dir / "hypothesis_aggregate"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(output_dir / "validation_summary.json", summary)
+        return summary

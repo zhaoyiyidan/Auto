@@ -167,6 +167,9 @@ class HypothesisValidationCoordinator:
                 branch_run_dir=str(self._branch_run_dir(node.id, "attempt-001")),
                 created_at=created_at,
             )
+            from researchclaw.pipeline.hypothesis_branch import seed_branch_dir
+
+            seed_branch_dir(Path(attempt.branch_run_dir), self.run_dir, node)
             self.store.set_node_status(
                 node.id,
                 "validating",

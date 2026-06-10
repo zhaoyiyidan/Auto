@@ -348,3 +348,82 @@ def test_coordinator_resumes_queued_attempts_without_result_files(
         (node.id, "succeeded", "proceed")
     ]
     assert _node_payload(tmp_path, node.id)["status"] == "supported"
+
+
+def test_coordinator_enqueues_followup_attempts_for_extend_and_pivot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from researchclaw.pipeline.hypothesis_queue import DurableWorkQueue
+
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    hypotheses_md = """
+## H1: Extend hypothesis
+Statement: Extend source hypothesis.
+Prediction: Extend source prediction.
+Falsification: Extend source falsification.
+Rationale: Extend source rationale.
+
+## H2: Pivot hypothesis
+Statement: Pivot source hypothesis.
+Prediction: Pivot source prediction.
+Falsification: Pivot source falsification.
+Rationale: Pivot source rationale.
+"""
+    followups = {
+        "h-001": {
+            "statement": "Extended child hypothesis.",
+            "prediction": "Extended child prediction.",
+            "falsification": "Extended child falsification.",
+            "rationale": "Extended child rationale.",
+        },
+        "h-002": {
+            "statement": "Pivot sibling hypothesis.",
+            "prediction": "Pivot sibling prediction.",
+            "falsification": "Pivot sibling falsification.",
+            "rationale": "Pivot sibling rationale.",
+        },
+    }
+
+    def fake_validate_branch(
+        node: Any,
+        attempt: Any,
+        config: Any,
+        adapters: Any,
+    ) -> Any:
+        return SimpleNamespace(
+            decision="extend" if node.id == "h-001" else "pivot",
+            artifacts=("stage-15/decision.md",),
+            metrics={},
+            next_hypothesis=followups[node.id],
+        )
+
+    monkeypatch.setattr(
+        coordinator,
+        "validate_branch",
+        fake_validate_branch,
+        raising=False,
+    )
+
+    coordinator.split_and_validate_sequential(
+        hypotheses_md,
+        config=object(),
+        adapters=object(),
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+
+    items = DurableWorkQueue(tmp_path).read_items()
+    assert [(item.node_id, item.attempt_id) for item in items] == [
+        ("h-003", "h-003/attempt-001"),
+        ("h-004", "h-004/attempt-001"),
+    ]
+    assert [
+        Path(item.branch_run_dir).relative_to(tmp_path).as_posix()
+        for item in items
+    ] == [
+        "hypothesis_branches/h-003/attempt-001",
+        "hypothesis_branches/h-004/attempt-001",
+    ]
+    assert _node_payload(tmp_path, "h-003")["parent_id"] == "h-001"
+    assert _node_payload(tmp_path, "h-004")["parent_id"] is None

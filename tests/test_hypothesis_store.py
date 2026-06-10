@@ -402,3 +402,27 @@ def test_hypothesis_store_rebuild_tree_from_events_jsonl(tmp_path: Path) -> None
     assert json.loads(
         (tmp_path / "hypothesis_tree" / "tree.json").read_text(encoding="utf-8")
     ) == rebuilt
+
+
+def test_hypothesis_store_reads_legacy_tree_and_current_node(
+    tmp_path: Path,
+) -> None:
+    from researchclaw.pipeline import hypothesis_tree as legacy_tree
+
+    HypothesisStore = _hypothesis_store_cls()
+    legacy_hypothesis = "# Hypotheses\nH1: legacy hypothesis remains readable."
+    legacy_tree.finalize_after_stage8(tmp_path, legacy_hypothesis)
+    legacy_tree.record_stage15_decision(
+        tmp_path,
+        "proceed",
+        "## Decision\nPROCEED",
+        human_edited=False,
+    )
+
+    store = HypothesisStore(tmp_path)
+    nodes = {node.id: node for node in store.list_nodes()}
+
+    assert store.get_current_node_id() == "h-1"
+    assert nodes["h-1"].id == "h-1"
+    assert nodes["h-1"].statement == legacy_hypothesis
+    assert nodes["h-1"].status == "supported"

@@ -255,3 +255,57 @@ def test_hypothesis_store_add_and_update_attempt_persist_under_node(
         "attempt_queued",
         "attempt_finished",
     ]
+
+
+def test_hypothesis_store_set_node_status_enforces_state_machine(
+    tmp_path: Path,
+) -> None:
+    HypothesisStore = _hypothesis_store_cls()
+    store = HypothesisStore(tmp_path)
+    node = store.create_node(
+        statement="Treatment improves accuracy.",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+
+    with pytest.raises(ValueError, match="Illegal hypothesis node transition"):
+        store.set_node_status(
+            node.id,
+            "supported",
+            created_at="2026-01-01T00:01:00+00:00",
+        )
+
+    validating = store.set_node_status(
+        node.id,
+        "validating",
+        created_at="2026-01-01T00:02:00+00:00",
+    )
+    supported = store.set_node_status(
+        node.id,
+        "supported",
+        created_at="2026-01-01T00:03:00+00:00",
+    )
+
+    node_payload = json.loads(
+        (
+            tmp_path
+            / "hypothesis_tree"
+            / "nodes"
+            / node.id
+            / "node.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert validating.status == "validating"
+    assert supported.status == "supported"
+    assert node_payload["status"] == "supported"
+    assert [event["event_type"] for event in _events(tmp_path)] == [
+        "node_proposed",
+        "node_status_changed",
+        "node_verdict",
+    ]
+
+    with pytest.raises(ValueError, match="Illegal hypothesis node transition"):
+        store.set_node_status(
+            node.id,
+            "validating",
+            created_at="2026-01-01T00:04:00+00:00",
+        )

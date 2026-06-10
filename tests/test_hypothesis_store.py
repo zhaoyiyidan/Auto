@@ -13,6 +13,14 @@ def _hypothesis_node_cls() -> Any:
     return HypothesisNode
 
 
+def _validation_attempt_cls() -> Any:
+    try:
+        from researchclaw.pipeline.hypothesis_store import ValidationAttempt
+    except ImportError:
+        pytest.fail("ValidationAttempt is not implemented")
+    return ValidationAttempt
+
+
 def test_hypothesis_node_hash_is_stable_and_content_based() -> None:
     HypothesisNode = _hypothesis_node_cls()
     node = HypothesisNode(
@@ -83,3 +91,52 @@ def test_hypothesis_node_round_trips_through_dict() -> None:
         "created_at": "2026-01-01T00:00:00+00:00",
         "status": "proposed",
     }
+
+
+def test_validation_attempt_defaults_and_round_trip() -> None:
+    ValidationAttempt = _validation_attempt_cls()
+    attempt = ValidationAttempt(
+        attempt_id="h-001/attempt-001",
+        node_id="h-001",
+        branch_run_dir="/tmp/run/hypothesis_branches/h-001/attempt-001",
+        workspace_path="/tmp/workspaces/h-001-attempt-001",
+        agent_session_name="researchclaw-h-001-attempt-001",
+        stage_status={9: "done", 10: "running"},
+        metrics={"score": 0.91},
+        artifacts=["stage-15/decision.md"],
+        decision="proceed",
+        started_at="2026-01-01T00:00:00+00:00",
+        finished_at="2026-01-01T00:10:00+00:00",
+    )
+
+    payload = attempt.to_dict()
+    loaded = ValidationAttempt.from_dict(payload)
+
+    assert loaded == attempt
+    assert payload == {
+        "attempt_id": "h-001/attempt-001",
+        "node_id": "h-001",
+        "status": "queued",
+        "branch_run_dir": "/tmp/run/hypothesis_branches/h-001/attempt-001",
+        "workspace_path": "/tmp/workspaces/h-001-attempt-001",
+        "agent_session_name": "researchclaw-h-001-attempt-001",
+        "stage_status": {"9": "done", "10": "running"},
+        "metrics": {"score": 0.91},
+        "artifacts": ["stage-15/decision.md"],
+        "decision": "proceed",
+        "error": None,
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "finished_at": "2026-01-01T00:10:00+00:00",
+    }
+
+
+def test_validation_attempt_rejects_invalid_status() -> None:
+    ValidationAttempt = _validation_attempt_cls()
+
+    with pytest.raises(ValueError, match="Invalid validation attempt status"):
+        ValidationAttempt(
+            attempt_id="h-001/attempt-001",
+            node_id="h-001",
+            status="complete",
+            branch_run_dir="/tmp/run/hypothesis_branches/h-001/attempt-001",
+        )

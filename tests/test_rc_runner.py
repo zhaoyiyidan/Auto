@@ -792,6 +792,46 @@ def test_default_hypothesis_validation_skips_legacy_decision_recursion(
     assert not (run_dir / "decision_history.json").exists()
 
 
+def test_default_hypothesis_validation_skips_cycle_archive_wiring(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    from researchclaw.pipeline import hypothesis_cycle_archive as cycle_archive
+
+    calls: list[str | None] = []
+
+    def archive(run_dir: Path, *, decision: str | None = None) -> Path | None:
+        _ = run_dir
+        calls.append(decision)
+        return None
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        return StageResult(
+            stage=stage,
+            status=StageStatus.DONE,
+            artifacts=("decision.md",),
+            decision="proceed",
+        )
+
+    monkeypatch.setattr(cycle_archive, "archive_current_hypothesis_cycle", archive)
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-default-no-cycle-archive",
+        config=rc_config,
+        adapters=adapters,
+        from_stage=Stage.RESEARCH_DECISION,
+        to_stage=Stage.RESEARCH_DECISION,
+    )
+
+    assert rc_config.hypothesis_validation.enabled is True
+    assert calls == []
+
+
 def test_experiment_loop_continue_runs_10_11_12_13_then_14(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,

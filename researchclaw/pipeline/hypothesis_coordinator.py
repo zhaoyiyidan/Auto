@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -210,6 +211,50 @@ class HypothesisValidationCoordinator:
             status="failed",
             error=str(error),
             finished_at=created_at,
+        )
+
+    def _attempt_result_already_reduced(self, attempt_id: str) -> bool:
+        for event in self.store._read_events():
+            event_type = event.get("event_type")
+            data = event.get("data") if isinstance(event.get("data"), dict) else {}
+            if (
+                event_type in {"attempt_finished", "node_verdict"}
+                and data.get("attempt_id") == attempt_id
+            ):
+                return True
+        return False
+
+    def reduce_attempt_result(
+        self,
+        result_path: Path,
+        *,
+        created_at: str | None = None,
+    ) -> ValidationAttempt:
+        payload = json.loads(Path(result_path).read_text(encoding="utf-8"))
+        attempt_id = str(payload.get("attempt_id") or "")
+        node_id = str(payload.get("node_id") or "")
+        if self._attempt_result_already_reduced(attempt_id):
+            return self.store._read_attempt(attempt_id)
+
+        node = self.store._read_node(node_id)
+        attempt = self.store._read_attempt(attempt_id)
+        if node.status == "proposed":
+            self.store.set_node_status(
+                node.id,
+                "validating",
+                created_at=created_at,
+            )
+        if str(payload.get("status") or "").lower() == "succeeded":
+            return self._finish_attempt_success(
+                node=node,
+                attempt=attempt,
+                result=payload,
+                created_at=created_at,
+            )
+        return self._finish_attempt_failure(
+            attempt=attempt,
+            error=RuntimeError(str(payload.get("error") or "attempt failed")),
+            created_at=created_at,
         )
 
     def split_and_validate_sequential(

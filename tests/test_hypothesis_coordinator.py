@@ -427,3 +427,63 @@ Rationale: Pivot source rationale.
     ]
     assert _node_payload(tmp_path, "h-003")["parent_id"] == "h-001"
     assert _node_payload(tmp_path, "h-004")["parent_id"] is None
+
+
+def test_coordinator_reduces_attempt_result_idempotently(
+    tmp_path: Path,
+) -> None:
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    node = coordinator.store.create_node(
+        statement="Treatment improves accuracy.",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    attempt = coordinator.store.add_attempt(
+        node_id=node.id,
+        branch_run_dir=str(
+            tmp_path / "hypothesis_branches" / node.id / "attempt-001"
+        ),
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+    coordinator.store.set_node_status(
+        node.id,
+        "validating",
+        created_at="2026-01-01T00:02:00+00:00",
+    )
+    result_path = Path(attempt.branch_run_dir) / "attempt_result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "attempt_id": attempt.attempt_id,
+                "node_id": node.id,
+                "status": "succeeded",
+                "decision": "proceed",
+                "artifacts": ["stage-15/decision.md"],
+                "error": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    first = coordinator.reduce_attempt_result(
+        result_path,
+        created_at="2026-01-01T00:03:00+00:00",
+    )
+    second = coordinator.reduce_attempt_result(
+        result_path,
+        created_at="2026-01-01T00:04:00+00:00",
+    )
+
+    assert first == second
+    events = _events(tmp_path)
+    assert [
+        event["event_type"]
+        for event in events
+        if event["event_type"] == "attempt_finished"
+    ] == ["attempt_finished"]
+    assert [
+        event["data"]["attempt_id"]
+        for event in events
+        if event["event_type"] == "node_verdict"
+    ] == [attempt.attempt_id]

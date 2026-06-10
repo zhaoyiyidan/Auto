@@ -31,6 +31,14 @@ logger = logging.getLogger(__name__)
 # Domain identifiers accepted by ``PromptManager`` / ``_load_bank``.
 SUPPORTED_DOMAINS = ("ml", "hep_ph", "biology_metabolic")
 
+PRECEDENCE_DOC = (
+    "Prompt override precedence, lowest to highest: "
+    "domain bank < YAML custom_file < extra_prompts < evolution_overlay. "
+    "Domain bank entries are loaded first, YAML custom_file updates known "
+    "stage entries, prompts.extra_prompts appends per-stage guidance, and "
+    "evolution_overlay is appended last at render time."
+)
+
 
 # ---------------------------------------------------------------------------
 # Template rendering
@@ -250,8 +258,6 @@ class PromptManager:
             strict=strict,
             required=required,
         )
-        if evolution_overlay:
-            user_text = f"{user_text}\n\n{evolution_overlay}"
         extra = self._extras.get(stage, "")
         if extra:
             user_text = (
@@ -260,6 +266,8 @@ class PromptManager:
                 "_(from prompts.extra_prompts in config.yaml)_\n\n"
                 f"{extra}"
             )
+        if evolution_overlay:
+            user_text = f"{user_text}\n\n{evolution_overlay}"
         return RenderedPrompt(
             system=_render(
                 entry["system"],

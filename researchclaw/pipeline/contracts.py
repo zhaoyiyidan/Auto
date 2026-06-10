@@ -92,7 +92,7 @@ CONTRACTS: dict[Stage, StageContract] = {
     Stage.EXPERIMENT_TASK_SPEC: StageContract(
         stage=Stage.EXPERIMENT_TASK_SPEC,
         input_files=("hypotheses.md",),
-        output_files=("experiment_protocol.json", "task_spec.yaml"),
+        output_files=("experiment_protocol.json", "task_spec.yaml", "experiment_design_intent.md"),
         dod="Experiment protocol plus derived code-agent task spec with metric and scopes",
         error_code="E09_TASKSPEC_REJECT",
         max_retries=0,

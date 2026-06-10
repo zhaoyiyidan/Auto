@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import subprocess
 from typing import Any
 
 import pytest
@@ -40,6 +41,31 @@ def _write_stage14_candidate(
         encoding="utf-8",
     )
     (stage_dir / "analysis.md").write_text(analysis, encoding="utf-8")
+
+
+def _run_git(cwd: Path, *args: str) -> str:
+    try:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except FileNotFoundError:
+        pytest.skip("git is not available")
+    return completed.stdout.strip()
+
+
+def _init_git_repo(path: Path) -> None:
+    path.mkdir(parents=True)
+    _run_git(path, "init", "-q")
+    _run_git(path, "config", "user.email", "tests@example.com")
+    _run_git(path, "config", "user.name", "Tests")
+    (path / "README.md").write_text("base workspace\n", encoding="utf-8")
+    _run_git(path, "add", "README.md")
+    _run_git(path, "commit", "-q", "-m", "initial")
 
 
 def test_seed_branch_dir_links_shared_context_and_writes_single_hypothesis(
@@ -325,3 +351,50 @@ Rationale: Signal two.
         )
         assert attempt_result["status"] == "succeeded"
         assert attempt_result["decision"] == "proceed"
+
+
+def test_provision_workspace_creates_distinct_git_worktrees(
+    tmp_path: Path,
+) -> None:
+    try:
+        from researchclaw.pipeline.hypothesis_branch import provision_workspace
+        from researchclaw.pipeline.hypothesis_store import ValidationAttempt
+    except ImportError:
+        pytest.fail("provision_workspace dependencies are not implemented")
+
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    workspace_root = tmp_path / "worktrees"
+    attempt_one = ValidationAttempt(
+        attempt_id="h-001/attempt-001",
+        node_id="h-001",
+        branch_run_dir=str(tmp_path / "run" / "h-001" / "attempt-001"),
+    )
+    attempt_two = ValidationAttempt(
+        attempt_id="h-002/attempt-001",
+        node_id="h-002",
+        branch_run_dir=str(tmp_path / "run" / "h-002" / "attempt-001"),
+    )
+
+    provisioned_one = provision_workspace(
+        attempt_one,
+        source_workspace=repo,
+        workspace_root=workspace_root,
+    )
+    provisioned_two = provision_workspace(
+        attempt_two,
+        source_workspace=repo,
+        workspace_root=workspace_root,
+    )
+
+    path_one = Path(provisioned_one.workspace_path or "")
+    path_two = Path(provisioned_two.workspace_path or "")
+    assert path_one == workspace_root / "h-001-attempt-001"
+    assert path_two == workspace_root / "h-002-attempt-001"
+    assert path_one != path_two
+    assert attempt_one.workspace_path is None
+    assert attempt_two.workspace_path is None
+    assert _run_git(path_one, "rev-parse", "--is-inside-work-tree") == "true"
+    assert _run_git(path_two, "rev-parse", "--is-inside-work-tree") == "true"
+    assert (path_one / "README.md").read_text(encoding="utf-8") == "base workspace\n"
+    assert (path_two / "README.md").read_text(encoding="utf-8") == "base workspace\n"

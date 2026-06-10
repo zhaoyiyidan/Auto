@@ -88,6 +88,7 @@ def validate_branch(
         adapters=adapters,
         from_stage=Stage.EXPERIMENT_TASK_SPEC,
         to_stage=Stage.RESEARCH_DECISION,
+        initialize_run_globals=False,
     )
     final_result = next(
         (

@@ -258,3 +258,55 @@ def test_evidence_aggregator_writes_registry_for_all_outcomes(
         json.loads(line)
         for line in registry_path.read_text(encoding="utf-8").splitlines()
     ] == expected_rows
+
+
+def test_evidence_aggregator_writes_paper_context_with_zero_supported_warning(
+    tmp_path: Path,
+) -> None:
+    from researchclaw.pipeline.hypothesis_store import HypothesisStore
+
+    EvidenceAggregator = _aggregator_cls()
+    store = HypothesisStore(tmp_path)
+    for index, status in enumerate(["refuted", "inconclusive"], start=1):
+        node = store.create_node(
+            statement=f"{status.title()} hypothesis.",
+            created_at=f"2026-01-01T00:00:0{index}+00:00",
+        )
+        attempt = store.add_attempt(
+            node_id=node.id,
+            branch_run_dir=str(tmp_path / "branches" / node.id / "attempt-001"),
+            created_at=f"2026-01-01T00:01:0{index}+00:00",
+        )
+        store.update_attempt(
+            attempt.attempt_id,
+            status="succeeded",
+            metrics={"score": 0.1 * index},
+            artifacts=["stage-15/decision.md"],
+            decision=status,
+            finished_at=f"2026-01-01T00:02:0{index}+00:00",
+        )
+        store.set_node_status(
+            node.id,
+            "validating",
+            created_at=f"2026-01-01T00:03:0{index}+00:00",
+        )
+        store.set_node_status(
+            node.id,
+            status,
+            created_at=f"2026-01-01T00:04:0{index}+00:00",
+        )
+
+    context = EvidenceAggregator(tmp_path).write_paper_context(
+        metric_name="score",
+        direction="maximize",
+        generated_at="2026-01-01T00:05:00+00:00",
+    )
+
+    assert "Quality warning: no supported hypotheses" in context
+    assert "refuted: 1" in context
+    assert "inconclusive: 1" in context
+    assert "Refuted hypothesis." in context
+    assert "Inconclusive hypothesis." in context
+    assert (
+        tmp_path / "hypothesis_aggregate" / "paper_context.md"
+    ).read_text(encoding="utf-8") == context

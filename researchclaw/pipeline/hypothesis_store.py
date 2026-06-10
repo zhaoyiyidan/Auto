@@ -53,6 +53,13 @@ NODE_STATUS_TRANSITIONS = {
 
 ATTEMPT_STATUSES = {"queued", "running", "succeeded", "failed", "abandoned"}
 
+LEGACY_NODE_STATUS_MAP = {
+    "active": "validating",
+    "inactive": "superseded",
+    "blocked": "superseded",
+    "completed": "supported",
+}
+
 
 def _hypothesis_hash(statement: str, prediction: str, falsification: str) -> str:
     normalized = "\n".join(
@@ -307,7 +314,54 @@ class HypothesisStore:
         path = self._node_dir(node_id) / "node.json"
         if not path.exists():
             raise ValueError(f"Unknown hypothesis node: {node_id}")
-        return HypothesisNode.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        return self._node_from_payload(
+            node_id,
+            json.loads(path.read_text(encoding="utf-8")),
+        )
+
+    def _node_statement_from_markdown(self, node_id: str) -> str:
+        hypothesis_path = self._node_dir(node_id) / "hypothesis.md"
+        if hypothesis_path.exists():
+            return hypothesis_path.read_text(encoding="utf-8")
+        return ""
+
+    def _node_source_from_tree(self, node_id: str) -> str:
+        tree_path = self.tree_dir / "tree.json"
+        if not tree_path.exists():
+            return "legacy"
+        try:
+            tree = json.loads(tree_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return "legacy"
+        edges = tree.get("edges") if isinstance(tree, dict) else None
+        if not isinstance(edges, list):
+            return "legacy"
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            if str(edge.get("target_id") or "") == node_id:
+                return str(edge.get("edge_type") or "legacy")
+        return "legacy"
+
+    def _node_from_payload(self, node_id: str, payload: Any) -> HypothesisNode:
+        data = payload if isinstance(payload, dict) else {}
+        status = str(data.get("status") or "proposed").strip().lower()
+        if status in NODE_STATUSES:
+            return HypothesisNode.from_dict(data)
+        mapped_status = LEGACY_NODE_STATUS_MAP.get(status, "proposed")
+        statement = (
+            self._node_statement_from_markdown(node_id)
+            or str(data.get("hypothesis_snippet") or "")
+            or str(data.get("label") or node_id)
+        )
+        return HypothesisNode(
+            id=str(data.get("id") or node_id),
+            statement=statement,
+            source=self._node_source_from_tree(node_id),
+            parent_id=data.get("parent_id"),
+            created_at=str(data.get("created_at") or ""),
+            status=mapped_status,
+        )
 
     def _read_events(self) -> list[dict[str, Any]]:
         if not self.events_path.exists():
@@ -355,6 +409,44 @@ class HypothesisStore:
             data=data,
             timestamp=timestamp or _utcnow_iso(),
         )
+
+    def get_node(self, node_id: str) -> HypothesisNode:
+        return self._read_node(node_id)
+
+    def list_nodes(self) -> list[HypothesisNode]:
+        if not self.nodes_dir.exists():
+            return []
+        nodes: list[HypothesisNode] = []
+        for node_dir in sorted(self.nodes_dir.iterdir(), key=lambda path: path.name):
+            if not node_dir.is_dir() or not _NODE_ID_RE.match(node_dir.name):
+                continue
+            node_path = node_dir / "node.json"
+            if not node_path.exists():
+                continue
+            nodes.append(self._read_node(node_dir.name))
+        return nodes
+
+    def list_attempts(self, node_id: str | None = None) -> list[ValidationAttempt]:
+        search_root = self.nodes_dir
+        if node_id is not None:
+            search_root = self._node_dir(node_id) / "attempts"
+        if not search_root.exists():
+            return []
+        attempts: list[ValidationAttempt] = []
+        for attempt_path in sorted(search_root.rglob("attempt-*.json")):
+            attempts.append(
+                ValidationAttempt.from_dict(
+                    json.loads(attempt_path.read_text(encoding="utf-8"))
+                )
+            )
+        return attempts
+
+    def get_current_node_id(self) -> str | None:
+        current_path = self.tree_dir / "current_node.txt"
+        if not current_path.exists():
+            return None
+        node_id = current_path.read_text(encoding="utf-8").strip()
+        return node_id or None
 
     def create_node(
         self,

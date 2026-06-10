@@ -1235,6 +1235,18 @@ _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
         ),
         "json_mode": False,
     },
+    "citation_relevance": {
+        "system": "You assess citation relevance. Return only valid JSON.",
+        "user": (
+            "Research topic: {topic}\n\n"
+            "Rate the relevance of each citation to the research topic "
+            "on a scale of 0.0 to 1.0.\n"
+            "Return ONLY a JSON object mapping cite_key to relevance score.\n"
+            "Example: {\"smith2020\": 0.9, \"jones2019\": 0.2}\n\n"
+            "Citations:\n{citations_text}"
+        ),
+        "json_mode": True,
+    },
     "topic_quality_eval": {
         "system": (
             "You are a senior {domain_label} researcher evaluating research topic quality."

@@ -378,6 +378,12 @@ SUB_PROMPT_METADATA: dict[str, dict[str, Any]] = {
         "output_schema": "JSON object with review dimensions, decision, issues, and summary.",
         "json_mode": False,
     },
+    "citation_relevance": {
+        "purpose": "Score bibliography citation relevance against the research topic.",
+        "required_variables": ["topic", "citations_text"],
+        "output_schema": "JSON object mapping cite_key to relevance score.",
+        "json_mode": True,
+    },
     "topic_quality_eval": {
         "purpose": "Non-blocking topic quality scoring for problem decomposition.",
         "required_variables": ["domain_label", "topic"],

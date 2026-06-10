@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import threading
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -487,3 +489,75 @@ def test_coordinator_reduces_attempt_result_idempotently(
         for event in events
         if event["event_type"] == "node_verdict"
     ] == [attempt.attempt_id]
+
+
+def test_coordinator_honors_concurrent_branch_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from researchclaw.pipeline.hypothesis_queue import DurableWorkQueue, WorkItem
+
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    queue = DurableWorkQueue(tmp_path)
+    for index in range(4):
+        node = coordinator.store.create_node(
+            statement=f"Hypothesis {index}",
+            created_at=f"2026-01-01T00:00:0{index}+00:00",
+        )
+        attempt = coordinator.store.add_attempt(
+            node_id=node.id,
+            branch_run_dir=str(
+                tmp_path / "hypothesis_branches" / node.id / "attempt-001"
+            ),
+            created_at=f"2026-01-01T00:01:0{index}+00:00",
+        )
+        queue.append(
+            WorkItem(
+                node_id=node.id,
+                attempt_id=attempt.attempt_id,
+                branch_run_dir=attempt.branch_run_dir,
+            ),
+            created_at=f"2026-01-01T00:02:0{index}+00:00",
+        )
+
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def fake_validate_branch(
+        node: Any,
+        attempt: Any,
+        config: Any,
+        adapters: Any,
+    ) -> Any:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.05)
+        with lock:
+            active -= 1
+        return SimpleNamespace(
+            decision="proceed",
+            artifacts=("stage-15/decision.md",),
+            metrics={},
+        )
+
+    monkeypatch.setattr(
+        coordinator,
+        "validate_branch",
+        fake_validate_branch,
+        raising=False,
+    )
+
+    completed = coordinator.run_pending_work_concurrent(
+        config=object(),
+        adapters=object(),
+        max_concurrent=2,
+        created_at="2026-01-01T00:03:00+00:00",
+    )
+
+    assert len(completed) == 4
+    assert max_active == 2
+    assert [attempt.status for attempt in completed] == ["succeeded"] * 4

@@ -342,9 +342,9 @@ security:
 #       min_quality_score: 0.7
 
 hypothesis_validation:
-  # optional, default: false. When true, Stage 8 hypotheses are validated
+  # optional, default: true. When true, Stage 8 hypotheses are validated
   # independently through branch-local Stage 9-15 attempts.
-  enabled: false
+  enabled: true
 
   # optional, default: 1. Branch concurrency is introduced after the sequential
   # coordinator path is stable.

@@ -18,6 +18,7 @@ from researchclaw.experiment.metric_resolution import resolve_experiment_metric
 from researchclaw.knowledge.base import write_stage_to_kb
 from researchclaw.notify.pipeline import notify_terminal_failure
 from researchclaw.pipeline.executor import StageResult, execute_stage
+from researchclaw.pipeline.hypothesis_mode import per_hypothesis_validation_enabled
 from researchclaw.pipeline.stages import (
     DECISION_ROLLBACK,
     EXPERIMENT_ROUTE_TARGETS,
@@ -865,6 +866,7 @@ def execute_pipeline(
             stage == Stage.RESEARCH_DECISION
             and result.status == StageStatus.DONE
             and result.decision in DECISION_ROLLBACK
+            and not per_hypothesis_validation_enabled(config)
         ):
             pivot_count = _read_pivot_count(run_dir)
             if pivot_count < MAX_DECISION_PIVOTS:

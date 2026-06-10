@@ -2956,12 +2956,19 @@ class TestGateProposalSentinel:
         legacy_run = tmp_path / "legacy"
         legacy_run.mkdir()
         seed_gate(legacy_run)
+        legacy_config = replace(
+            rc_config,
+            hypothesis_validation=replace(
+                rc_config.hypothesis_validation,
+                enabled=False,
+            ),
+        )
 
         rc_executor.execute_stage(
             Stage.RESEARCH_DECISION,
             run_dir=legacy_run,
             run_id="legacy-human-gate",
-            config=rc_config,
+            config=legacy_config,
             adapters=adapters,
         )
 

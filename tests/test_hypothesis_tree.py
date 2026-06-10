@@ -394,6 +394,7 @@ def _pipeline_config(tmp_path: Path) -> Any:
             "api_key": "inline",
         },
         "experiment": {},
+        "hypothesis_validation": {"enabled": False},
     }
     return RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
 

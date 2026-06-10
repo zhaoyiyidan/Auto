@@ -356,7 +356,7 @@ class ExperimentConfig:
 class HypothesisValidationConfig:
     """Per-hypothesis Stage 9-15 validation feature flag."""
 
-    enabled: bool = False
+    enabled: bool = True
     max_concurrent_branches: int = 1
     max_attempts_per_node: int = 1
     workspace_isolation: str = "shared"
@@ -985,7 +985,7 @@ def _parse_hypothesis_validation_config(
     if not data:
         return HypothesisValidationConfig()
     return HypothesisValidationConfig(
-        enabled=bool(data.get("enabled", False)),
+        enabled=bool(data.get("enabled", True)),
         max_concurrent_branches=_safe_int(data.get("max_concurrent_branches"), 1),
         max_attempts_per_node=_safe_int(data.get("max_attempts_per_node"), 1),
         workspace_isolation=str(data.get("workspace_isolation", "shared")),

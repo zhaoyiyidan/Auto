@@ -838,19 +838,6 @@ def execute_pipeline(
                         exc_info=True,
                     )
 
-        if stage == Stage.RESEARCH_DECISION and result.status == StageStatus.DONE:
-            try:
-                from researchclaw.pipeline.hypothesis_cycle_archive import (
-                    archive_current_hypothesis_cycle,
-                )
-
-                archive_current_hypothesis_cycle(run_dir, decision=result.decision)
-            except Exception:
-                logger.warning(
-                    "Hypothesis cycle archive failed (non-blocking)",
-                    exc_info=True,
-                )
-
         # ── Stop after to_stage if specified ──
         if to_stage is not None and stage == to_stage:
             logger.info("[%s] Reached --to-stage %s, stopping.", run_id, stage.name)

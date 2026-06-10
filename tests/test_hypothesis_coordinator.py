@@ -286,3 +286,65 @@ Rationale: Pivot source rationale.
         ("h-003", "h-003/attempt-001", "extend", "superseded"),
         ("h-004", "h-004/attempt-001", "pivot", "superseded"),
     ]
+
+
+def test_coordinator_resumes_queued_attempts_without_result_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from researchclaw.pipeline.hypothesis_queue import DurableWorkQueue, WorkItem
+
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    node = coordinator.store.create_node(
+        statement="Treatment improves accuracy.",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    attempt = coordinator.store.add_attempt(
+        node_id=node.id,
+        branch_run_dir=str(
+            tmp_path / "hypothesis_branches" / node.id / "attempt-001"
+        ),
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+    DurableWorkQueue(tmp_path).append(
+        WorkItem(
+            node_id=node.id,
+            attempt_id=attempt.attempt_id,
+            branch_run_dir=attempt.branch_run_dir,
+        ),
+        created_at="2026-01-01T00:02:00+00:00",
+    )
+    calls: list[tuple[str, str]] = []
+
+    def fake_validate_branch(
+        node: Any,
+        attempt: Any,
+        config: Any,
+        adapters: Any,
+    ) -> Any:
+        calls.append((node.id, attempt.attempt_id))
+        return SimpleNamespace(
+            decision="proceed",
+            artifacts=("stage-15/decision.md",),
+            metrics={"score": 0.9},
+        )
+
+    monkeypatch.setattr(
+        coordinator,
+        "validate_branch",
+        fake_validate_branch,
+        raising=False,
+    )
+
+    resumed = coordinator.resume_pending_work(
+        config=object(),
+        adapters=object(),
+        created_at="2026-01-01T00:03:00+00:00",
+    )
+
+    assert calls == [(node.id, attempt.attempt_id)]
+    assert [(item.node_id, item.status, item.decision) for item in resumed] == [
+        (node.id, "succeeded", "proceed")
+    ]
+    assert _node_payload(tmp_path, node.id)["status"] == "supported"

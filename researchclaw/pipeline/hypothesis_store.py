@@ -22,6 +22,8 @@ NODE_STATUSES = {
     "superseded",
 }
 
+ATTEMPT_STATUSES = {"queued", "running", "succeeded", "failed", "abandoned"}
+
 
 def _hypothesis_hash(statement: str, prediction: str, falsification: str) -> str:
     normalized = "\n".join(
@@ -106,4 +108,84 @@ class HypothesisNode:
             created_at=data.get("created_at") or "",
             hypothesis_hash=data.get("hypothesis_hash") or "",
             status=data.get("status") or "proposed",
+        )
+
+
+@dataclass(frozen=True)
+class ValidationAttempt:
+    attempt_id: str
+    node_id: str
+    status: str = "queued"
+    branch_run_dir: str = ""
+    workspace_path: str | None = None
+    agent_session_name: str | None = None
+    stage_status: dict[int, str] = field(default_factory=dict)
+    metrics: dict[str, Any] = field(default_factory=dict)
+    artifacts: list[str] = field(default_factory=list)
+    decision: str | None = None
+    error: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+
+    def __post_init__(self) -> None:
+        status = str(self.status or "queued").strip().lower()
+        if status not in ATTEMPT_STATUSES:
+            raise ValueError(f"Invalid validation attempt status: {status}")
+        stage_status = {
+            int(stage): str(value)
+            for stage, value in dict(self.stage_status or {}).items()
+        }
+        object.__setattr__(self, "attempt_id", str(self.attempt_id or "").strip())
+        object.__setattr__(self, "node_id", str(self.node_id or "").strip())
+        object.__setattr__(self, "status", status)
+        object.__setattr__(
+            self,
+            "branch_run_dir",
+            str(self.branch_run_dir or "").strip(),
+        )
+        object.__setattr__(self, "stage_status", stage_status)
+        object.__setattr__(self, "metrics", dict(self.metrics or {}))
+        object.__setattr__(
+            self,
+            "artifacts",
+            [str(artifact) for artifact in list(self.artifacts or [])],
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "attempt_id": self.attempt_id,
+            "node_id": self.node_id,
+            "status": self.status,
+            "branch_run_dir": self.branch_run_dir,
+            "workspace_path": self.workspace_path,
+            "agent_session_name": self.agent_session_name,
+            "stage_status": {
+                str(stage): status
+                for stage, status in sorted(self.stage_status.items())
+            },
+            "metrics": self.metrics,
+            "artifacts": self.artifacts,
+            "decision": self.decision,
+            "error": self.error,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> ValidationAttempt:
+        data = data if isinstance(data, dict) else {}
+        return cls(
+            attempt_id=data.get("attempt_id") or "",
+            node_id=data.get("node_id") or "",
+            status=data.get("status") or "queued",
+            branch_run_dir=data.get("branch_run_dir") or "",
+            workspace_path=data.get("workspace_path"),
+            agent_session_name=data.get("agent_session_name"),
+            stage_status=data.get("stage_status") or {},
+            metrics=data.get("metrics") or {},
+            artifacts=data.get("artifacts") or [],
+            decision=data.get("decision"),
+            error=data.get("error"),
+            started_at=data.get("started_at"),
+            finished_at=data.get("finished_at"),
         )

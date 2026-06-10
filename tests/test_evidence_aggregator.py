@@ -310,3 +310,64 @@ def test_evidence_aggregator_writes_paper_context_with_zero_supported_warning(
     assert (
         tmp_path / "hypothesis_aggregate" / "paper_context.md"
     ).read_text(encoding="utf-8") == context
+
+
+def test_evidence_aggregator_write_all_is_idempotent_and_overwrites_atomically(
+    tmp_path: Path,
+) -> None:
+    from researchclaw.pipeline.hypothesis_store import HypothesisStore
+
+    EvidenceAggregator = _aggregator_cls()
+    store = HypothesisStore(tmp_path)
+    node = store.create_node(
+        statement="Supported hypothesis.",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    attempt = store.add_attempt(
+        node_id=node.id,
+        branch_run_dir=str(tmp_path / "branches" / node.id / "attempt-001"),
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+    store.update_attempt(
+        attempt.attempt_id,
+        status="succeeded",
+        metrics={"score": 0.91},
+        artifacts=["stage-15/decision.md"],
+        decision="proceed",
+        finished_at="2026-01-01T00:02:00+00:00",
+    )
+    store.set_node_status(
+        node.id,
+        "validating",
+        created_at="2026-01-01T00:03:00+00:00",
+    )
+    store.set_node_status(
+        node.id,
+        "supported",
+        created_at="2026-01-01T00:04:00+00:00",
+    )
+
+    first = EvidenceAggregator(tmp_path).write_all(
+        metric_name="score",
+        direction="maximize",
+        generated_at="2026-01-01T00:05:00+00:00",
+    )
+    aggregate_dir = tmp_path / "hypothesis_aggregate"
+    (aggregate_dir / "validation_summary.json").write_text(
+        "{not-json",
+        encoding="utf-8",
+    )
+
+    second = EvidenceAggregator(tmp_path).write_all(
+        metric_name="score",
+        direction="maximize",
+        generated_at="2026-01-01T00:05:00+00:00",
+    )
+
+    assert second == first
+    assert json.loads(
+        (aggregate_dir / "validation_summary.json").read_text(encoding="utf-8")
+    ) == first["validation_summary"]
+    assert (aggregate_dir / "evidence_registry.jsonl").is_file()
+    assert (aggregate_dir / "paper_context.md").is_file()
+    assert not list(aggregate_dir.glob("*.tmp"))

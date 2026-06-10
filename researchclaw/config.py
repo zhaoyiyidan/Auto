@@ -157,7 +157,7 @@ class NotificationsConfig:
     channel: str = "none"
     target: str = ""
     on_stage_start: bool = False
-    on_stage_fail: bool = False
+    on_stage_fail: bool = True
     on_gate_required: bool = True
     lark: LarkNotifyConfig = field(default_factory=LarkNotifyConfig)
 
@@ -718,7 +718,7 @@ class RCConfig:
                 channel=notifications["channel"],
                 target=notifications.get("target", ""),
                 on_stage_start=bool(notifications.get("on_stage_start", False)),
-                on_stage_fail=bool(notifications.get("on_stage_fail", False)),
+                on_stage_fail=bool(notifications.get("on_stage_fail", True)),
                 on_gate_required=bool(notifications.get("on_gate_required", True)),
                 lark=_parse_lark_config(notifications.get("lark") or {}),
             ),

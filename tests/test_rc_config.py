@@ -209,6 +209,7 @@ def test_rcconfig_from_dict_happy_path(tmp_path: Path):
     assert config.project.name == "demo"
     assert config.research.domains == ("ml", "agents")
     assert config.llm.fallback_models == ("gpt-4o-mini", "gpt-4o")
+    assert config.notifications.on_stage_fail is True
 
 
 def test_rcconfig_from_dict_parses_llm_wire_api(tmp_path: Path):

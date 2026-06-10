@@ -57,6 +57,9 @@ notifications:
   # optional, default: false. Used only when openclaw_bridge.use_message is true.
   on_stage_start: false
 
+  # optional, default: true. Sends terminal pipeline failure alerts.
+  on_stage_fail: true
+
   # optional, default: true. Used only when openclaw_bridge.use_message is true.
   on_gate_required: true
 

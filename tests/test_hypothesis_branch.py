@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 from typing import Any
@@ -398,3 +399,39 @@ def test_provision_workspace_creates_distinct_git_worktrees(
     assert _run_git(path_two, "rev-parse", "--is-inside-work-tree") == "true"
     assert (path_one / "README.md").read_text(encoding="utf-8") == "base workspace\n"
     assert (path_two / "README.md").read_text(encoding="utf-8") == "base workspace\n"
+
+
+def test_release_workspace_removes_terminal_worktree_idempotently(
+    tmp_path: Path,
+) -> None:
+    try:
+        from researchclaw.pipeline.hypothesis_branch import (
+            provision_workspace,
+            release_workspace,
+        )
+        from researchclaw.pipeline.hypothesis_store import ValidationAttempt
+    except ImportError:
+        pytest.fail("release_workspace dependencies are not implemented")
+
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    provisioned = provision_workspace(
+        ValidationAttempt(
+            attempt_id="h-001/attempt-001",
+            node_id="h-001",
+            branch_run_dir=str(tmp_path / "run" / "h-001" / "attempt-001"),
+        ),
+        source_workspace=repo,
+        workspace_root=tmp_path / "worktrees",
+    )
+    workspace_path = Path(provisioned.workspace_path or "")
+    running = replace(provisioned, status="running")
+    succeeded = replace(provisioned, status="succeeded")
+
+    release_workspace(running, source_workspace=repo)
+    assert workspace_path.exists()
+
+    release_workspace(succeeded, source_workspace=repo)
+    assert not workspace_path.exists()
+    release_workspace(succeeded, source_workspace=repo)
+    assert not workspace_path.exists()

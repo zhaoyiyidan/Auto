@@ -273,6 +273,16 @@ SUB_PROMPT_METADATA: dict[str, dict[str, Any]] = {
             "bundle_json",
         ],
     },
+    "hypothesis_judge": {
+        "purpose": "Judge a candidate Stage 8 hypothesis set and return a JSON verdict.",
+        "required_variables": ["topic", "synthesis", "candidate_claim"],
+        "output_schema": "JSON object with verdict, criticisms, fatal_flaws, confidence.",
+        "json_mode": True,
+    },
+    "hypothesis_synthesizer": {
+        "purpose": "Synthesize accepted debate claims into the final hypotheses document.",
+        "required_variables": ["topic", "synthesis", "claims_text"],
+    },
     "hypothesis_synthesize": {
         "purpose": "Merge multiple hypothesis debate perspectives.",
         "required_variables": ["perspectives"],

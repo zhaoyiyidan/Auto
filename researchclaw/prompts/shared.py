@@ -910,6 +910,50 @@ _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
             "```\n"
         ),
     },
+    "hypothesis_judge": {
+        "system": (
+            "You are a critical scientific judge. Your only task is to identify "
+            "problems in a candidate hypothesis set. Do not rewrite the claim and "
+            "do not propose fixes. Return only JSON."
+        ),
+        "user": (
+            "Evaluate the candidate hypothesis set for falsifiability, novelty, "
+            "measurable predictions, feasibility, baseline coverage, and alignment "
+            "with the synthesis.\n\n"
+            "## Research Topic\n{topic}\n\n"
+            "## Synthesis\n{synthesis}\n\n"
+            "## Candidate Claim\n{candidate_claim}\n\n"
+            "Return exactly this JSON shape:\n"
+            "{\n"
+            '  "verdict": "pass" | "fail",\n'
+            '  "criticisms": ["problem 1", "problem 2"],\n'
+            '  "fatal_flaws": ["fatal flaw if any"],\n'
+            '  "confidence": 0.0\n'
+            "}\n"
+            "Use verdict pass only if no serious issue remains. Criticisms must "
+            "state problems only, not suggestions or rewrites."
+        ),
+        "json_mode": True,
+    },
+    "hypothesis_synthesizer": {
+        "system": (
+            "You are a senior research director producing the final Stage 8 "
+            "hypotheses. Output only the hypotheses document."
+        ),
+        "user": (
+            "Synthesize the candidate sets into a final clean hypotheses.md file.\n\n"
+            "Hard output rules:\n"
+            "- Do not mention agent names, perspectives, debate rounds, judges, "
+            "criticisms, verdicts, sessions, forks, or process metadata.\n"
+            "- Do not include provenance labels such as Candidate Set.\n"
+            "- Produce 2-4 final hypotheses.\n"
+            "- For each hypothesis include: Hypothesis Statement, Rationale, "
+            "Measurable Prediction, Failure Condition, Required Baselines.\n\n"
+            "## Research Topic\n{topic}\n\n"
+            "## Synthesis\n{synthesis}\n\n"
+            "## Candidate Hypothesis Material\n{claims_text}"
+        ),
+    },
     "hypothesis_synthesize": {
         "system": (
             "You are a senior research director synthesizing multiple perspectives "

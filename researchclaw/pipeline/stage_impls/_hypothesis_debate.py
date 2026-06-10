@@ -25,17 +25,28 @@ def run_acp_debate(
     config: RCConfig,
     llm: LLMClient,
     prompts: PromptManager,
+    *,
+    research_context: str | None = None,
+    extension_context: str | None = None,
 ) -> str:
     """Run ACP-forked claim/judge/revise debate and return clean hypotheses."""
     if not isinstance(llm, ACPClient):
         raise RuntimeError("ACP debate requires ACPClient")
 
-    synthesis = _read_prior_artifact(run_dir, "synthesis.md") or ""
+    synthesis = (
+        research_context
+        if research_context is not None
+        else (_read_prior_artifact(run_dir, "synthesis.md") or "")
+    )
     # EXTEND context is a ONE-TIME round-1 seed, not part of synthesis. Keeping
     # it separate means it is injected into the round-1 claim's
     # {extension_context} slot only; later rounds rely on prior_claim + judge
     # criticisms, and the judge / final synthesizer see the clean synthesis.
-    extension_context = _read_extension_context(run_dir)
+    extension_context = (
+        extension_context
+        if extension_context is not None
+        else _read_extension_context(run_dir)
+    )
     roles = prompts.debate_roles_hypothesis()
     if not roles:
         raise RuntimeError("No hypothesis debate roles configured")

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import replace
 import os
 from pathlib import Path
+import re
+import subprocess
 from typing import Any
 
 from researchclaw.pipeline.hypothesis_tree import (
@@ -107,6 +109,46 @@ def validate_branch(
 
 def promote_best_stage14_for_branch(branch_run_dir: Path, config: Any) -> None:
     _promote_best_stage14(Path(branch_run_dir), config)
+
+
+def _attempt_workspace_name(attempt: Any) -> str:
+    attempt_id = str(getattr(attempt, "attempt_id", "attempt") or "attempt")
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", attempt_id).strip("-")
+    return name or "attempt"
+
+
+def provision_workspace(
+    attempt: Any,
+    *,
+    source_workspace: Path,
+    workspace_root: Path | None = None,
+) -> Any:
+    source_workspace = Path(source_workspace)
+    workspace_root = (
+        Path(workspace_root)
+        if workspace_root
+        else source_workspace.parent / ".worktrees"
+    )
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    target = workspace_root / _attempt_workspace_name(attempt)
+    if not target.exists():
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(source_workspace),
+                "worktree",
+                "add",
+                "--detach",
+                str(target),
+                "HEAD",
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    return replace(attempt, workspace_path=str(target))
 
 
 def branch_config(

@@ -204,3 +204,54 @@ def test_hypothesis_store_create_node_writes_node_artifacts_and_event(
             "timestamp": "2026-01-01T00:00:00+00:00",
         }
     ]
+
+
+def test_hypothesis_store_add_and_update_attempt_persist_under_node(
+    tmp_path: Path,
+) -> None:
+    HypothesisStore = _hypothesis_store_cls()
+    store = HypothesisStore(tmp_path)
+    node = store.create_node(
+        statement="Treatment improves accuracy.",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+
+    attempt = store.add_attempt(
+        node_id=node.id,
+        branch_run_dir="/tmp/run/hypothesis_branches/h-001/attempt-001",
+        workspace_path="/tmp/workspaces/h-001-attempt-001",
+        agent_session_name="researchclaw-h-001-attempt-001",
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+
+    attempt_path = (
+        tmp_path
+        / "hypothesis_tree"
+        / "nodes"
+        / "h-001"
+        / "attempts"
+        / "h-001"
+        / "attempt-001.json"
+    )
+    assert attempt.attempt_id == "h-001/attempt-001"
+    assert json.loads(attempt_path.read_text(encoding="utf-8")) == attempt.to_dict()
+
+    updated = store.update_attempt(
+        attempt.attempt_id,
+        status="succeeded",
+        stage_status={9: "done", 15: "done"},
+        metrics={"score": 0.91},
+        artifacts=["stage-15/decision.md"],
+        decision="proceed",
+        finished_at="2026-01-01T00:10:00+00:00",
+    )
+
+    persisted = json.loads(attempt_path.read_text(encoding="utf-8"))
+    assert persisted == updated.to_dict()
+    assert persisted["status"] == "succeeded"
+    assert persisted["stage_status"] == {"9": "done", "15": "done"}
+    assert [event["event_type"] for event in _events(tmp_path)] == [
+        "node_proposed",
+        "attempt_queued",
+        "attempt_finished",
+    ]

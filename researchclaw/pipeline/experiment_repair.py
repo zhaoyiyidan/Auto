@@ -107,8 +107,10 @@ def build_repair_prompt(
     sections.append(
         "\n## WORKSPACE AGENT INSTRUCTIONS\n"
         "- Modify the configured workspace repository directly.\n"
-        "- Commit the code changes with git.\n"
         "- Update run_manifest.json so the harness can submit the experiment.\n"
+        "- Make the final git commit after all task changes are ready, including run_manifest.json.\n"
+        "- Set run_manifest.json code_commit to final HEAD; amend the same commit if needed.\n"
+        "- Finish by verifying `git status --porcelain` is empty.\n"
         "- Do not submit the job yourself; the ResearchClaw harness owns submission.\n"
         "- Do not return pasted source files as markdown code blocks.\n"
     )

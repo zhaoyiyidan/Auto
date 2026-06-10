@@ -247,7 +247,10 @@ def _task_spec_from_protocol(
         constraints=[
             "Use the existing workspace; do not create a fresh project elsewhere.",
             f"Respect the configured time budget: {config.experiment.time_budget_sec} seconds.",
-            "Commit all code changes before writing run_manifest.json.",
+            "Write or update run_manifest.json, then make a final git commit "
+            "that includes every task change, including run_manifest.json.",
+            "Set run_manifest.json code_commit to final HEAD; amend the same "
+            "commit if needed, and finish with clean git status.",
             f"Report the protocol primary metric `{primary.name}` with direction `{primary.direction}`.",
         ],
         primary_metric=primary.name,

@@ -104,6 +104,14 @@ def test_stage9_deterministic_writes_protocol_and_derived_task_spec(
     assert primary.direction == "maximize"
     assert spec.primary_metric == primary.name
     assert spec.metric_direction == primary.direction
+    assert any(
+        "final git commit" in constraint and "run_manifest.json" in constraint
+        for constraint in spec.constraints
+    )
+    assert any(
+        "code_commit" in constraint and "clean git status" in constraint
+        for constraint in spec.constraints
+    )
     assert spec.execution_contract is not None
     assert spec.execution_contract.metrics.primary.name == primary.name
     assert spec.execution_contract.metrics.primary.direction == primary.direction

@@ -395,6 +395,11 @@ class TestWorkspaceAgentStageWiring:
         assert prompt.count("MUST") >= 6
         assert prompt.count("MUST NOT") >= 4
         assert "git commit" in prompt.lower()
+        assert "final git commit after all task changes are ready" in prompt
+        assert "including run_manifest.json" in prompt
+        assert "manifest.code_commit to the final HEAD commit" in prompt
+        assert "amend the same commit" in prompt
+        assert "git status --porcelain" in prompt
         assert "Do not submit" in prompt
         assert "Stage 10 validation boundary" in prompt
         assert "MUST NOT run the formal experiment" in prompt
@@ -446,6 +451,11 @@ class TestWorkspaceAgentStageWiring:
         assert prompt.count("MUST") >= 6
         assert prompt.count("MUST NOT") >= 4
         assert "git commit" in prompt.lower()
+        assert "final git commit after all task changes are ready" in prompt
+        assert "including run_manifest.json" in prompt
+        assert "manifest.code_commit to the final HEAD commit" in prompt
+        assert "amend the same commit" in prompt
+        assert "git status --porcelain" in prompt
         assert "Do not submit" in prompt
         assert "Stage 10 validation boundary" in prompt
         assert "MUST NOT run the formal experiment" in prompt

@@ -523,7 +523,7 @@ def test_acp_claude_prompt_env_injects_anthropic_base_url_and_token(
 ):
     from researchclaw.llm.acp_client import ACPClient, ACPConfig
 
-    captured: dict[str, object] = {}
+    captures: list[dict[str, object]] = []
 
     class FakeProcess:
         returncode = 0
@@ -540,8 +540,7 @@ def test_acp_claude_prompt_env_injects_anthropic_base_url_and_token(
             return None
 
     def fake_popen(cmd: list[str], **kwargs: object) -> FakeProcess:
-        captured["cmd"] = cmd
-        captured["env"] = kwargs.get("env")
+        captures.append({"cmd": cmd, "env": kwargs.get("env")})
         return FakeProcess()
 
     monkeypatch.setenv("MY_ACP_CLAUDE_KEY", "anthropic-secret")
@@ -559,7 +558,13 @@ def test_acp_claude_prompt_env_injects_anthropic_base_url_and_token(
 
     assert client._send_prompt_cli("acpx", "hello") == "answer"
 
-    env = captured["env"]
+    target = next(
+        item
+        for item in captures
+        if "claude" in [str(part) for part in item["cmd"]]
+        and "hello" in [str(part) for part in item["cmd"]]
+    )
+    env = target["env"]
     assert isinstance(env, dict)
     assert env["ANTHROPIC_BASE_URL"] == "https://anthropic-provider.example.com"
     assert env["ANTHROPIC_AUTH_TOKEN"] == "anthropic-secret"

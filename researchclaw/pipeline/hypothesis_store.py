@@ -20,6 +20,7 @@ from researchclaw.pipeline.hypothesis_tree import _atomic_write_json, _atomic_wr
 
 TREE_DIRNAME = "hypothesis_tree"
 _NODE_ID_RE = re.compile(r"^h-(\d+)$")
+_ATTEMPT_ID_RE = re.compile(r"^attempt-(\d+)\.json$")
 
 
 NODE_STATUSES = {
@@ -245,6 +246,32 @@ class HypothesisStore:
                     max_number = max(max_number, int(match.group(1)))
         return f"h-{max_number + 1:03d}"
 
+    def _node_dir(self, node_id: str) -> Path:
+        return self.nodes_dir / node_id
+
+    def _attempt_dir(self, node_id: str) -> Path:
+        return self._node_dir(node_id) / "attempts" / node_id
+
+    def _attempt_path(self, attempt_id: str) -> Path:
+        node_id = attempt_id.split("/", 1)[0]
+        return self._node_dir(node_id) / "attempts" / Path(attempt_id).with_suffix(".json")
+
+    def _next_attempt_id(self, node_id: str) -> str:
+        max_number = 0
+        attempt_dir = self._attempt_dir(node_id)
+        if attempt_dir.exists():
+            for child in attempt_dir.iterdir():
+                match = _ATTEMPT_ID_RE.match(child.name)
+                if match:
+                    max_number = max(max_number, int(match.group(1)))
+        return f"{node_id}/attempt-{max_number + 1:03d}"
+
+    def _read_attempt(self, attempt_id: str) -> ValidationAttempt:
+        path = self._attempt_path(attempt_id)
+        if not path.exists():
+            raise ValueError(f"Unknown validation attempt: {attempt_id}")
+        return ValidationAttempt.from_dict(json.loads(path.read_text(encoding="utf-8")))
+
     def _append_event(
         self,
         *,
@@ -303,3 +330,89 @@ class HypothesisStore:
             timestamp=created_at,
         )
         return node
+
+    def add_attempt(
+        self,
+        *,
+        node_id: str,
+        branch_run_dir: str,
+        workspace_path: str | None = None,
+        agent_session_name: str | None = None,
+        created_at: str | None = None,
+    ) -> ValidationAttempt:
+        if not (self._node_dir(node_id) / "node.json").exists():
+            raise ValueError(f"Unknown hypothesis node: {node_id}")
+        created_at = created_at or _utcnow_iso()
+        attempt = ValidationAttempt(
+            attempt_id=self._next_attempt_id(node_id),
+            node_id=node_id,
+            branch_run_dir=branch_run_dir,
+            workspace_path=workspace_path,
+            agent_session_name=agent_session_name,
+        )
+        _atomic_write_json(self._attempt_path(attempt.attempt_id), attempt.to_dict())
+        self._append_event(
+            event_type="attempt_queued",
+            node_id=node_id,
+            data={
+                "attempt_id": attempt.attempt_id,
+                "branch_run_dir": attempt.branch_run_dir,
+            },
+            timestamp=created_at,
+        )
+        return attempt
+
+    def update_attempt(
+        self,
+        attempt_id: str,
+        *,
+        status: str | None = None,
+        branch_run_dir: str | None = None,
+        workspace_path: str | None = None,
+        agent_session_name: str | None = None,
+        stage_status: dict[int, str] | None = None,
+        metrics: dict[str, Any] | None = None,
+        artifacts: list[str] | None = None,
+        decision: str | None = None,
+        error: str | None = None,
+        started_at: str | None = None,
+        finished_at: str | None = None,
+    ) -> ValidationAttempt:
+        current = self._read_attempt(attempt_id)
+        updated = ValidationAttempt(
+            attempt_id=current.attempt_id,
+            node_id=current.node_id,
+            status=status or current.status,
+            branch_run_dir=branch_run_dir or current.branch_run_dir,
+            workspace_path=(
+                current.workspace_path if workspace_path is None else workspace_path
+            ),
+            agent_session_name=(
+                current.agent_session_name
+                if agent_session_name is None
+                else agent_session_name
+            ),
+            stage_status=(
+                current.stage_status if stage_status is None else stage_status
+            ),
+            metrics=current.metrics if metrics is None else metrics,
+            artifacts=current.artifacts if artifacts is None else artifacts,
+            decision=current.decision if decision is None else decision,
+            error=current.error if error is None else error,
+            started_at=current.started_at if started_at is None else started_at,
+            finished_at=current.finished_at if finished_at is None else finished_at,
+        )
+        _atomic_write_json(self._attempt_path(updated.attempt_id), updated.to_dict())
+        if updated.status in {"succeeded", "failed", "abandoned"}:
+            self._append_event(
+                event_type="attempt_finished",
+                node_id=updated.node_id,
+                data={
+                    "attempt_id": updated.attempt_id,
+                    "status": updated.status,
+                    "decision": updated.decision,
+                    "error": updated.error,
+                },
+                timestamp=updated.finished_at or _utcnow_iso(),
+            )
+        return updated

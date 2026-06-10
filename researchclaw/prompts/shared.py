@@ -163,6 +163,23 @@ _DEFAULT_BLOCKS: dict[str, str] = {
         "result_paths; ResearchClaw Stage 12 will run the manifest command and "
         "collect those outputs.\n\n"
     ),
+    "diagnosis_header": (
+        "## EXPERIMENT DIAGNOSIS\n\n"
+        "Completion rate: {completion_rate} "
+        "({completed_count}/{total_planned} conditions)\n"
+    ),
+    "scope_reduction": (
+        "\n## SCOPE REDUCTION REQUIRED\n"
+        "The experiment had {n_planned} conditions but only {n_completed} "
+        "completed within the time budget of {time_budget_sec}s.\n"
+        "**Reduce to at most {max_conditions} conditions:**\n"
+        "1. Keep the BASELINE condition (no modification)\n"
+        "2. Keep the PROPOSED method (paper's main contribution)\n"
+        "3. Keep 1 ablation (remove most impactful component)\n"
+        "4. Remove all other conditions\n"
+        "5. Reduce epochs by 30-50% if still tight on time\n"
+        "6. Reduce seeds from 3 to 2 if needed\n"
+    ),
     "topic_constraint": (
         "\n\n=== HARD TOPIC CONSTRAINT ===\n"
         "The paper MUST be about: {topic}\n"
@@ -836,6 +853,32 @@ _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
             "2. MUST NOT fabricate a job_id or final result registry entry.\n"
             "3. MUST NOT assume a fixed entrypoint, file layout, or script name.\n"
             "4. MUST NOT emit code blocks for ResearchClaw to parse as the output.\n"
+        ),
+    },
+    "experiment_repair_instructions": {
+        "system": "",
+        "user": (
+            "# EXPERIMENT REPAIR TASK\n\n"
+            "The previous experiment run had failures. Your job is to fix "
+            "the specific issues identified below. Do NOT rewrite from scratch — "
+            "fix ONLY the identified problems.\n"
+            "{diagnosis_prompt}"
+            "{scope_reduction}"
+            "{dependency_fixes}"
+            "{current_code}"
+            "\n## CONSTRAINTS\n"
+            "- Time budget: {time_budget_sec} seconds total\n"
+            "- Pre-cached datasets: CIFAR-10, CIFAR-100, MNIST, FashionMNIST, STL-10 at /opt/datasets\n"
+            "- Every condition MUST output: condition=CONDNAME metric=VALUE\n"
+            "- The code must run without errors for at least 1 seed per condition\n"
+            "\n## WORKSPACE AGENT INSTRUCTIONS\n"
+            "- Modify the configured workspace repository directly.\n"
+            "- Update run_manifest.json so the harness can submit the experiment.\n"
+            "- Make the final git commit after all task changes are ready, including run_manifest.json.\n"
+            "- Set run_manifest.json code_commit to final HEAD; amend the same commit if needed.\n"
+            "- Finish by verifying `git status --porcelain` is empty.\n"
+            "- Do not submit the job yourself; the ResearchClaw harness owns submission.\n"
+            "- Do not return pasted source files as markdown code blocks.\n"
         ),
     },
     "hypothesis_synthesize": {

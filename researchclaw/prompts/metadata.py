@@ -254,6 +254,16 @@ SUB_PROMPT_METADATA: dict[str, dict[str, Any]] = {
             "stage10_validation_boundary",
         ],
     },
+    "experiment_repair_instructions": {
+        "purpose": "Wrap structured experiment diagnosis and code context in repair instructions.",
+        "required_variables": [
+            "diagnosis_prompt",
+            "scope_reduction",
+            "dependency_fixes",
+            "current_code",
+            "time_budget_sec",
+        ],
+    },
     "hypothesis_synthesize": {
         "purpose": "Merge multiple hypothesis debate perspectives.",
         "required_variables": ["perspectives"],

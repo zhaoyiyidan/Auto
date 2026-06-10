@@ -16,6 +16,7 @@ from researchclaw.config import RCConfig
 from researchclaw.evolution import EvolutionStore, extract_lessons
 from researchclaw.experiment.metric_resolution import resolve_experiment_metric
 from researchclaw.knowledge.base import write_stage_to_kb
+from researchclaw.notify.pipeline import notify_terminal_failure
 from researchclaw.pipeline.executor import StageResult, execute_stage
 from researchclaw.pipeline.stages import (
     DECISION_ROLLBACK,
@@ -629,6 +630,20 @@ def execute_pipeline(
                 )
                 results.extend(revised_results)
                 break
+            if (
+                outcome == "stop"
+                and loop_results
+                and loop_results[-1].status is StageStatus.FAILED
+            ):
+                last = loop_results[-1]
+                notify_terminal_failure(
+                    config=config,
+                    run_id=run_id,
+                    stage_name=last.stage.name,
+                    stage_num=int(last.stage),
+                    error=last.error,
+                    run_dir=run_dir,
+                )
             break
 
         stage_num = int(stage)
@@ -947,6 +962,14 @@ def execute_pipeline(
             if skip_noncritical and stage in NONCRITICAL_STAGES:
                 logger.warning("Noncritical stage %s failed - skipping", stage.name)
             else:
+                notify_terminal_failure(
+                    config=config,
+                    run_id=run_id,
+                    stage_name=stage.name,
+                    stage_num=int(stage),
+                    error=result.error,
+                    run_dir=run_dir,
+                )
                 break
 
         if result.status == StageStatus.PAUSED:

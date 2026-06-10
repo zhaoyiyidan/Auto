@@ -10,6 +10,7 @@ import yaml
 
 from researchclaw.prompts import (
     PromptManager,
+    PromptRenderError,
     RenderedPrompt,
     _render,
 )
@@ -56,6 +57,20 @@ class TestRender:
 
     def test_no_placeholders(self) -> None:
         assert _render("No variables here", {"x": "y"}) == "No variables here"
+
+    def test_render_strict_raises_on_missing(self) -> None:
+        with pytest.raises(PromptRenderError) as exc_info:
+            _render("Hello {name}!", {}, strict=True, required=("name",))
+
+        assert "name" in str(exc_info.value)
+
+    def test_render_lenient_default_unchanged(self) -> None:
+        assert _render("Hello {name}!", {}) == "Hello {name}!"
+
+    def test_render_strict_ignores_json_schema_tokens(self) -> None:
+        template = "Return JSON: {score_1_to_10:number, verdict:string}"
+
+        assert _render(template, {}, strict=True, required=()) == template
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +126,32 @@ class TestPromptManagerDefaults:
         assert "RL" in sp.user
         assert "ml" in sp.user
         assert sp.system
+
+    def test_for_stage_strict_raises_on_missing_required(self) -> None:
+        pm = PromptManager()
+
+        with pytest.raises(PromptRenderError) as exc_info:
+            pm.for_stage(
+                "topic_init",
+                topic="RL",
+                domains="ml",
+                project_name="test",
+                strict=True,
+            )
+
+        assert "quality_threshold" in str(exc_info.value)
+
+    def test_for_stage_lenient_default_silent(self) -> None:
+        pm = PromptManager()
+
+        sp = pm.for_stage(
+            "topic_init",
+            topic="RL",
+            domains="ml",
+            project_name="test",
+        )
+
+        assert "{quality_threshold}" in sp.user
 
     def test_json_mode_stages(self) -> None:
         pm = PromptManager()

@@ -231,7 +231,7 @@ def test_rcconfig_from_dict_parses_experiment_repair_max_cycles(tmp_path: Path):
     assert config.experiment.repair.max_cycles == 7
 
 
-def test_hypothesis_validation_config_defaults_off() -> None:
+def test_hypothesis_validation_config_defaults_enabled() -> None:
     try:
         from researchclaw.config import HypothesisValidationConfig
     except ImportError:
@@ -239,7 +239,7 @@ def test_hypothesis_validation_config_defaults_off() -> None:
 
     defaults = HypothesisValidationConfig()
 
-    assert defaults.enabled is False
+    assert defaults.enabled is True
     assert defaults.max_concurrent_branches == 1
     assert defaults.max_attempts_per_node == 1
     assert defaults.workspace_isolation == "shared"

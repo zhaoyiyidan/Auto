@@ -2932,6 +2932,64 @@ class TestGateProposalSentinel:
 
         assert rc_executor._gate_proposal_sentinel_exists(stage_dir) is False
 
+    def test_research_decision_sentinel_skips_legacy_tree_when_hypothesis_validation_enabled(
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+    ) -> None:
+        def seed_gate(run_dir: Path) -> None:
+            stage8 = run_dir / "stage-08"
+            stage8.mkdir(parents=True)
+            (stage8 / "hypotheses.md").write_text(
+                "# Hypotheses\nH1: gate finalized hypothesis.",
+                encoding="utf-8",
+            )
+            stage15 = run_dir / "stage-15"
+            stage15.mkdir(parents=True)
+            (stage15 / "decision.md").write_text(
+                "## Decision\nEXTEND",
+                encoding="utf-8",
+            )
+            (stage15 / ".gate_proposal.json").write_text("{}", encoding="utf-8")
+
+        legacy_run = tmp_path / "legacy"
+        legacy_run.mkdir()
+        seed_gate(legacy_run)
+
+        rc_executor.execute_stage(
+            Stage.RESEARCH_DECISION,
+            run_dir=legacy_run,
+            run_id="legacy-human-gate",
+            config=rc_config,
+            adapters=adapters,
+        )
+
+        assert (legacy_run / "hypothesis_tree" / "current_node.txt").is_file()
+        assert (legacy_run / "hypothesis_tree" / "pending_transition.json").is_file()
+
+        branch_run = tmp_path / "branch"
+        branch_run.mkdir()
+        seed_gate(branch_run)
+        branch_config = replace(
+            rc_config,
+            hypothesis_validation=replace(
+                rc_config.hypothesis_validation,
+                enabled=True,
+            ),
+        )
+
+        rc_executor.execute_stage(
+            Stage.RESEARCH_DECISION,
+            run_dir=branch_run,
+            run_id="branch-human-gate",
+            config=branch_config,
+            adapters=adapters,
+        )
+
+        assert not (branch_run / "hypothesis_tree" / "current_node.txt").exists()
+        assert not (branch_run / "hypothesis_tree" / "pending_transition.json").exists()
+
     def test_clear_sentinel_removes_file(self, tmp_path: Path) -> None:
         stage_dir = tmp_path / "stage-15"
         stage_dir.mkdir()

@@ -372,6 +372,12 @@ SUB_PROMPT_METADATA: dict[str, dict[str, Any]] = {
             "outline",
         ],
     },
+    "compiled_pdf_review": {
+        "purpose": "Review the compiled paper source with an area-chair style rubric.",
+        "required_variables": ["topic", "tex_content"],
+        "output_schema": "JSON object with review dimensions, decision, issues, and summary.",
+        "json_mode": False,
+    },
     "topic_quality_eval": {
         "purpose": "Non-blocking topic quality scoring for problem decomposition.",
         "required_variables": ["domain_label", "topic"],

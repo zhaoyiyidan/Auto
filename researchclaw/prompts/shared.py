@@ -1177,6 +1177,64 @@ _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
             "Output markdown with ## headers. Do NOT include a References section."
         ),
     },
+    "compiled_pdf_review": {
+        "system": (
+            "You are a meticulous, critical academic reviewer. "
+            "You have reviewed 100+ papers at top venues. "
+            "Score honestly — most papers deserve 4-6, not 7-9. "
+            "Flag any sign of AI-generated boilerplate."
+        ),
+        "user": (
+            "You are a senior Area Chair at a top AI conference (NeurIPS/ICML/ICLR) "
+            "reviewing a paper submission. Provide a rigorous, structured review.\n\n"
+            "PAPER TOPIC: {topic}\n\n"
+            "LaTeX source:\n```latex\n{tex_content}\n```\n\n"
+            "REVIEW INSTRUCTIONS:\n"
+            "Score each dimension 1-10 (1=unacceptable, 5=borderline, 8=strong accept, "
+            "10=best paper candidate). Be critical but fair.\n\n"
+            "DIMENSIONS:\n"
+            "1. SOUNDNESS: Are claims well-supported? Is methodology correct? "
+            "Are there logical gaps or unsupported claims?\n"
+            "2. PRESENTATION: Is the writing clear, flowing, and professional? "
+            "Are there grammar errors, bullet lists in prose sections, or "
+            "boilerplate phrases? Is it free of AI-generated slop?\n"
+            "3. CONTRIBUTION: Is the contribution significant? Does it advance "
+            "the field beyond incremental improvement?\n"
+            "4. ORIGINALITY: Is the approach novel? Does it differentiate clearly "
+            "from prior work?\n"
+            "5. CLARITY: Are the method and results easy to understand? Are figures "
+            "and tables well-designed with descriptive captions?\n"
+            "6. SIGNIFICANCE: Would the community benefit from this work? Does it "
+            "open new research directions?\n"
+            "7. REPRODUCIBILITY: Are experimental details sufficient to reproduce "
+            "results? Are hyperparameters, datasets, and metrics clearly stated?\n\n"
+            "Also evaluate:\n"
+            "- Are all figures referenced in the text?\n"
+            "- Are tables properly formatted (booktabs style, no vertical rules)?\n"
+            "- Does the related work critically compare, not just list papers?\n"
+            "- Are statistical measures (std, CI, multiple seeds) reported?\n"
+            "- Is there a clear limitations section?\n\n"
+            "Return a JSON object:\n"
+            "{\n"
+            '  "soundness": N,\n'
+            '  "presentation": N,\n'
+            '  "contribution": N,\n'
+            '  "originality": N,\n'
+            '  "clarity": N,\n'
+            '  "significance": N,\n'
+            '  "reproducibility": N,\n'
+            '  "overall_score": N,\n'
+            '  "confidence": N,\n'
+            '  "decision": "accept" or "reject",\n'
+            '  "strengths": ["strength1", "strength2", ...],\n'
+            '  "weaknesses": ["weakness1", "weakness2", ...],\n'
+            '  "critical_issues": ["issue requiring revision", ...],\n'
+            '  "minor_issues": ["formatting/typo issues", ...],\n'
+            '  "summary": "2-3 sentence overall assessment"\n'
+            "}\n"
+        ),
+        "json_mode": False,
+    },
     "topic_quality_eval": {
         "system": (
             "You are a senior {domain_label} researcher evaluating research topic quality."

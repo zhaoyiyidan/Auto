@@ -6,8 +6,10 @@ immutable hypothesis science separate from runtime validation attempts.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import json
 from pathlib import Path
@@ -89,6 +91,17 @@ def _node_markdown(node: "HypothesisNode") -> str:
     else:
         lines.append("_None specified._")
     return "\n".join(lines) + "\n"
+
+
+@contextmanager
+def _file_lock(path: Path) -> Any:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
 @dataclass(frozen=True)
@@ -252,6 +265,7 @@ class HypothesisStore:
         self.tree_dir = self.run_dir / TREE_DIRNAME
         self.nodes_dir = self.tree_dir / "nodes"
         self.events_path = self.tree_dir / "events.jsonl"
+        self.lock_path = self.tree_dir / ".lock"
 
     def _next_node_id(self) -> str:
         max_number = 0
@@ -302,16 +316,32 @@ class HypothesisStore:
         data: dict[str, Any],
         timestamp: str,
     ) -> None:
-        self.tree_dir.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "event_type": event_type,
-            "node_id": node_id,
-            "data": data,
-            "timestamp": timestamp,
-        }
-        with self.events_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-            fh.write("\n")
+        with _file_lock(self.lock_path):
+            self.tree_dir.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "event_type": event_type,
+                "node_id": node_id,
+                "data": data,
+                "timestamp": timestamp,
+            }
+            with self.events_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                fh.write("\n")
+
+    def append_event(
+        self,
+        *,
+        event_type: str,
+        node_id: str | None,
+        data: dict[str, Any],
+        timestamp: str | None = None,
+    ) -> None:
+        self._append_event(
+            event_type=event_type,
+            node_id=node_id,
+            data=data,
+            timestamp=timestamp or _utcnow_iso(),
+        )
 
     def create_node(
         self,

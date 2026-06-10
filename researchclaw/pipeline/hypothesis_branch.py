@@ -72,10 +72,19 @@ def validate_branch(
     adapters: Any,
 ) -> dict[str, Any]:
     branch_run_dir = Path(branch_run_dir)
+    branch_run_config = config
+    workspace_path = getattr(attempt, "workspace_path", None)
+    session_name = getattr(attempt, "agent_session_name", None)
+    if workspace_path and session_name:
+        branch_run_config = branch_config(
+            config,
+            workspace_path=workspace_path,
+            session_name=session_name,
+        )
     results = execute_pipeline(
         run_dir=branch_run_dir,
         run_id=_branch_run_id(branch_run_dir, node, attempt),
-        config=config,
+        config=branch_run_config,
         adapters=adapters,
         from_stage=Stage.EXPERIMENT_TASK_SPEC,
         to_stage=Stage.RESEARCH_DECISION,

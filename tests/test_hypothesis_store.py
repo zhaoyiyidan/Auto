@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
+import threading
 from typing import Any
 
 import pytest
@@ -309,3 +311,29 @@ def test_hypothesis_store_set_node_status_enforces_state_machine(
             "validating",
             created_at="2026-01-01T00:04:00+00:00",
         )
+
+
+def test_hypothesis_store_filelock_serializes_concurrent_event_appends(
+    tmp_path: Path,
+) -> None:
+    HypothesisStore = _hypothesis_store_cls()
+    store = HypothesisStore(tmp_path)
+    count = 32
+    barrier = threading.Barrier(count)
+
+    def append_one(index: int) -> None:
+        barrier.wait(timeout=5)
+        store.append_event(
+            event_type="concurrent_test",
+            node_id=None,
+            data={"index": index},
+            timestamp=f"2026-01-01T00:00:{index:02d}+00:00",
+        )
+
+    with ThreadPoolExecutor(max_workers=count) as pool:
+        list(pool.map(append_one, range(count)))
+
+    events = _events(tmp_path)
+    assert len(events) == count
+    assert sorted(event["data"]["index"] for event in events) == list(range(count))
+    assert (tmp_path / "hypothesis_tree" / ".lock").is_file()

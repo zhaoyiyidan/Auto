@@ -32,6 +32,10 @@ def _followup_payload(result: Any) -> dict[str, Any] | None:
     return payload
 
 
+class WorkerAbandoned(RuntimeError):
+    """Raised when a branch worker dies before producing a terminal result."""
+
+
 class HypothesisValidationCoordinator:
     def __init__(self, run_dir: Path) -> None:
         self.run_dir = Path(run_dir)
@@ -214,6 +218,52 @@ class HypothesisValidationCoordinator:
             finished_at=created_at,
         )
 
+    def _finish_attempt_abandoned(
+        self,
+        *,
+        attempt: ValidationAttempt,
+        error: BaseException,
+        created_at: str | None,
+    ) -> ValidationAttempt:
+        return self.store.update_attempt(
+            attempt.attempt_id,
+            status="abandoned",
+            error=str(error),
+            finished_at=created_at,
+        )
+
+    def _queue_retry_attempt(
+        self,
+        *,
+        node: HypothesisNode,
+        max_attempts_per_node: int,
+        created_at: str | None,
+    ) -> ValidationAttempt | None:
+        next_attempt_id = self.store._next_attempt_id(node.id)
+        attempt_name = next_attempt_id.split("/", 1)[1]
+        try:
+            attempt_number = int(attempt_name.rsplit("-", 1)[1])
+        except (IndexError, ValueError):
+            attempt_number = max_attempts_per_node + 1
+        if attempt_number > max_attempts_per_node:
+            return None
+        retry = self.store.add_attempt(
+            node_id=node.id,
+            branch_run_dir=str(self._branch_run_dir(node.id, attempt_name)),
+            created_at=created_at,
+        )
+        from researchclaw.pipeline.hypothesis_queue import DurableWorkQueue, WorkItem
+
+        DurableWorkQueue(self.run_dir).append(
+            WorkItem(
+                node_id=node.id,
+                attempt_id=retry.attempt_id,
+                branch_run_dir=retry.branch_run_dir,
+            ),
+            created_at=created_at,
+        )
+        return retry
+
     def _attempt_result_already_reduced(self, attempt_id: str) -> bool:
         for event in self.store._read_events():
             event_type = event.get("event_type")
@@ -354,6 +404,7 @@ class HypothesisValidationCoordinator:
         config: Any,
         adapters: Any,
         max_concurrent: int,
+        max_attempts_per_node: int = 1,
         created_at: str | None = None,
     ) -> list[ValidationAttempt]:
         from researchclaw.pipeline.hypothesis_queue import DurableWorkQueue
@@ -391,6 +442,18 @@ class HypothesisValidationCoordinator:
                 node, attempt = jobs[index]
                 try:
                     result = future.result()
+                except WorkerAbandoned as exc:
+                    completed[index] = self._finish_attempt_abandoned(
+                        attempt=attempt,
+                        error=exc,
+                        created_at=created_at,
+                    )
+                    self._queue_retry_attempt(
+                        node=node,
+                        max_attempts_per_node=max_attempts_per_node,
+                        created_at=created_at,
+                    )
+                    continue
                 except Exception as exc:
                     completed[index] = self._finish_attempt_failure(
                         attempt=attempt,

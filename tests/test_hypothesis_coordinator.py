@@ -616,3 +616,71 @@ def test_coordinator_reduces_attempt_results_concurrently_without_lost_verdicts(
         if event["event_type"] == "node_verdict"
     ]
     assert verdict_attempts == ["h-001/attempt-001", "h-002/attempt-001"]
+
+
+def test_coordinator_requeues_abandoned_attempts_up_to_cap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from researchclaw.pipeline.hypothesis_coordinator import WorkerAbandoned
+    from researchclaw.pipeline.hypothesis_queue import DurableWorkQueue, WorkItem
+
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    node = coordinator.store.create_node(
+        statement="Treatment improves accuracy.",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    attempt = coordinator.store.add_attempt(
+        node_id=node.id,
+        branch_run_dir=str(
+            tmp_path / "hypothesis_branches" / node.id / "attempt-001"
+        ),
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+    queue = DurableWorkQueue(tmp_path)
+    queue.append(
+        WorkItem(
+            node_id=node.id,
+            attempt_id=attempt.attempt_id,
+            branch_run_dir=attempt.branch_run_dir,
+        ),
+        created_at="2026-01-01T00:02:00+00:00",
+    )
+
+    def fake_validate_branch(
+        node: Any,
+        attempt: Any,
+        config: Any,
+        adapters: Any,
+    ) -> Any:
+        raise WorkerAbandoned("worker died")
+
+    monkeypatch.setattr(
+        coordinator,
+        "validate_branch",
+        fake_validate_branch,
+        raising=False,
+    )
+
+    completed = coordinator.run_pending_work_concurrent(
+        config=object(),
+        adapters=object(),
+        max_concurrent=1,
+        max_attempts_per_node=2,
+        created_at="2026-01-01T00:03:00+00:00",
+    )
+
+    assert [(item.node_id, item.status, item.error) for item in completed] == [
+        (node.id, "abandoned", "worker died")
+    ]
+    assert [item.attempt_id for item in DurableWorkQueue(tmp_path).read_items()] == [
+        "h-001/attempt-001",
+        "h-001/attempt-002",
+    ]
+    assert (
+        Path(
+            DurableWorkQueue(tmp_path).read_items()[1].branch_run_dir
+        ).relative_to(tmp_path).as_posix()
+        == "hypothesis_branches/h-001/attempt-002"
+    )

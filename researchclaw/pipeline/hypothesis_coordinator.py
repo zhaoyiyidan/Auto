@@ -141,10 +141,28 @@ class HypothesisValidationCoordinator:
             },
         )
         if decision in {"extend", "pivot"}:
-            self._create_followup_node(
+            followup = self._create_followup_node(
                 source_node=node,
                 decision=decision,
                 result=result,
+                created_at=created_at,
+            )
+            followup_attempt = self.store.add_attempt(
+                node_id=followup.id,
+                branch_run_dir=str(self._branch_run_dir(followup.id, "attempt-001")),
+                created_at=created_at,
+            )
+            from researchclaw.pipeline.hypothesis_queue import (
+                DurableWorkQueue,
+                WorkItem,
+            )
+
+            DurableWorkQueue(self.run_dir).append(
+                WorkItem(
+                    node_id=followup.id,
+                    attempt_id=followup_attempt.attempt_id,
+                    branch_run_dir=followup_attempt.branch_run_dir,
+                ),
                 created_at=created_at,
             )
 

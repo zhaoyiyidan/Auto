@@ -12,6 +12,7 @@ from researchclaw.pipeline.hypothesis_store import (
     TREE_DIRNAME,
     ValidationAttempt,
     _atomic_write_json,
+    _atomic_write_text,
     _utcnow_iso,
 )
 
@@ -136,3 +137,37 @@ class EvidenceAggregator:
         output_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write_json(output_dir / "validation_summary.json", summary)
         return summary
+
+    def write_evidence_registry(
+        self,
+        *,
+        metric_name: str,
+        direction: str,
+    ) -> list[dict[str, Any]]:
+        winners = self.select_best_attempts(
+            metric_name=metric_name,
+            direction=direction,
+        )
+        rows: list[dict[str, Any]] = []
+        for node in self._read_nodes():
+            attempt = winners.get(node.id)
+            if attempt is None:
+                continue
+            rows.append(
+                {
+                    "node_id": node.id,
+                    "attempt_id": attempt.attempt_id,
+                    "outcome": node.status,
+                    "decision": attempt.decision,
+                    "metrics": attempt.metrics,
+                    "artifacts": attempt.artifacts,
+                    "branch_run_dir": attempt.branch_run_dir,
+                }
+            )
+        output_dir = self.run_dir / "hypothesis_aggregate"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write_text(
+            output_dir / "evidence_registry.jsonl",
+            "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        )
+        return rows

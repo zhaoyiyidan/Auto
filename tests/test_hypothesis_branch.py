@@ -16,6 +16,32 @@ def _hypothesis_node_cls() -> Any:
     return HypothesisNode
 
 
+def _write_stage14_candidate(
+    run_dir: Path,
+    dirname: str,
+    score: float,
+    analysis: str,
+) -> None:
+    stage_dir = run_dir / dirname
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    (stage_dir / "experiment_summary.json").write_text(
+        json.dumps(
+            {
+                "metrics_summary": {
+                    "primary_metric": {
+                        "min": score,
+                        "max": score,
+                        "mean": score,
+                        "count": 1,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (stage_dir / "analysis.md").write_text(analysis, encoding="utf-8")
+
+
 def test_seed_branch_dir_links_shared_context_and_writes_single_hypothesis(
     tmp_path: Path,
 ) -> None:
@@ -151,3 +177,50 @@ def test_validate_branch_runs_stage9_to_stage15_and_writes_attempt_result(
         "artifacts": ["decision.md"],
         "error": None,
     }
+
+
+def test_promote_best_stage14_for_branch_is_scoped_to_attempt(
+    tmp_path: Path,
+) -> None:
+    try:
+        from researchclaw.pipeline.hypothesis_branch import (
+            promote_best_stage14_for_branch,
+        )
+    except ImportError:
+        pytest.fail("promote_best_stage14_for_branch is not implemented")
+
+    shared_run_dir = tmp_path / "run"
+    branch_run_dir = shared_run_dir / "hypothesis_branches" / "h-001" / "attempt-001"
+    branch_run_dir.mkdir(parents=True)
+    _write_stage14_candidate(
+        branch_run_dir,
+        "stage-14",
+        0.10,
+        "# Analysis\nWorse current branch result.",
+    )
+    _write_stage14_candidate(
+        branch_run_dir,
+        "stage-14_v1",
+        0.91,
+        "# Analysis\nBest branch result.",
+    )
+
+    promote_best_stage14_for_branch(branch_run_dir, config=object())
+
+    branch_best = json.loads(
+        (branch_run_dir / "experiment_summary_best.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    branch_current = json.loads(
+        (branch_run_dir / "stage-14" / "experiment_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert branch_best["metrics_summary"]["primary_metric"]["mean"] == 0.91
+    assert branch_current["metrics_summary"]["primary_metric"]["mean"] == 0.91
+    assert (branch_run_dir / "analysis_best.md").read_text(
+        encoding="utf-8"
+    ) == "# Analysis\nBest branch result."
+    assert not (shared_run_dir / "experiment_summary_best.json").exists()
+    assert not (shared_run_dir / "analysis_best.md").exists()

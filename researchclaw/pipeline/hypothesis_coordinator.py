@@ -148,6 +148,52 @@ class HypothesisValidationCoordinator:
                 created_at=created_at,
             )
 
+    def _finish_attempt_success(
+        self,
+        *,
+        node: HypothesisNode,
+        attempt: ValidationAttempt,
+        result: Any,
+        created_at: str | None,
+    ) -> ValidationAttempt:
+        decision = str(
+            _result_field(result, "decision", "inconclusive")
+            or "inconclusive"
+        ).lower()
+        updated = self.store.update_attempt(
+            attempt.attempt_id,
+            status="succeeded",
+            metrics=dict(_result_field(result, "metrics", {}) or {}),
+            artifacts=[
+                str(artifact)
+                for artifact in list(_result_field(result, "artifacts", []) or [])
+            ],
+            decision=decision,
+            finished_at=created_at,
+        )
+        self._apply_decision_to_tree(
+            node=node,
+            attempt=attempt,
+            decision=decision,
+            result=result,
+            created_at=created_at,
+        )
+        return updated
+
+    def _finish_attempt_failure(
+        self,
+        *,
+        attempt: ValidationAttempt,
+        error: BaseException,
+        created_at: str | None,
+    ) -> ValidationAttempt:
+        return self.store.update_attempt(
+            attempt.attempt_id,
+            status="failed",
+            error=str(error),
+            finished_at=created_at,
+        )
+
     def split_and_validate_sequential(
         self,
         hypotheses_md: str,
@@ -179,36 +225,61 @@ class HypothesisValidationCoordinator:
                 result = self.validate_branch(node, attempt, config, adapters)
             except Exception as exc:
                 attempts.append(
-                    self.store.update_attempt(
-                        attempt.attempt_id,
-                        status="failed",
-                        error=str(exc),
-                        finished_at=created_at,
+                    self._finish_attempt_failure(
+                        attempt=attempt,
+                        error=exc,
+                        created_at=created_at,
                     )
                 )
                 continue
 
-            decision = str(
-                _result_field(result, "decision", "inconclusive")
-                or "inconclusive"
-            ).lower()
-            updated = self.store.update_attempt(
-                attempt.attempt_id,
-                status="succeeded",
-                metrics=dict(_result_field(result, "metrics", {}) or {}),
-                artifacts=[
-                    str(artifact)
-                    for artifact in list(_result_field(result, "artifacts", []) or [])
-                ],
-                decision=decision,
-                finished_at=created_at,
+            attempts.append(
+                self._finish_attempt_success(
+                    node=node,
+                    attempt=attempt,
+                    result=result,
+                    created_at=created_at,
+                )
             )
-            self._apply_decision_to_tree(
-                node=node,
-                attempt=attempt,
-                decision=decision,
-                result=result,
+        return attempts
+
+    def resume_pending_work(
+        self,
+        *,
+        config: Any,
+        adapters: Any,
+        created_at: str | None = None,
+    ) -> list[ValidationAttempt]:
+        from researchclaw.pipeline.hypothesis_queue import DurableWorkQueue
+
+        resumed: list[ValidationAttempt] = []
+        for item in DurableWorkQueue(self.run_dir).read_items():
+            if (Path(item.branch_run_dir) / "attempt_result.json").exists():
+                continue
+            node = self.store._read_node(item.node_id)
+            attempt = self.store._read_attempt(item.attempt_id)
+            self.store.set_node_status(
+                node.id,
+                "validating",
                 created_at=created_at,
             )
-            attempts.append(updated)
-        return attempts
+            try:
+                result = self.validate_branch(node, attempt, config, adapters)
+            except Exception as exc:
+                resumed.append(
+                    self._finish_attempt_failure(
+                        attempt=attempt,
+                        error=exc,
+                        created_at=created_at,
+                    )
+                )
+                continue
+            resumed.append(
+                self._finish_attempt_success(
+                    node=node,
+                    attempt=attempt,
+                    result=result,
+                    created_at=created_at,
+                )
+            )
+        return resumed

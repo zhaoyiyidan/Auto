@@ -407,64 +407,22 @@ def _write_paper_sections(
     logger.info("Stage 17: Part 1 (Title+Abstract+Intro+Related Work) — %d chars", len(part1))
 
     # --- Call 2: Method + Experiments (ML)  OR  Model + Phenomenology (HEP) ---
-    if is_hep:
-        call2_user = (
-            f"{preamble}\n\n"
-            f"{topic_constraint}"
-            f"{exp_metrics_instruction}\n\n"
-            f"{narrative_writing_rules}\n"
-            f"{anti_hedging_rules}\n\n"
-            "CITATION REQUIREMENT: The Model section MUST cite the original paper(s) "
-            "defining the Lagrangian / EFT operators being studied. The Phenomenology "
-            "section MUST cite each experimental bound invoked (ATLAS/CMS/LZ/XENONnT/"
-            "Fermi-LAT original papers, not reviews). Use [cite_key] syntax.\n"
-            f"{citation_instruction}\n\n"
-            "You are continuing an HEP phenomenology paper. The sections written so far are:\n\n"
-            f"---\n{part1}\n---\n\n"
-            "Now write the next sections:\n\n"
-            "4. **Model / Theoretical framework** (1200-1800 words): the Lagrangian density "
-            "(LaTeX, numbered equations), particle content, gauge structure, free parameters "
-            "and their allowed ranges. Provide the Feynman rules or EFT operator coefficients "
-            "relevant to the observables considered. Write as FLOWING PROSE with numbered "
-            "equations — do NOT use bullet lists.\n"
-            "5. **Phenomenology / Computational setup** (800-1200 words): the observables "
-            "(cross sections, decay widths, relic density, direct-detection rates) and the "
-            "formulas or tool-chain used to compute them. List every experimental constraint "
-            "imposed with explicit CL level and reference. Units MUST be natural (GeV, pb, "
-            "cm^2, Omega_h^2).\n\n"
-            f"Outline:\n{outline}\n\n"
-            "Output markdown with ## headers. Continue from where Part 1 ended."
-        )
-    else:
-        call2_user = (
-            f"{preamble}\n\n"
-            f"{topic_constraint}"
-            f"{exp_metrics_instruction}\n\n"
-            f"{narrative_writing_rules}\n"
-            f"{anti_hedging_rules}\n\n"
-            # IMP-21: Citation instruction for Method + Experiments
-            "CITATION REQUIREMENT: The Method section MUST cite at least 3-5 related "
-            "technical papers (foundations your method builds on). The Experiments section "
-            "MUST cite baseline method papers. Use [cite_key] syntax.\n"
-            f"{citation_instruction}\n\n"
-            "You are continuing a paper. The sections written so far are:\n\n"
-            f"---\n{part1}\n---\n\n"
-            "Now write the next sections, maintaining consistency with the above:\n\n"
-            "5. **Method** (1000-1500 words): formal problem definition with mathematical notation "
-            "($x$, $\\theta$, etc.), detailed algorithm description with equations, step-by-step procedure, "
-            "complexity analysis, design rationale for key choices. Include algorithm pseudocode if applicable. "
-            "Write as FLOWING PROSE — do NOT use bullet-point lists for method components.\n"
-            "6. **Experiments** (800-1200 words): detailed experimental setup, datasets with statistics "
-            "(size, splits, features), all baselines and their implementations, hyperparameter settings "
-            "in a markdown table, evaluation metrics with mathematical definitions, hardware and runtime info.\n"
-            "METHOD NAMES IN TABLES: Use SHORT abbreviations (4-8 chars) for method names "
-            "in tables. Define abbreviation mappings in a footnote. "
-            "NEVER put method names longer than 20 characters in table cells.\n\n"
-            f"Outline:\n{outline}\n\n"
-            "Output markdown with ## headers. Continue from where Part 1 ended."
-        )
+    call2_prompt = pm.sub_prompt(
+        "paper_continuation_hep_method" if is_hep else "paper_continuation_method",
+        base_system=system,
+        preamble=preamble,
+        topic_constraint=topic_constraint,
+        exp_metrics_instruction=exp_metrics_instruction,
+        narrative_writing_rules=narrative_writing_rules,
+        anti_hedging_rules=anti_hedging_rules,
+        citation_instruction=citation_instruction,
+        previous_sections=part1,
+        outline=outline,
+    )
+    call2_system = call2_prompt.system
+    call2_user = call2_prompt.user
     try:
-        resp2 = _chat_with_prompt(llm, system, call2_user, max_tokens=_paper_max_tokens, retries=1)
+        resp2 = _chat_with_prompt(llm, call2_system, call2_user, max_tokens=_paper_max_tokens, retries=1)
         part2 = resp2.content.strip()
     except Exception:  # noqa: BLE001
         logger.error("Stage 17: Part 2 LLM call failed after retry — using placeholder")
@@ -476,88 +434,23 @@ def _write_paper_sections(
     logger.info("Stage 17: Part 2 (Method+Experiments) — %d chars", len(part2))
 
     # --- Call 3: Results + Discussion + (Limitations) + Conclusion ---
-    if is_hep:
-        call3_user = (
-            f"{preamble}\n\n"
-            f"{topic_constraint}"
-            f"{exp_metrics_instruction}\n\n"
-            f"{narrative_writing_rules}\n"
-            f"{anti_hedging_rules}\n"
-            f"{anti_repetition_rules}\n\n"
-            "CITATION REQUIREMENT: Discussion must cite 3-5 prior JHEP/PRD phenomenology "
-            "analyses that studied the same or neighbouring parameter space. Cite each "
-            "experimental bound plotted on the exclusion figures.\n"
-            f"{citation_instruction}\n\n"
-            "You are completing an HEP phenomenology paper. Sections so far:\n\n"
-            f"---\n{part1}\n\n{part2}\n---\n\n"
-            "Now write the final sections:\n\n"
-            "6. **Results** (800-1200 words): report parameter-space scans and 95% CL "
-            "exclusion contours. Include tabulated predictions and a headline log-log "
-            "exclusion plot (use ![Caption](charts/filename.png) markdown). Overlay "
-            "current bounds and projected sensitivities. Discuss complementarity between "
-            "direct, indirect, and collider probes.\n"
-            "7. **Discussion** (400-800 words): comparison with earlier work, theoretical "
-            "and experimental uncertainties (QCD scale, PDF, nuclear form factors, "
-            "astrophysical J-factors), comment on the tension / consistency with "
-            "independent constraints.\n"
-            "8. **Conclusions** (200-400 words): summarise the main physical findings; "
-            "state falsifiable predictions for HL-LHC / DARWIN / LZ / CTA and the "
-            "timescale on which they can test the model.\n\n"
-            "CRITICAL FORMATTING RULES:\n"
-            "- Use FLOWING PROSE, not bullet lists, except for equation labels.\n"
-            "- All numerical values in natural units; keep 3-4 significant figures.\n"
-            "- Figures referenced with 'As shown in Fig. 1, ...' style.\n"
-            "- Every table caption is descriptive (not 'Table 1').\n"
-            "- Do NOT add 'Broader Impact', 'Reproducibility Checklist', 'Ethics', or "
-            "'Societal Impact' sections.\n\n"
-            "Output markdown with ## headers. Do NOT include a References section."
-        )
-    else:
-        call3_user = (
-            f"{preamble}\n\n"
-            f"{topic_constraint}"
-            f"{exp_metrics_instruction}\n\n"
-            f"{narrative_writing_rules}\n"
-            f"{anti_hedging_rules}\n"
-            f"{anti_repetition_rules}\n\n"
-            # IMP-21: Citation instruction for Results + Discussion + Conclusion
-            "CITATION REQUIREMENT: The Discussion section MUST cite at least 3-5 papers "
-            "when comparing findings with prior work. The Conclusion may cite 1-2 "
-            "foundational references.\n"
-            f"{citation_instruction}\n\n"
-            "You are completing a paper. The sections written so far are:\n\n"
-            f"---\n{part1}\n\n{part2}\n---\n\n"
-            "Now write the final sections, maintaining consistency:\n\n"
-            "7. **Results** (600-800 words):\n"
-            "   - START with an AGGREGATED results table (Table 1): rows = methods, columns = metrics.\n"
-            "     Each cell = mean \u00b1 std across seeds. Bold the best value per column.\n"
-            "     EVERY table MUST have a descriptive caption that allows understanding without "
-            "     reading the main text. NEVER use just 'Table 1' as a caption.\n"
-            "   - Follow with a PER-REGIME table (Table 2) breaking down by easy/hard regimes.\n"
-            "   - Include a STATISTICAL COMPARISON table (Table 3): paired t-tests between key methods.\n"
-            "   - NEVER dump raw per-seed numbers in the main text. Aggregate first, then discuss.\n"
-            "   - MUST include at least 2 figures using markdown image syntax: ![Caption](charts/filename.png)\n"
-            "     One figure MUST be a performance comparison chart. Figures MUST be referenced "
-            "     in text: 'As shown in Figure 1, ...'\n"
-            "8. **Discussion** (400-600 words): interpretation of key findings, unexpected results, "
-            "comparison with prior work (CITE 3-5 papers here!), practical implications.\n"
-            "9. **Limitations** (200-300 words): honest assessment of scope, dataset, methodology. "
-            "ALL caveats consolidated HERE — nowhere else in the paper.\n"
-            "10. **Conclusion** (100-200 words MAXIMUM — this is a HARD LIMIT): "
-            "Summarize contributions in 2-3 sentences. State main finding in 1 sentence. "
-            "Suggest 2-3 concrete future directions in 1-2 sentences. "
-            "Do NOT repeat any specific numbers from Results. Do NOT restate the abstract. "
-            "A good conclusion is SHORT and forward-looking.\n\n"
-            "CRITICAL FORMATTING RULES FOR ALL SECTIONS:\n"
-            "- Write as FLOWING PROSE paragraphs, NOT bullet-point lists\n"
-            "- NEVER dump raw metric paths like 'config/method_name/seed_3/primary_metric'\n"
-            "- All numbers must be rounded to 4 decimal places maximum\n"
-            "- Every table MUST have a descriptive caption (not just 'Table 1')\n"
-            "- Use \\begin{algorithm} or pseudocode notation, NOT \\begin{verbatim}\n\n"
-            "Output markdown with ## headers. Do NOT include a References section."
-        )
+    call3_prompt = pm.sub_prompt(
+        "paper_continuation_hep_results" if is_hep else "paper_continuation_results",
+        base_system=system,
+        preamble=preamble,
+        topic_constraint=topic_constraint,
+        exp_metrics_instruction=exp_metrics_instruction,
+        narrative_writing_rules=narrative_writing_rules,
+        anti_hedging_rules=anti_hedging_rules,
+        anti_repetition_rules=anti_repetition_rules,
+        citation_instruction=citation_instruction,
+        previous_sections=f"{part1}\n\n{part2}",
+        outline=outline,
+    )
+    call3_system = call3_prompt.system
+    call3_user = call3_prompt.user
     try:
-        resp3 = _chat_with_prompt(llm, system, call3_user, max_tokens=_paper_max_tokens, retries=1)
+        resp3 = _chat_with_prompt(llm, call3_system, call3_user, max_tokens=_paper_max_tokens, retries=1)
         part3 = resp3.content.strip()
     except Exception:  # noqa: BLE001
         logger.error("Stage 17: Part 3 LLM call failed after retry — using placeholder")

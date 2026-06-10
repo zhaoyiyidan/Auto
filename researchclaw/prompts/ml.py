@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from researchclaw.prompts.metadata import apply_stage_metadata
+
 
 # -- Debate role prompts (multi-perspective generation) -------------------
 
@@ -1201,3 +1203,4 @@ _DEFAULT_STAGES: dict[str, dict[str, Any]] = {
 
 # Public name — prefer ``STAGES`` in new code.
 STAGES: dict[str, dict[str, Any]] = _DEFAULT_STAGES
+apply_stage_metadata(STAGES)

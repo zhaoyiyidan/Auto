@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from researchclaw.prompts.metadata import apply_stage_metadata
+
 
 # ======================================================================== #
 #  Debate-role prompts — HEP phenomenology personas                        #
@@ -120,7 +122,6 @@ DEBATE_ROLES_HYPOTHESIS: dict[str, dict[str, str]] = {
     },
 }
 
-
 DEBATE_ROLES_ANALYSIS: dict[str, dict[str, str]] = {
     "model_builder": {
         "system": (
@@ -193,7 +194,6 @@ DEBATE_ROLES_ANALYSIS: dict[str, dict[str, str]] = {
         ),
     },
 }
-
 
 # ======================================================================== #
 #  Stage prompts — HEP-native system+user prompts for every LLM stage      #
@@ -1412,3 +1412,5 @@ STAGES: dict[str, dict[str, Any]] = {
         "max_tokens": 16384,
     },
 }
+
+apply_stage_metadata(STAGES)

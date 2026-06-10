@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from researchclaw.prompts.metadata import apply_sub_prompt_metadata
+
 
 # -- Canonical section word-count targets ----------------------------------
 # Single source of truth for per-section word-count ranges.
@@ -1149,3 +1151,5 @@ _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
         "max_tokens": 4096,
     },
 }
+
+apply_sub_prompt_metadata(_DEFAULT_SUB_PROMPTS)

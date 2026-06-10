@@ -23,6 +23,7 @@ from researchclaw.prompts.ml import (
     DEBATE_ROLES_HYPOTHESIS as _ML_DEBATE_HYPOTHESIS,
     STAGES as _ML_STAGES,
 )
+from researchclaw.prompts.metadata import apply_stage_metadata
 
 
 # ---------------------------------------------------------------------------
@@ -603,3 +604,5 @@ DEBATE_ROLES_ANALYSIS: dict[str, dict[str, str]] = {
 
 # Sanity: silence unused-import warnings if the ML debate banks ever shrink.
 _ = (_ML_DEBATE_HYPOTHESIS, _ML_DEBATE_ANALYSIS)
+
+apply_stage_metadata(STAGES)

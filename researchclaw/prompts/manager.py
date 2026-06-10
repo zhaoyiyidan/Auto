@@ -19,6 +19,7 @@ from typing import Any
 
 import yaml
 
+from researchclaw.prompts.metadata import PromptMetadata
 from researchclaw.prompts.shared import (
     _DEFAULT_BLOCKS,
     _DEFAULT_SUB_PROMPTS,
@@ -263,6 +264,22 @@ class PromptManager:
     def max_tokens(self, stage: str) -> int | None:
         return self._stages[stage].get("max_tokens")
 
+    def meta(self, stage: str) -> PromptMetadata:
+        """Return read-only metadata for *stage*.
+
+        Stages without a ``meta`` dict receive an empty default keyed by the
+        requested stage name, preserving backward compatibility for overrides
+        and tests that construct ad-hoc entries.
+        """
+        return PromptMetadata.from_dict(
+            self._stages[stage].get("meta"),
+            prompt_id=stage,
+        )
+
+    def required_variables(self, stage: str) -> tuple[str, ...]:
+        """Return declared required template variables for *stage*."""
+        return self.meta(stage).required_variables
+
     # -- blocks -----------------------------------------------------------
 
     def block(self, name: str, **kwargs: Any) -> str:
@@ -281,6 +298,13 @@ class PromptManager:
         return RenderedPrompt(
             system=_render(entry["system"], kw),
             user=_render(entry["user"], kw),
+        )
+
+    def sub_prompt_meta(self, name: str) -> PromptMetadata:
+        """Return read-only metadata for a sub-prompt."""
+        return PromptMetadata.from_dict(
+            self._sub_prompts[name].get("meta"),
+            prompt_id=name,
         )
 
     # -- debate roles (domain-specific) -----------------------------------

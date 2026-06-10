@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -70,3 +71,83 @@ def test_seed_branch_dir_links_shared_context_and_writes_single_hypothesis(
     assert parsed[0].statement == "Treatment improves accuracy."
     assert parsed[0].prediction == "Accuracy increases by at least 5 points."
     assert parsed[0].falsification == "Accuracy does not improve."
+
+
+def test_validate_branch_runs_stage9_to_stage15_and_writes_attempt_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    try:
+        from researchclaw.pipeline import hypothesis_branch
+        from researchclaw.pipeline.executor import StageResult
+        from researchclaw.pipeline.hypothesis_branch import validate_branch
+        from researchclaw.pipeline.hypothesis_store import ValidationAttempt
+        from researchclaw.pipeline.stages import Stage, StageStatus
+    except ImportError:
+        pytest.fail("validate_branch dependencies are not implemented")
+
+    branch_run_dir = (
+        tmp_path / "run" / "hypothesis_branches" / "h-001" / "attempt-001"
+    )
+    branch_run_dir.mkdir(parents=True)
+    node = _hypothesis_node_cls()(
+        id="h-001",
+        statement="Treatment improves accuracy.",
+    )
+    attempt = ValidationAttempt(
+        attempt_id="h-001/attempt-001",
+        node_id="h-001",
+        branch_run_dir=str(branch_run_dir),
+    )
+    recorded: dict[str, Any] = {}
+
+    def fake_execute_pipeline(**kwargs: Any) -> list[Any]:
+        recorded.update(kwargs)
+        return [
+            StageResult(
+                stage=Stage.EXPERIMENT_TASK_SPEC,
+                status=StageStatus.DONE,
+                artifacts=("experiment_protocol.json",),
+            ),
+            StageResult(
+                stage=Stage.RESEARCH_DECISION,
+                status=StageStatus.DONE,
+                artifacts=("decision.md",),
+                decision="pivot",
+            ),
+        ]
+
+    monkeypatch.setattr(
+        hypothesis_branch,
+        "execute_pipeline",
+        fake_execute_pipeline,
+        raising=False,
+    )
+
+    result = validate_branch(
+        branch_run_dir=branch_run_dir,
+        node=node,
+        attempt=attempt,
+        config=object(),
+        adapters=object(),
+    )
+
+    assert recorded["run_dir"] == branch_run_dir
+    assert recorded["from_stage"] is Stage.EXPERIMENT_TASK_SPEC
+    assert recorded["to_stage"] is Stage.RESEARCH_DECISION
+    assert recorded["config"] is not None
+    assert recorded["adapters"] is not None
+    assert result["decision"] == "pivot"
+    assert result["artifacts"] == ["decision.md"]
+
+    payload = json.loads(
+        (branch_run_dir / "attempt_result.json").read_text(encoding="utf-8")
+    )
+    assert payload == {
+        "attempt_id": "h-001/attempt-001",
+        "node_id": "h-001",
+        "status": "succeeded",
+        "decision": "pivot",
+        "artifacts": ["decision.md"],
+        "error": None,
+    }

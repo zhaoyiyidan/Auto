@@ -11,7 +11,7 @@ from researchclaw.pipeline.hypothesis_tree import (
     _atomic_write_json,
     _atomic_write_text,
 )
-from researchclaw.pipeline.runner import execute_pipeline
+from researchclaw.pipeline.runner import _promote_best_stage14, execute_pipeline
 from researchclaw.pipeline.stages import Stage, StageStatus
 
 
@@ -103,6 +103,10 @@ def validate_branch(
     }
     _atomic_write_json(branch_run_dir / "attempt_result.json", payload)
     return payload
+
+
+def promote_best_stage14_for_branch(branch_run_dir: Path, config: Any) -> None:
+    _promote_best_stage14(Path(branch_run_dir), config)
 
 
 def branch_config(

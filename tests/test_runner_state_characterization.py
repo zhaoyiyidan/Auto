@@ -69,11 +69,10 @@ def _write_stage14_candidate(run_dir: Path, dirname: str, score: float, analysis
     (stage_dir / "analysis.md").write_text(analysis, encoding="utf-8")
 
 
-def test_execute_pipeline_writes_run_root_state_files(
+def _run_mocked_legacy_pipeline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # characterization
+) -> tuple[Path, list[StageResult], list[Stage], str]:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     run_id = "run-root-state"
@@ -140,6 +139,18 @@ def test_execute_pipeline_writes_run_root_state_files(
         config=_config(tmp_path),
         adapters=AdapterBundle(),
     )
+    return run_dir, results, executed, run_id
+
+
+def test_execute_pipeline_writes_run_root_state_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # characterization
+    run_dir, results, executed, run_id = _run_mocked_legacy_pipeline(
+        tmp_path,
+        monkeypatch,
+    )
 
     checkpoint = json.loads((run_dir / "checkpoint.json").read_text(encoding="utf-8"))
     heartbeat = json.loads((run_dir / "heartbeat.json").read_text(encoding="utf-8"))
@@ -186,3 +197,62 @@ def test_promote_best_stage14_writes_run_root_best_artifacts(tmp_path: Path) -> 
         (run_dir / "stage-14" / "experiment_summary.json").read_text(encoding="utf-8")
     )
     assert promoted_current["metrics_summary"]["primary_metric"]["mean"] == 0.91
+
+
+def test_legacy_run_root_inventory_is_characterized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # characterization
+    run_dir, results, _executed, _run_id = _run_mocked_legacy_pipeline(
+        tmp_path,
+        monkeypatch,
+    )
+
+    stage_dirs = {f"stage-{idx:02d}" for idx in range(1, 24)}
+    run_root_state = {
+        "analysis_best.md",
+        "checkpoint.json",
+        "deliverables",
+        "experiment_memory",
+        "experiment_summary_best.json",
+        "heartbeat.json",
+        "hypothesis_tree",
+        "pipeline_summary.json",
+    }
+
+    assert len(results) == 23
+    assert {path.name for path in run_dir.iterdir()} == stage_dirs | run_root_state
+    assert {
+        path.name
+        for path in (run_dir / "hypothesis_tree").iterdir()
+    } == {
+        "current_node.txt",
+        "events.jsonl",
+        "node_tree",
+        "nodes",
+        "tree.json",
+    }
+    assert {
+        str(path.relative_to(run_dir / "hypothesis_tree"))
+        for path in (run_dir / "hypothesis_tree").rglob("*")
+        if path.is_file()
+    } >= {
+        "current_node.txt",
+        "events.jsonl",
+        "node_tree/index.json",
+        "node_tree/root/_node.json",
+        "node_tree/root/h-1/_hypothesis.md",
+        "node_tree/root/h-1/_node.json",
+        "nodes/h-1/hypothesis.md",
+        "nodes/h-1/node.json",
+        "nodes/root/node.json",
+        "tree.json",
+    }
+    assert {
+        path.name
+        for path in (run_dir / "deliverables").iterdir()
+    } == {
+        "manifest.json",
+        "neurips_2025.sty",
+    }

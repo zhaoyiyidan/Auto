@@ -337,3 +337,68 @@ def test_hypothesis_store_filelock_serializes_concurrent_event_appends(
     assert len(events) == count
     assert sorted(event["data"]["index"] for event in events) == list(range(count))
     assert (tmp_path / "hypothesis_tree" / ".lock").is_file()
+
+
+def test_hypothesis_store_rebuild_tree_from_events_jsonl(tmp_path: Path) -> None:
+    HypothesisStore = _hypothesis_store_cls()
+    store = HypothesisStore(tmp_path)
+    parent = store.create_node(
+        statement="Parent hypothesis.",
+        source="stage8_batch",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    child = store.create_node(
+        statement="Child hypothesis.",
+        source="extend",
+        parent_id=parent.id,
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+    store.set_node_status(
+        parent.id,
+        "validating",
+        created_at="2026-01-01T00:02:00+00:00",
+    )
+    store.set_node_status(
+        parent.id,
+        "supported",
+        created_at="2026-01-01T00:03:00+00:00",
+    )
+
+    parent_node_path = (
+        tmp_path / "hypothesis_tree" / "nodes" / parent.id / "node.json"
+    )
+    parent_payload = json.loads(parent_node_path.read_text(encoding="utf-8"))
+    parent_payload["status"] = "proposed"
+    parent_node_path.write_text(json.dumps(parent_payload), encoding="utf-8")
+
+    rebuilt = store.rebuild_tree(generated_at="2026-01-01T00:04:00+00:00")
+
+    assert rebuilt == {
+        "version": 2,
+        "generated": "2026-01-01T00:04:00+00:00",
+        "nodes": {
+            parent.id: {
+                "id": parent.id,
+                "parent_id": None,
+                "status": "supported",
+                "children": [child.id],
+            },
+            child.id: {
+                "id": child.id,
+                "parent_id": parent.id,
+                "status": "proposed",
+                "children": [],
+            },
+        },
+        "edges": [
+            {
+                "source_id": parent.id,
+                "target_id": child.id,
+                "edge_type": "extend",
+                "created_at": "2026-01-01T00:01:00+00:00",
+            }
+        ],
+    }
+    assert json.loads(
+        (tmp_path / "hypothesis_tree" / "tree.json").read_text(encoding="utf-8")
+    ) == rebuilt

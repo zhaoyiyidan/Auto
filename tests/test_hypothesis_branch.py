@@ -224,3 +224,104 @@ def test_promote_best_stage14_for_branch_is_scoped_to_attempt(
     ) == "# Analysis\nBest branch result."
     assert not (shared_run_dir / "experiment_summary_best.json").exists()
     assert not (shared_run_dir / "analysis_best.md").exists()
+
+
+def test_coordinator_runs_mocked_branches_with_isolated_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from researchclaw.experiment.protocol import parse_hypotheses_md
+    from researchclaw.pipeline import hypothesis_branch
+    from researchclaw.pipeline.executor import StageResult
+    from researchclaw.pipeline.hypothesis_coordinator import (
+        HypothesisValidationCoordinator,
+    )
+    from researchclaw.pipeline.stages import Stage, StageStatus
+
+    run_dir = tmp_path / "run"
+    for stage_number in range(1, 8):
+        stage_dir = run_dir / f"stage-{stage_number:02d}"
+        stage_dir.mkdir(parents=True)
+        (stage_dir / f"context_{stage_number}.txt").write_text(
+            f"context {stage_number}",
+            encoding="utf-8",
+        )
+    hypotheses_md = """
+## H1: Accuracy hypothesis
+Statement: Treatment improves accuracy.
+Prediction: Accuracy improves.
+Falsification: Accuracy does not improve.
+Rationale: Signal one.
+
+## H2: Robustness hypothesis
+Statement: Treatment improves robustness.
+Prediction: Robustness improves.
+Falsification: Robustness does not improve.
+Rationale: Signal two.
+"""
+    executed: list[Path] = []
+
+    def fake_execute_pipeline(**kwargs: Any) -> list[Any]:
+        branch_run_dir = Path(kwargs["run_dir"])
+        executed.append(branch_run_dir)
+        marker = branch_run_dir.parent.name
+        stage9 = branch_run_dir / "stage-09"
+        stage9.mkdir(parents=True)
+        (stage9 / "branch_marker.txt").write_text(marker, encoding="utf-8")
+        stage15 = branch_run_dir / "stage-15"
+        stage15.mkdir(parents=True)
+        (stage15 / "decision.md").write_text(
+            "## Decision\nPROCEED",
+            encoding="utf-8",
+        )
+        return [
+            StageResult(
+                stage=Stage.EXPERIMENT_TASK_SPEC,
+                status=StageStatus.DONE,
+                artifacts=("branch_marker.txt",),
+            ),
+            StageResult(
+                stage=Stage.RESEARCH_DECISION,
+                status=StageStatus.DONE,
+                artifacts=("decision.md",),
+                decision="proceed",
+            ),
+        ]
+
+    monkeypatch.setattr(hypothesis_branch, "execute_pipeline", fake_execute_pipeline)
+
+    attempts = HypothesisValidationCoordinator(run_dir).split_and_validate_sequential(
+        hypotheses_md,
+        config=object(),
+        adapters=object(),
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+
+    expected_branches = [
+        run_dir / "hypothesis_branches" / "h-001" / "attempt-001",
+        run_dir / "hypothesis_branches" / "h-002" / "attempt-001",
+    ]
+    assert executed == expected_branches
+    assert [attempt.status for attempt in attempts] == ["succeeded", "succeeded"]
+    for branch_run_dir, expected_statement in zip(
+        expected_branches,
+        ["Treatment improves accuracy.", "Treatment improves robustness."],
+        strict=True,
+    ):
+        parsed = parse_hypotheses_md(
+            (branch_run_dir / "stage-08" / "hypotheses.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert len(parsed) == 1
+        assert parsed[0].statement == expected_statement
+        assert (branch_run_dir / "stage-01").is_symlink()
+        assert (branch_run_dir / "stage-09" / "branch_marker.txt").read_text(
+            encoding="utf-8"
+        ) == branch_run_dir.parent.name
+        assert (branch_run_dir / "stage-15" / "decision.md").is_file()
+        attempt_result = json.loads(
+            (branch_run_dir / "attempt_result.json").read_text(encoding="utf-8")
+        )
+        assert attempt_result["status"] == "succeeded"
+        assert attempt_result["decision"] == "proceed"

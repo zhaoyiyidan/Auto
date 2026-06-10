@@ -82,8 +82,14 @@ class HypothesisValidationCoordinator:
         config: Any,
         adapters: Any,
     ) -> Any:
-        raise NotImplementedError(
-            "validate_branch is introduced by the branch-isolation phase"
+        from researchclaw.pipeline.hypothesis_branch import validate_branch
+
+        return validate_branch(
+            branch_run_dir=Path(attempt.branch_run_dir),
+            node=node,
+            attempt=attempt,
+            config=config,
+            adapters=adapters,
         )
 
     def _create_followup_node(

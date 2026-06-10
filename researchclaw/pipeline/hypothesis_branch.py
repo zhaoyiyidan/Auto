@@ -7,7 +7,12 @@ import os
 from pathlib import Path
 from typing import Any
 
-from researchclaw.pipeline.hypothesis_tree import _atomic_write_text
+from researchclaw.pipeline.hypothesis_tree import (
+    _atomic_write_json,
+    _atomic_write_text,
+)
+from researchclaw.pipeline.runner import execute_pipeline
+from researchclaw.pipeline.stages import Stage, StageStatus
 
 
 def _single_hypothesis_md(node: Any) -> str:
@@ -44,6 +49,60 @@ def seed_branch_dir(branch_run_dir: Path, shared_run_dir: Path, node: Any) -> No
         raise FileExistsError(f"Branch stage-08 must be a real directory: {stage8}")
     stage8.mkdir(parents=True, exist_ok=True)
     _atomic_write_text(stage8 / "hypotheses.md", _single_hypothesis_md(node))
+
+
+def _branch_run_id(branch_run_dir: Path, node: Any, attempt: Any) -> str:
+    attempt_name = str(getattr(attempt, "attempt_id", "attempt")).split("/")[-1]
+    run_name = (
+        branch_run_dir.parents[2].name
+        if len(branch_run_dir.parents) > 2
+        else "branch"
+    )
+    return f"{run_name}-{getattr(node, 'id', 'hypothesis')}-{attempt_name}"
+
+
+def validate_branch(
+    *,
+    branch_run_dir: Path,
+    node: Any,
+    attempt: Any,
+    config: Any,
+    adapters: Any,
+) -> dict[str, Any]:
+    branch_run_dir = Path(branch_run_dir)
+    results = execute_pipeline(
+        run_dir=branch_run_dir,
+        run_id=_branch_run_id(branch_run_dir, node, attempt),
+        config=config,
+        adapters=adapters,
+        from_stage=Stage.EXPERIMENT_TASK_SPEC,
+        to_stage=Stage.RESEARCH_DECISION,
+    )
+    final_result = next(
+        (
+            result
+            for result in reversed(results)
+            if result.stage == Stage.RESEARCH_DECISION
+        ),
+        results[-1] if results else None,
+    )
+    succeeded = (
+        final_result is not None
+        and final_result.stage == Stage.RESEARCH_DECISION
+        and final_result.status == StageStatus.DONE
+    )
+    payload = {
+        "attempt_id": getattr(attempt, "attempt_id", ""),
+        "node_id": getattr(node, "id", ""),
+        "status": "succeeded" if succeeded else "failed",
+        "decision": getattr(final_result, "decision", None) if final_result else None,
+        "artifacts": list(getattr(final_result, "artifacts", ()) or ())
+        if final_result
+        else [],
+        "error": getattr(final_result, "error", None) if final_result else "no results",
+    }
+    _atomic_write_json(branch_run_dir / "attempt_result.json", payload)
+    return payload
 
 
 def branch_config(

@@ -405,3 +405,27 @@ class HypothesisValidationCoordinator:
                     created_at=created_at,
                 )
         return [attempt for attempt in completed if attempt is not None]
+
+    def reduce_attempt_results_concurrent(
+        self,
+        result_paths: list[Path],
+        *,
+        max_concurrent: int,
+        created_at: str | None = None,
+    ) -> list[ValidationAttempt]:
+        if not result_paths:
+            return []
+        max_workers = max(1, int(max_concurrent or 1))
+        completed: list[ValidationAttempt | None] = [None] * len(result_paths)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            future_indexes = {
+                pool.submit(
+                    self.reduce_attempt_result,
+                    result_path,
+                    created_at=created_at,
+                ): index
+                for index, result_path in enumerate(result_paths)
+            }
+            for future in as_completed(future_indexes):
+                completed[future_indexes[future]] = future.result()
+        return [attempt for attempt in completed if attempt is not None]

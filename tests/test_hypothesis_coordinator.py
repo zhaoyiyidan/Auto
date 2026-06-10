@@ -561,3 +561,58 @@ def test_coordinator_honors_concurrent_branch_limit(
     assert len(completed) == 4
     assert max_active == 2
     assert [attempt.status for attempt in completed] == ["succeeded"] * 4
+
+
+def test_coordinator_reduces_attempt_results_concurrently_without_lost_verdicts(
+    tmp_path: Path,
+) -> None:
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    result_paths: list[Path] = []
+    for index in range(2):
+        node = coordinator.store.create_node(
+            statement=f"Hypothesis {index}",
+            created_at=f"2026-01-01T00:00:0{index}+00:00",
+        )
+        attempt = coordinator.store.add_attempt(
+            node_id=node.id,
+            branch_run_dir=str(
+                tmp_path / "hypothesis_branches" / node.id / "attempt-001"
+            ),
+            created_at=f"2026-01-01T00:01:0{index}+00:00",
+        )
+        coordinator.store.set_node_status(
+            node.id,
+            "validating",
+            created_at=f"2026-01-01T00:02:0{index}+00:00",
+        )
+        result_path = Path(attempt.branch_run_dir) / "attempt_result.json"
+        result_path.parent.mkdir(parents=True)
+        result_path.write_text(
+            json.dumps(
+                {
+                    "attempt_id": attempt.attempt_id,
+                    "node_id": node.id,
+                    "status": "succeeded",
+                    "decision": "proceed",
+                    "artifacts": ["stage-15/decision.md"],
+                    "error": None,
+                }
+            ),
+            encoding="utf-8",
+        )
+        result_paths.append(result_path)
+
+    reduced = coordinator.reduce_attempt_results_concurrent(
+        result_paths,
+        max_concurrent=2,
+        created_at="2026-01-01T00:03:00+00:00",
+    )
+
+    assert [attempt.status for attempt in reduced] == ["succeeded", "succeeded"]
+    verdict_attempts = [
+        event["data"]["attempt_id"]
+        for event in _events(tmp_path)
+        if event["event_type"] == "node_verdict"
+    ]
+    assert verdict_attempts == ["h-001/attempt-001", "h-002/attempt-001"]

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -19,6 +21,24 @@ def _validation_attempt_cls() -> Any:
     except ImportError:
         pytest.fail("ValidationAttempt is not implemented")
     return ValidationAttempt
+
+
+def _hypothesis_store_cls() -> Any:
+    try:
+        from researchclaw.pipeline.hypothesis_store import HypothesisStore
+    except ImportError:
+        pytest.fail("HypothesisStore is not implemented")
+    return HypothesisStore
+
+
+def _events(run_dir: Path) -> list[dict[str, Any]]:
+    return [
+        json.loads(line)
+        for line in (run_dir / "hypothesis_tree" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
 
 
 def test_hypothesis_node_hash_is_stable_and_content_based() -> None:
@@ -140,3 +160,47 @@ def test_validation_attempt_rejects_invalid_status() -> None:
             status="complete",
             branch_run_dir="/tmp/run/hypothesis_branches/h-001/attempt-001",
         )
+
+
+def test_hypothesis_store_create_node_writes_node_artifacts_and_event(
+    tmp_path: Path,
+) -> None:
+    HypothesisStore = _hypothesis_store_cls()
+    store = HypothesisStore(tmp_path)
+
+    node = store.create_node(
+        statement="Treatment improves accuracy.",
+        prediction="Accuracy increases by at least 5 points.",
+        falsification="Accuracy does not improve.",
+        rationale="Prior runs show useful signal.",
+        baselines=("baseline-a",),
+        source="stage8_batch",
+        parent_id=None,
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+
+    node_dir = tmp_path / "hypothesis_tree" / "nodes" / "h-001"
+    node_payload = json.loads((node_dir / "node.json").read_text(encoding="utf-8"))
+
+    assert node.id == "h-001"
+    assert node_payload == node.to_dict()
+    assert (node_dir / "hypothesis.md").read_text(encoding="utf-8") == (
+        "# Hypothesis h-001\n\n"
+        "## Statement\nTreatment improves accuracy.\n\n"
+        "## Prediction\nAccuracy increases by at least 5 points.\n\n"
+        "## Falsification\nAccuracy does not improve.\n\n"
+        "## Rationale\nPrior runs show useful signal.\n\n"
+        "## Baselines\n- baseline-a\n"
+    )
+    assert _events(tmp_path) == [
+        {
+            "event_type": "node_proposed",
+            "node_id": "h-001",
+            "data": {
+                "parent_id": None,
+                "source": "stage8_batch",
+                "hypothesis_hash": node.hypothesis_hash,
+            },
+            "timestamp": "2026-01-01T00:00:00+00:00",
+        }
+    ]

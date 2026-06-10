@@ -341,6 +341,21 @@ security:
 #       # optional, default: 0.0. Pause if stage quality falls below this score.
 #       min_quality_score: 0.7
 
+hypothesis_validation:
+  # optional, default: false. When true, Stage 8 hypotheses are validated
+  # independently through branch-local Stage 9-15 attempts.
+  enabled: false
+
+  # optional, default: 1. Branch concurrency is introduced after the sequential
+  # coordinator path is stable.
+  max_concurrent_branches: 1
+
+  # optional, default: 1. Maximum validation attempts per hypothesis node.
+  max_attempts_per_node: 1
+
+  # optional, default: "shared". Future values include "worktree".
+  workspace_isolation: "shared"
+
 experiment:
   # optional, default: "workspace". Current runtime path is workspace-native.
   mode: "workspace"

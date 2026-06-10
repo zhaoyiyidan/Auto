@@ -353,6 +353,16 @@ class ExperimentConfig:
 
 
 @dataclass(frozen=True)
+class HypothesisValidationConfig:
+    """Per-hypothesis Stage 9-15 validation feature flag."""
+
+    enabled: bool = False
+    max_concurrent_branches: int = 1
+    max_attempts_per_node: int = 1
+    workspace_isolation: str = "shared"
+
+
+@dataclass(frozen=True)
 class MetaClawPRMConfig:
     """PRM quality gate settings for MetaClaw bridge."""
 
@@ -623,6 +633,9 @@ class RCConfig:
     llm: LlmConfig = field(default_factory=LlmConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     experiment: ExperimentConfig = field(default_factory=ExperimentConfig)
+    hypothesis_validation: HypothesisValidationConfig = field(
+        default_factory=HypothesisValidationConfig
+    )
     export: ExportConfig = field(default_factory=ExportConfig)
     prompts: PromptsConfig = field(default_factory=PromptsConfig)
     web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
@@ -675,6 +688,7 @@ class RCConfig:
         llm = data["llm"]
         security = data.get("security") or {}
         experiment = data.get("experiment") or {}
+        hypothesis_validation = data.get("hypothesis_validation") or {}
         export = data.get("export") or {}
         prompts = data.get("prompts") or {}
         web_search = data.get("web_search") or {}
@@ -746,6 +760,9 @@ class RCConfig:
                 redact_sensitive_logs=bool(security.get("redact_sensitive_logs", True)),
             ),
             experiment=_parse_experiment_config(experiment),
+            hypothesis_validation=_parse_hypothesis_validation_config(
+                hypothesis_validation
+            ),
             export=ExportConfig(
                 target_conference=export.get("target_conference", "neurips_2025"),
                 authors=export.get("authors", "Anonymous"),
@@ -959,6 +976,19 @@ def _parse_experiment_config(data: dict[str, Any]) -> ExperimentConfig:
             data.get("result_analysis_agent") or {}
         ),
         submitter=_parse_submitter_config(data.get("submitter") or {}),
+    )
+
+
+def _parse_hypothesis_validation_config(
+    data: dict[str, Any],
+) -> HypothesisValidationConfig:
+    if not data:
+        return HypothesisValidationConfig()
+    return HypothesisValidationConfig(
+        enabled=bool(data.get("enabled", False)),
+        max_concurrent_branches=_safe_int(data.get("max_concurrent_branches"), 1),
+        max_attempts_per_node=_safe_int(data.get("max_attempts_per_node"), 1),
+        workspace_isolation=str(data.get("workspace_isolation", "shared")),
     )
 
 

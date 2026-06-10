@@ -264,6 +264,15 @@ SUB_PROMPT_METADATA: dict[str, dict[str, Any]] = {
             "time_budget_sec",
         ],
     },
+    "evidence_organizer": {
+        "purpose": "Instruct the Stage 14 organizer agent to write factual analysis from evidence paths.",
+        "required_variables": [
+            "stage_dir",
+            "sections",
+            "retry_block",
+            "bundle_json",
+        ],
+    },
     "hypothesis_synthesize": {
         "purpose": "Merge multiple hypothesis debate perspectives.",
         "required_variables": ["perspectives"],

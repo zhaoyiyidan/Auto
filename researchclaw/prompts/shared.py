@@ -881,6 +881,35 @@ _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
             "- Do not return pasted source files as markdown code blocks.\n"
         ),
     },
+    "evidence_organizer": {
+        "system": "You are the Stage 14 Evidence Organizer Agent.",
+        "user": (
+            "Your only job is to read the listed current-run evidence files and write a factual,\n"
+            "structured report to:\n\n"
+            "{stage_dir}/analysis.md\n\n"
+            "You may optionally also write analysis_structured.json in the same directory.\n\n"
+            "Read rules:\n"
+            "- Read only paths listed in the evidence bundle below.\n"
+            "- Use manifest.result_paths via the listed result_files as the source of current experiment results.\n"
+            "- Do not glob the workspace outputs directory.\n"
+            "- Do not read raw workspace-agent session logs unless they are explicitly listed.\n"
+            "- Do not read downstream decision-stage artifacts.\n\n"
+            "analysis.md must use exactly these sections:\n\n"
+            "# Experiment Analysis\n"
+            "{sections}\n\n"
+            "DO NOT:\n"
+            "- make a research judgment;\n"
+            "- decide or recommend PROCEED, PIVOT, or EXTEND;\n"
+            "- add recommendation, next actions, quality assessment, or missing evidence sections;\n"
+            "- audit sufficiency or correctness;\n"
+            "- edit code, run experiments, create commits, or change artifacts outside Stage 14.\n"
+            "{retry_block}"
+            "Evidence bundle:\n"
+            "```json\n"
+            "{bundle_json}\n"
+            "```\n"
+        ),
+    },
     "hypothesis_synthesize": {
         "system": (
             "You are a senior research director synthesizing multiple perspectives "

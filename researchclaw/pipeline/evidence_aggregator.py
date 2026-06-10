@@ -219,3 +219,30 @@ class EvidenceAggregator:
         output_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write_text(output_dir / "paper_context.md", context)
         return context
+
+    def write_all(
+        self,
+        *,
+        metric_name: str,
+        direction: str,
+        generated_at: str | None = None,
+    ) -> dict[str, Any]:
+        summary = self.write_validation_summary(
+            metric_name=metric_name,
+            direction=direction,
+            generated_at=generated_at,
+        )
+        registry = self.write_evidence_registry(
+            metric_name=metric_name,
+            direction=direction,
+        )
+        context = self.write_paper_context(
+            metric_name=metric_name,
+            direction=direction,
+            generated_at=generated_at,
+        )
+        return {
+            "validation_summary": summary,
+            "evidence_registry": registry,
+            "paper_context": context,
+        }

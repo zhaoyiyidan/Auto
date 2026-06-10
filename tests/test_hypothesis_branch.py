@@ -69,6 +69,37 @@ def _init_git_repo(path: Path) -> None:
     _run_git(path, "commit", "-q", "-m", "initial")
 
 
+def _workspace_config(tmp_path: Path) -> Any:
+    from researchclaw.config import RCConfig
+
+    return RCConfig.from_dict(
+        {
+            "project": {"name": "branch-workspace-test", "mode": "docs-first"},
+            "research": {"topic": "branch workspace"},
+            "runtime": {"timezone": "UTC"},
+            "notifications": {"channel": "local"},
+            "knowledge_base": {"backend": "markdown", "root": str(tmp_path / "kb")},
+            "openclaw_bridge": {},
+            "llm": {
+                "provider": "openai-compatible",
+                "base_url": "http://localhost:1234/v1",
+                "api_key_env": "RC_TEST_KEY",
+                "api_key": "inline-test-key",
+            },
+            "experiment": {
+                "workspace_agent": {
+                    "enabled": True,
+                    "workspace_path": "/base/workspace",
+                    "session_name": "base-session",
+                    "agent": "codex",
+                }
+            },
+        },
+        project_root=tmp_path,
+        check_paths=False,
+    )
+
+
 def test_seed_branch_dir_links_shared_context_and_writes_single_hypothesis(
     tmp_path: Path,
 ) -> None:
@@ -435,3 +466,55 @@ def test_release_workspace_removes_terminal_worktree_idempotently(
     assert not workspace_path.exists()
     release_workspace(succeeded, source_workspace=repo)
     assert not workspace_path.exists()
+
+
+def test_validate_branch_threads_attempt_workspace_and_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from researchclaw.pipeline import hypothesis_branch
+    from researchclaw.pipeline.executor import StageResult
+    from researchclaw.pipeline.hypothesis_branch import validate_branch
+    from researchclaw.pipeline.hypothesis_store import HypothesisNode, ValidationAttempt
+    from researchclaw.pipeline.stages import Stage, StageStatus
+
+    branch_run_dir = (
+        tmp_path / "run" / "hypothesis_branches" / "h-001" / "attempt-001"
+    )
+    branch_run_dir.mkdir(parents=True)
+    attempt = ValidationAttempt(
+        attempt_id="h-001/attempt-001",
+        node_id="h-001",
+        branch_run_dir=str(branch_run_dir),
+        workspace_path=str(tmp_path / "worktrees" / "h-001-attempt-001"),
+        agent_session_name="base-session-h-001-attempt-001",
+    )
+    seen: dict[str, str] = {}
+
+    def fake_execute_pipeline(**kwargs: Any) -> list[Any]:
+        cfg = kwargs["config"]
+        seen["workspace_path"] = cfg.experiment.workspace_agent.workspace_path
+        seen["session_name"] = cfg.experiment.workspace_agent.session_name
+        return [
+            StageResult(
+                stage=Stage.RESEARCH_DECISION,
+                status=StageStatus.DONE,
+                artifacts=("decision.md",),
+                decision="proceed",
+            )
+        ]
+
+    monkeypatch.setattr(hypothesis_branch, "execute_pipeline", fake_execute_pipeline)
+
+    validate_branch(
+        branch_run_dir=branch_run_dir,
+        node=HypothesisNode(id="h-001", statement="Treatment improves accuracy."),
+        attempt=attempt,
+        config=_workspace_config(tmp_path),
+        adapters=object(),
+    )
+
+    assert seen == {
+        "workspace_path": str(tmp_path / "worktrees" / "h-001-attempt-001"),
+        "session_name": "base-session-h-001-attempt-001",
+    }

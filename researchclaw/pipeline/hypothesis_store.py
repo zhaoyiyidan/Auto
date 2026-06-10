@@ -21,6 +21,7 @@ from researchclaw.pipeline.hypothesis_tree import _atomic_write_json, _atomic_wr
 
 
 TREE_DIRNAME = "hypothesis_tree"
+STORE_TREE_VERSION = 2
 _NODE_ID_RE = re.compile(r"^h-(\d+)$")
 _ATTEMPT_ID_RE = re.compile(r"^attempt-(\d+)\.json$")
 
@@ -308,6 +309,18 @@ class HypothesisStore:
             raise ValueError(f"Unknown hypothesis node: {node_id}")
         return HypothesisNode.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
+    def _read_events(self) -> list[dict[str, Any]]:
+        if not self.events_path.exists():
+            return []
+        events: list[dict[str, Any]] = []
+        for line in self.events_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            payload = json.loads(line)
+            if isinstance(payload, dict):
+                events.append(payload)
+        return events
+
     def _append_event(
         self,
         *,
@@ -515,3 +528,64 @@ class HypothesisStore:
             timestamp=created_at,
         )
         return updated
+
+    def rebuild_tree(self, *, generated_at: str | None = None) -> dict[str, Any]:
+        generated_at = generated_at or _utcnow_iso()
+        with _file_lock(self.lock_path):
+            nodes: dict[str, dict[str, Any]] = {}
+            edges: list[dict[str, Any]] = []
+            for event in self._read_events():
+                event_type = str(event.get("event_type") or "")
+                node_id = event.get("node_id")
+                data = event.get("data") if isinstance(event.get("data"), dict) else {}
+                timestamp = str(event.get("timestamp") or "")
+                if event_type == "node_proposed" and node_id:
+                    node_id = str(node_id)
+                    parent_id = data.get("parent_id")
+                    nodes[node_id] = {
+                        "id": node_id,
+                        "parent_id": parent_id,
+                        "status": "proposed",
+                        "children": [],
+                    }
+                    if parent_id:
+                        parent = nodes.setdefault(
+                            str(parent_id),
+                            {
+                                "id": str(parent_id),
+                                "parent_id": None,
+                                "status": "proposed",
+                                "children": [],
+                            },
+                        )
+                        if node_id not in parent["children"]:
+                            parent["children"].append(node_id)
+                        edges.append(
+                            {
+                                "source_id": str(parent_id),
+                                "target_id": node_id,
+                                "edge_type": str(data.get("source") or "proposed"),
+                                "created_at": timestamp,
+                            }
+                        )
+                elif event_type in {"node_status_changed", "node_verdict"} and node_id:
+                    node_id = str(node_id)
+                    node = nodes.setdefault(
+                        node_id,
+                        {
+                            "id": node_id,
+                            "parent_id": None,
+                            "status": "proposed",
+                            "children": [],
+                        },
+                    )
+                    node["status"] = str(data.get("to") or node["status"])
+
+            tree = {
+                "version": STORE_TREE_VERSION,
+                "generated": generated_at,
+                "nodes": nodes,
+                "edges": edges,
+            }
+            _atomic_write_json(self.tree_dir / "tree.json", tree)
+            return tree

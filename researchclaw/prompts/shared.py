@@ -1039,6 +1039,20 @@ _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
             "{template}\n"
         ),
     },
+    "topic_quality_eval": {
+        "system": (
+            "You are a senior {domain_label} researcher evaluating research topic quality."
+        ),
+        "user": (
+            "Evaluate this research topic for a top ML conference paper. "
+            "Score 1-10 on: (a) novelty, (b) specificity, (c) feasibility. "
+            "If overall score < 5, suggest a revised topic.\n\n"
+            "Topic: {topic}\n\n"
+            "Reply as JSON: {\"novelty\": N, \"specificity\": N, "
+            "\"feasibility\": N, \"overall\": N, \"suggestion\": \"...\"}"
+        ),
+        "json_mode": True,
+    },
     "hypothesis_synthesize": {
         "system": (
             "You are a senior research director synthesizing multiple perspectives "

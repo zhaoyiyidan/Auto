@@ -314,6 +314,12 @@ SUB_PROMPT_METADATA: dict[str, dict[str, Any]] = {
             "template",
         ],
     },
+    "topic_quality_eval": {
+        "purpose": "Non-blocking topic quality scoring for problem decomposition.",
+        "required_variables": ["domain_label", "topic"],
+        "output_schema": "JSON object with novelty, specificity, feasibility, overall, suggestion.",
+        "json_mode": True,
+    },
     "hypothesis_synthesize": {
         "purpose": "Merge multiple hypothesis debate perspectives.",
         "required_variables": ["perspectives"],

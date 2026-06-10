@@ -160,24 +160,23 @@ Derived from `goal.md` for topic: {config.research.topic}
     # Quick LLM check: is the topic well-scoped for a conference paper?
     if llm is not None:
         try:
+            domain_label = _detect_domain(
+                config.research.topic,
+                config.research.domains,
+            )[1]
+            eval_prompt = _pm.sub_prompt(
+                "topic_quality_eval",
+                domain_label=domain_label,
+                topic=config.research.topic,
+            )
             _eval_resp = llm.chat(
                 [
                     {
                         "role": "user",
-                        "content": (
-                            "Evaluate this research topic for a top ML conference paper. "
-                            "Score 1-10 on: (a) novelty, (b) specificity, (c) feasibility. "
-                            "If overall score < 5, suggest a revised topic.\n\n"
-                            f"Topic: {config.research.topic}\n\n"
-                            "Reply as JSON: {\"novelty\": N, \"specificity\": N, "
-                            "\"feasibility\": N, \"overall\": N, \"suggestion\": \"...\"}"
-                        ),
+                        "content": eval_prompt.user,
                     }
                 ],
-                system=(
-                    f"You are a senior {_detect_domain(config.research.topic, config.research.domains)[1]} "
-                    f"researcher evaluating research topic quality."
-                ),
+                system=eval_prompt.system,
                 strip_thinking=True,
             )
             _eval_data = _safe_json_loads(_eval_resp.content, {})

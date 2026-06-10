@@ -37,13 +37,28 @@ SUPPORTED_DOMAINS = ("ml", "hep_ph", "biology_metabolic")
 # ---------------------------------------------------------------------------
 
 
-def _render(template: str, variables: dict[str, str]) -> str:
+class PromptRenderError(ValueError):
+    """Raised when strict prompt rendering is missing required variables."""
+
+
+def _render(
+    template: str,
+    variables: dict[str, str],
+    *,
+    strict: bool = False,
+    required: tuple[str, ...] = (),
+) -> str:
     """Replace ``{var_name}`` placeholders with *variables* values.
 
     Only bare ``{word_chars}`` tokens are substituted — JSON schema examples
     like ``{candidates:[...]}`` are left untouched because the regex requires
     the closing ``}`` immediately after the identifier.
     """
+    if strict:
+        missing = tuple(key for key in required if key not in variables)
+        if missing:
+            names = ", ".join(missing)
+            raise PromptRenderError(f"Missing required prompt variables: {names}")
 
     def _replacer(match: re.Match[str]) -> str:
         key = match.group(1)
@@ -217,6 +232,7 @@ class PromptManager:
         stage: str,
         *,
         evolution_overlay: str = "",
+        strict: bool = False,
         **kwargs: Any,
     ) -> RenderedPrompt:
         """Return a fully rendered prompt for *stage* with variables filled.
@@ -227,7 +243,13 @@ class PromptManager:
         entry = self._stages[stage]
         kw = {k: str(v) for k, v in kwargs.items()}
         kw.setdefault("extension_context", "")
-        user_text = _render(entry["user"], kw)
+        required = self.required_variables(stage) if strict else ()
+        user_text = _render(
+            entry["user"],
+            kw,
+            strict=strict,
+            required=required,
+        )
         if evolution_overlay:
             user_text = f"{user_text}\n\n{evolution_overlay}"
         extra = self._extras.get(stage, "")
@@ -239,7 +261,12 @@ class PromptManager:
                 f"{extra}"
             )
         return RenderedPrompt(
-            system=_render(entry["system"], kw),
+            system=_render(
+                entry["system"],
+                kw,
+                strict=strict,
+                required=required,
+            ),
             user=user_text,
             json_mode=entry.get("json_mode", False),
             max_tokens=entry.get("max_tokens"),

@@ -46,6 +46,7 @@ from __future__ import annotations
 
 from researchclaw.prompts.manager import (
     PromptManager,
+    PromptRenderError,
     RenderedPrompt,
     SUPPORTED_DOMAINS,
     _render,
@@ -68,6 +69,7 @@ from researchclaw.prompts.ml import (
 __all__ = [
     "PromptManager",
     "PromptMetadata",
+    "PromptRenderError",
     "RenderedPrompt",
     "SUPPORTED_DOMAINS",
     "_render",

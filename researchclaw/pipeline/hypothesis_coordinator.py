@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 from pathlib import Path
 from typing import Any
@@ -346,3 +347,61 @@ class HypothesisValidationCoordinator:
                 )
             )
         return resumed
+
+    def run_pending_work_concurrent(
+        self,
+        *,
+        config: Any,
+        adapters: Any,
+        max_concurrent: int,
+        created_at: str | None = None,
+    ) -> list[ValidationAttempt]:
+        from researchclaw.pipeline.hypothesis_queue import DurableWorkQueue
+
+        jobs: list[tuple[HypothesisNode, ValidationAttempt]] = []
+        for item in DurableWorkQueue(self.run_dir).read_items():
+            if (Path(item.branch_run_dir) / "attempt_result.json").exists():
+                continue
+            node = self.store._read_node(item.node_id)
+            attempt = self.store._read_attempt(item.attempt_id)
+            self.store.set_node_status(
+                node.id,
+                "validating",
+                created_at=created_at,
+            )
+            jobs.append((node, attempt))
+
+        if not jobs:
+            return []
+
+        max_workers = max(1, int(max_concurrent or 1))
+        completed: list[ValidationAttempt | None] = [None] * len(jobs)
+
+        def run_one(job: tuple[HypothesisNode, ValidationAttempt]) -> Any:
+            node, attempt = job
+            return self.validate_branch(node, attempt, config, adapters)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            future_indexes = {
+                pool.submit(run_one, job): index
+                for index, job in enumerate(jobs)
+            }
+            for future in as_completed(future_indexes):
+                index = future_indexes[future]
+                node, attempt = jobs[index]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    completed[index] = self._finish_attempt_failure(
+                        attempt=attempt,
+                        error=exc,
+                        created_at=created_at,
+                    )
+                    continue
+                completed[index] = self._finish_attempt_success(
+                    node=node,
+                    attempt=attempt,
+                    result=result,
+                    created_at=created_at,
+                )
+        return [attempt for attempt in completed if attempt is not None]

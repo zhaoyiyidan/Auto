@@ -15,7 +15,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -88,6 +88,8 @@ class RenderedPrompt:
     user: str
     json_mode: bool = False
     max_tokens: int | None = None
+    prompt_id: str = ""
+    version: str = "1.0.0"
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +143,7 @@ class PromptManager:
         *,
         domain: str = "ml",
         extra_prompts: dict[str, str] | None = None,
+        audit_sink: Callable[[str, RenderedPrompt], None] | None = None,
     ) -> None:
         self._domain = domain if domain in SUPPORTED_DOMAINS else "ml"
         stages, debate_hyp, debate_ana = _load_bank(self._domain)
@@ -162,6 +165,7 @@ class PromptManager:
         # time).  Keys are stage names; values are the resolved text after
         # reading any file paths.
         self._extras: dict[str, str] = {}
+        self._audit_sink = audit_sink
 
         if overrides_path:
             self._load_overrides(Path(overrides_path))
@@ -249,9 +253,10 @@ class PromptManager:
         so the LLM can learn from prior run lessons.
         """
         entry = self._stages[stage]
+        meta = self.meta(stage)
         kw = {k: str(v) for k, v in kwargs.items()}
         kw.setdefault("extension_context", "")
-        required = self.required_variables(stage) if strict else ()
+        required = meta.required_variables if strict else ()
         user_text = _render(
             entry["user"],
             kw,
@@ -268,7 +273,7 @@ class PromptManager:
             )
         if evolution_overlay:
             user_text = f"{user_text}\n\n{evolution_overlay}"
-        return RenderedPrompt(
+        rendered = RenderedPrompt(
             system=_render(
                 entry["system"],
                 kw,
@@ -278,7 +283,12 @@ class PromptManager:
             user=user_text,
             json_mode=entry.get("json_mode", False),
             max_tokens=entry.get("max_tokens"),
+            prompt_id=meta.prompt_id or stage,
+            version=meta.version,
         )
+        if self._audit_sink is not None:
+            self._audit_sink(stage, rendered)
+        return rendered
 
     def system(self, stage: str) -> str:
         """Return the raw system prompt template for *stage*."""
@@ -329,10 +339,15 @@ class PromptManager:
     def sub_prompt(self, name: str, **kwargs: Any) -> RenderedPrompt:
         """Return a rendered sub-prompt (e.g. code_repair)."""
         entry = self._sub_prompts[name]
+        meta = self.sub_prompt_meta(name)
         kw = {k: str(v) for k, v in kwargs.items()}
         return RenderedPrompt(
             system=_render(entry["system"], kw),
             user=_render(entry["user"], kw),
+            json_mode=entry.get("json_mode", False),
+            max_tokens=entry.get("max_tokens"),
+            prompt_id=meta.prompt_id or name,
+            version=meta.version,
         )
 
     def sub_prompt_meta(self, name: str) -> PromptMetadata:

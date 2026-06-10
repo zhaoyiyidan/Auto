@@ -518,3 +518,47 @@ def test_validate_branch_threads_attempt_workspace_and_session(
         "workspace_path": str(tmp_path / "worktrees" / "h-001-attempt-001"),
         "session_name": "base-session-h-001-attempt-001",
     }
+
+
+def test_validate_branch_disables_runner_global_initialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from researchclaw.pipeline import hypothesis_branch
+    from researchclaw.pipeline.executor import StageResult
+    from researchclaw.pipeline.hypothesis_branch import validate_branch
+    from researchclaw.pipeline.hypothesis_store import HypothesisNode, ValidationAttempt
+    from researchclaw.pipeline.stages import Stage, StageStatus
+
+    branch_run_dir = (
+        tmp_path / "run" / "hypothesis_branches" / "h-001" / "attempt-001"
+    )
+    branch_run_dir.mkdir(parents=True)
+    recorded: dict[str, Any] = {}
+
+    def fake_execute_pipeline(**kwargs: Any) -> list[Any]:
+        recorded.update(kwargs)
+        return [
+            StageResult(
+                stage=Stage.RESEARCH_DECISION,
+                status=StageStatus.DONE,
+                artifacts=("decision.md",),
+                decision="proceed",
+            )
+        ]
+
+    monkeypatch.setattr(hypothesis_branch, "execute_pipeline", fake_execute_pipeline)
+
+    validate_branch(
+        branch_run_dir=branch_run_dir,
+        node=HypothesisNode(id="h-001", statement="Treatment improves accuracy."),
+        attempt=ValidationAttempt(
+            attempt_id="h-001/attempt-001",
+            node_id="h-001",
+            branch_run_dir=str(branch_run_dir),
+        ),
+        config=_workspace_config(tmp_path),
+        adapters=object(),
+    )
+
+    assert recorded["initialize_run_globals"] is False

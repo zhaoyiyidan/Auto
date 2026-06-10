@@ -151,6 +151,38 @@ def provision_workspace(
     return replace(attempt, workspace_path=str(target))
 
 
+def release_workspace(
+    attempt: Any,
+    *,
+    source_workspace: Path | None = None,
+) -> None:
+    if getattr(attempt, "status", "") not in {"succeeded", "failed", "abandoned"}:
+        return
+    workspace_path = getattr(attempt, "workspace_path", None)
+    if not workspace_path:
+        return
+    target = Path(workspace_path)
+    if not target.exists():
+        return
+    if source_workspace is None:
+        raise ValueError("source_workspace is required to remove a git worktree")
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(Path(source_workspace)),
+            "worktree",
+            "remove",
+            "--force",
+            str(target),
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
 def branch_config(
     config: Any,
     *,

@@ -145,6 +145,24 @@ _DEFAULT_BLOCKS: dict[str, str] = {
         "  validated metric reporting, and results.json output. NOT using it\n"
         "  means your metrics may be lost or malformed.\n"
     ),
+    "manifest_schema_example": (
+        "Required run_manifest.json format example (MUST match this field shape; "
+        "replace placeholder values with actual run values):\n"
+        "{manifest_example}\n\n"
+    ),
+    "stage10_validation_boundary": (
+        "Stage 10 validation boundary (MUST):\n"
+        "1. You may run static checks, syntax/compile checks, unit tests, and at "
+        "most one tiny smoke test whose purpose is code-path validation only.\n"
+        "2. Any smoke test MUST use toy/synthetic or very small data, at most one "
+        "seed, at most one condition per critical code path, and a throwaway "
+        "output directory that is not listed in result_paths.\n"
+        "3. MUST NOT run the formal experiment, grid search, parameter sweep, "
+        "multi-seed run, timing benchmark, or launch.command during Stage 10.\n"
+        "4. MUST NOT create or update the final result artifacts listed in "
+        "result_paths; ResearchClaw Stage 12 will run the manifest command and "
+        "collect those outputs.\n\n"
+    ),
     "topic_constraint": (
         "\n\n=== HARD TOPIC CONSTRAINT ===\n"
         "The paper MUST be about: {topic}\n"
@@ -749,6 +767,77 @@ _DEFAULT_BLOCKS: dict[str, str] = {
 # -- Sub-prompts (secondary LLM calls within a stage) --------------------
 
 _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
+    "workspace_codegen": {
+        "system": (
+            "You are a workspace-native code agent working inside an existing git "
+            "repository. Modify this repository to implement the experiment. Do not "
+            "emit code blocks for ResearchClaw to parse."
+        ),
+        "user": (
+            "TOPIC:\n{topic}\n\n"
+            "TASK SPEC:\n{exp_plan}\n\n"
+            "PRIMARY METRIC: {metric}\n\n"
+            "PACKAGE HINTS:\n{pkg_hint}\n\n"
+            "COMPUTE BUDGET:\n{compute_budget}\n\n"
+            "EXTRA GUIDANCE:\n{extra_guidance}\n\n"
+            "Completion contract (MUST):\n"
+            "1. MUST inspect the existing workspace before editing.\n"
+            "2. MUST modify the existing repository in place, using its structure.\n"
+            "3. MUST prepare a launch command or script for the experiment run.\n"
+            "4. MUST write {manifest_filename} in the workspace root or .researchclaw/.\n"
+            "5. MUST include schema_version, code_commit, launch.command, launch.cwd, "
+            "launch.env, launch.resources, result_paths, and metrics in the manifest.\n"
+            "6. MUST make the final git commit after all task changes are ready; "
+            "the committed tree MUST include every file changed for this task, including {manifest_filename}.\n"
+            "7. MUST set manifest.code_commit to the final HEAD commit. If you need "
+            "the SHA after committing, update the manifest and amend the same commit.\n"
+            "8. MUST finish by verifying `git status --porcelain` is empty.\n\n"
+            "{manifest_schema_example}"
+            "{stage10_validation_boundary}"
+            "Boundaries (MUST NOT):\n"
+            "1. MUST NOT submit the job yourself. Do not submit the job yourself; "
+            "ResearchClaw's submitter will run the manifest command.\n"
+            "2. MUST NOT fabricate a job_id or final result registry entry.\n"
+            "3. MUST NOT assume a fixed entrypoint, file layout, or script name.\n"
+            "4. MUST NOT emit code blocks for ResearchClaw to parse as the output.\n"
+        ),
+    },
+    "workspace_repair": {
+        "system": (
+            "You are a workspace-native code agent working inside an existing git "
+            "repository. Improve the experiment in place. Do not emit code blocks "
+            "for ResearchClaw to parse."
+        ),
+        "user": (
+            "{request_section}"
+            "TOPIC:\n{topic}\n\n"
+            "TARGET: {metric_direction} {metric_key}\n\n"
+            "ORIGINAL EXPERIMENT PLAN:\n{exp_plan}\n\n"
+            "KNOWN PROJECT FILES FROM PRIOR STAGES:\n{project_files}\n\n"
+            "PRIOR RUN SUMMARIES:\n{run_summaries}\n\n"
+            "{results_section}"
+            "Completion contract (MUST):\n"
+            "1. MUST inspect the existing workspace before editing.\n"
+            "2. MUST improve the existing repository in place, using its structure.\n"
+            "3. MUST prepare a launch command or script for the improved run.\n"
+            "4. MUST write {manifest_filename} in the workspace root or .researchclaw/.\n"
+            "5. MUST include code_commit, launch.command, launch.cwd, launch.env, "
+            "launch.resources, and result_paths in the manifest.\n"
+            "6. MUST make the final git commit after all task changes are ready; "
+            "the committed tree MUST include every file changed for this task, including {manifest_filename}.\n"
+            "7. MUST set manifest.code_commit to the final HEAD commit. If you need "
+            "the SHA after committing, update the manifest and amend the same commit.\n"
+            "8. MUST finish by verifying `git status --porcelain` is empty.\n\n"
+            "{manifest_schema_example}"
+            "{stage10_validation_boundary}"
+            "Boundaries (MUST NOT):\n"
+            "1. MUST NOT submit the job yourself. Do not submit the job yourself; "
+            "ResearchClaw's submitter will run the manifest command.\n"
+            "2. MUST NOT fabricate a job_id or final result registry entry.\n"
+            "3. MUST NOT assume a fixed entrypoint, file layout, or script name.\n"
+            "4. MUST NOT emit code blocks for ResearchClaw to parse as the output.\n"
+        ),
+    },
     "hypothesis_synthesize": {
         "system": (
             "You are a senior research director synthesizing multiple perspectives "

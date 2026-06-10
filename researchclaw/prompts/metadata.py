@@ -224,6 +224,36 @@ CANONICAL_STAGE_METADATA: dict[str, dict[str, Any]] = {
 
 
 SUB_PROMPT_METADATA: dict[str, dict[str, Any]] = {
+    "workspace_codegen": {
+        "purpose": "Instruct a workspace-native code agent to implement an experiment.",
+        "required_variables": [
+            "topic",
+            "exp_plan",
+            "metric",
+            "pkg_hint",
+            "compute_budget",
+            "extra_guidance",
+            "manifest_filename",
+            "manifest_schema_example",
+            "stage10_validation_boundary",
+        ],
+    },
+    "workspace_repair": {
+        "purpose": "Instruct a workspace-native code agent to repair or refine an experiment.",
+        "required_variables": [
+            "request_section",
+            "topic",
+            "metric_direction",
+            "metric_key",
+            "exp_plan",
+            "project_files",
+            "run_summaries",
+            "results_section",
+            "manifest_filename",
+            "manifest_schema_example",
+            "stage10_validation_boundary",
+        ],
+    },
     "hypothesis_synthesize": {
         "purpose": "Merge multiple hypothesis debate perspectives.",
         "required_variables": ["perspectives"],

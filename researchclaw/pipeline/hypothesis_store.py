@@ -488,6 +488,7 @@ class HypothesisStore:
         new_status: str,
         *,
         created_at: str | None = None,
+        event_data: dict[str, Any] | None = None,
     ) -> HypothesisNode:
         created_at = created_at or _utcnow_iso()
         node = self._read_node(node_id)
@@ -521,10 +522,13 @@ class HypothesisStore:
             if new_status in TERMINAL_NODE_STATUSES
             else "node_status_changed"
         )
+        data = {"from": node.status, "to": new_status}
+        if event_data:
+            data.update(event_data)
         self._append_event(
             event_type=event_type,
             node_id=node_id,
-            data={"from": node.status, "to": new_status},
+            data=data,
             timestamp=created_at,
         )
         return updated

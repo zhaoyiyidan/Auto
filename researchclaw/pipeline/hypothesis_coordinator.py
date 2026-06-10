@@ -19,6 +19,17 @@ def _result_field(result: Any, field: str, default: Any = None) -> Any:
     return getattr(result, field, default)
 
 
+def _followup_payload(result: Any) -> dict[str, Any] | None:
+    payload = _result_field(result, "next_hypothesis")
+    if payload is None:
+        payload = _result_field(result, "hypothesis")
+    if payload is None:
+        return None
+    if not isinstance(payload, dict):
+        raise ValueError("Follow-up hypothesis must be a mapping")
+    return payload
+
+
 class HypothesisValidationCoordinator:
     def __init__(self, run_dir: Path) -> None:
         self.run_dir = Path(run_dir)
@@ -75,6 +86,62 @@ class HypothesisValidationCoordinator:
             "validate_branch is introduced by the branch-isolation phase"
         )
 
+    def _create_followup_node(
+        self,
+        *,
+        source_node: HypothesisNode,
+        decision: str,
+        result: Any,
+        created_at: str | None,
+    ) -> HypothesisNode:
+        payload = _followup_payload(result)
+        if payload is None:
+            raise ValueError(f"{decision.upper()} decision requires next_hypothesis")
+        parent_id = source_node.id if decision == "extend" else source_node.parent_id
+        return self.store.create_node(
+            statement=str(payload.get("statement") or ""),
+            prediction=str(payload.get("prediction") or ""),
+            falsification=str(payload.get("falsification") or ""),
+            rationale=str(payload.get("rationale") or ""),
+            baselines=tuple(payload.get("baselines") or ()),
+            source=decision,
+            parent_id=parent_id,
+            created_at=created_at,
+        )
+
+    def _apply_decision_to_tree(
+        self,
+        *,
+        node: HypothesisNode,
+        attempt: ValidationAttempt,
+        decision: str,
+        result: Any,
+        created_at: str | None,
+    ) -> None:
+        status_by_decision = {
+            "proceed": "supported",
+            "inconclusive": "inconclusive",
+            "extend": "superseded",
+            "pivot": "superseded",
+        }
+        status = status_by_decision.get(decision, "inconclusive")
+        self.store.set_node_status(
+            node.id,
+            status,
+            created_at=created_at,
+            event_data={
+                "attempt_id": attempt.attempt_id,
+                "decision": decision,
+            },
+        )
+        if decision in {"extend", "pivot"}:
+            self._create_followup_node(
+                source_node=node,
+                decision=decision,
+                result=result,
+                created_at=created_at,
+            )
+
     def split_and_validate_sequential(
         self,
         hypotheses_md: str,
@@ -127,14 +194,12 @@ class HypothesisValidationCoordinator:
                 decision=decision,
                 finished_at=created_at,
             )
-            self.store.append_event(
-                event_type="node_verdict",
-                node_id=node.id,
-                data={
-                    "attempt_id": attempt.attempt_id,
-                    "decision": decision,
-                },
-                timestamp=created_at,
+            self._apply_decision_to_tree(
+                node=node,
+                attempt=attempt,
+                decision=decision,
+                result=result,
+                created_at=created_at,
             )
             attempts.append(updated)
         return attempts

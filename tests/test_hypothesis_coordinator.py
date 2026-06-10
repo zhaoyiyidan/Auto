@@ -615,7 +615,10 @@ def test_coordinator_reduces_attempt_results_concurrently_without_lost_verdicts(
         for event in _events(tmp_path)
         if event["event_type"] == "node_verdict"
     ]
-    assert verdict_attempts == ["h-001/attempt-001", "h-002/attempt-001"]
+    assert sorted(verdict_attempts) == [
+        "h-001/attempt-001",
+        "h-002/attempt-001",
+    ]
 
 
 def test_coordinator_requeues_abandoned_attempts_up_to_cap(

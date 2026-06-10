@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -103,3 +104,88 @@ def test_evidence_aggregator_skips_degenerate_minimize_attempt(
 
     assert winners[node.id].attempt_id == valid.attempt_id
     assert winners[node.id].metrics["loss"] == 0.2
+
+
+def test_evidence_aggregator_writes_validation_summary_schema(
+    tmp_path: Path,
+) -> None:
+    from researchclaw.pipeline.hypothesis_store import HypothesisStore
+
+    EvidenceAggregator = _aggregator_cls()
+    store = HypothesisStore(tmp_path)
+    supported = store.create_node(
+        statement="Supported hypothesis.",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    refuted = store.create_node(
+        statement="Refuted hypothesis.",
+        created_at="2026-01-01T00:00:01+00:00",
+    )
+    for node, status, score in [
+        (supported, "supported", 0.91),
+        (refuted, "refuted", 0.22),
+    ]:
+        attempt = store.add_attempt(
+            node_id=node.id,
+            branch_run_dir=str(tmp_path / "branches" / node.id / "attempt-001"),
+            created_at="2026-01-01T00:01:00+00:00",
+        )
+        store.update_attempt(
+            attempt.attempt_id,
+            status="succeeded",
+            metrics={"score": score},
+            decision="proceed" if status == "supported" else "pivot",
+            finished_at="2026-01-01T00:02:00+00:00",
+        )
+        store.set_node_status(
+            node.id,
+            "validating",
+            created_at="2026-01-01T00:03:00+00:00",
+        )
+        store.set_node_status(
+            node.id,
+            status,
+            created_at="2026-01-01T00:04:00+00:00",
+        )
+
+    summary = EvidenceAggregator(tmp_path).write_validation_summary(
+        metric_name="score",
+        direction="maximize",
+        generated_at="2026-01-01T00:05:00+00:00",
+    )
+
+    assert summary == {
+        "generated": "2026-01-01T00:05:00+00:00",
+        "counts": {
+            "total": 2,
+            "supported": 1,
+            "refuted": 1,
+            "inconclusive": 0,
+            "superseded": 0,
+        },
+        "nodes": [
+            {
+                "node_id": "h-001",
+                "status": "supported",
+                "statement": "Supported hypothesis.",
+                "best_attempt_id": "h-001/attempt-001",
+                "decision": "proceed",
+                "metrics": {"score": 0.91},
+            },
+            {
+                "node_id": "h-002",
+                "status": "refuted",
+                "statement": "Refuted hypothesis.",
+                "best_attempt_id": "h-002/attempt-001",
+                "decision": "pivot",
+                "metrics": {"score": 0.22},
+            },
+        ],
+    }
+    assert json.loads(
+        (
+            tmp_path
+            / "hypothesis_aggregate"
+            / "validation_summary.json"
+        ).read_text(encoding="utf-8")
+    ) == summary

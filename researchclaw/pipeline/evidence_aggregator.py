@@ -171,3 +171,51 @@ class EvidenceAggregator:
             "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
         )
         return rows
+
+    def write_paper_context(
+        self,
+        *,
+        metric_name: str,
+        direction: str,
+        generated_at: str | None = None,
+    ) -> str:
+        summary = self.write_validation_summary(
+            metric_name=metric_name,
+            direction=direction,
+            generated_at=generated_at,
+        )
+        counts = summary["counts"]
+        lines = [
+            "# Hypothesis Validation Context",
+            "",
+            f"Generated: {summary['generated']}",
+            "",
+            "## Verdict Counts",
+            "",
+            f"- total: {counts['total']}",
+            f"- supported: {counts['supported']}",
+            f"- refuted: {counts['refuted']}",
+            f"- inconclusive: {counts['inconclusive']}",
+            f"- superseded: {counts['superseded']}",
+            "",
+        ]
+        if counts["supported"] == 0:
+            lines.extend(
+                [
+                    "Quality warning: no supported hypotheses.",
+                    "",
+                ]
+            )
+        lines.extend(["## Hypotheses", ""])
+        for row in summary["nodes"]:
+            lines.append(
+                "- {node_id} [{status}] {statement} "
+                "(best_attempt={best_attempt_id}, decision={decision})".format(
+                    **row
+                )
+            )
+        context = "\n".join(lines) + "\n"
+        output_dir = self.run_dir / "hypothesis_aggregate"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write_text(output_dir / "paper_context.md", context)
+        return context

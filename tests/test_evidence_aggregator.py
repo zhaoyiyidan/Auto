@@ -189,3 +189,72 @@ def test_evidence_aggregator_writes_validation_summary_schema(
             / "validation_summary.json"
         ).read_text(encoding="utf-8")
     ) == summary
+
+
+def test_evidence_aggregator_writes_registry_for_all_outcomes(
+    tmp_path: Path,
+) -> None:
+    from researchclaw.pipeline.hypothesis_store import HypothesisStore
+
+    EvidenceAggregator = _aggregator_cls()
+    store = HypothesisStore(tmp_path)
+    expected_rows: list[dict[str, Any]] = []
+    for index, (status, decision, score) in enumerate(
+        [
+            ("supported", "proceed", 0.91),
+            ("refuted", "pivot", 0.22),
+            ("inconclusive", "inconclusive", 0.50),
+        ],
+        start=1,
+    ):
+        node = store.create_node(
+            statement=f"{status.title()} hypothesis.",
+            created_at=f"2026-01-01T00:00:0{index}+00:00",
+        )
+        branch_run_dir = tmp_path / "branches" / node.id / "attempt-001"
+        attempt = store.add_attempt(
+            node_id=node.id,
+            branch_run_dir=str(branch_run_dir),
+            created_at=f"2026-01-01T00:01:0{index}+00:00",
+        )
+        store.update_attempt(
+            attempt.attempt_id,
+            status="succeeded",
+            metrics={"score": score},
+            artifacts=["stage-15/decision.md"],
+            decision=decision,
+            finished_at=f"2026-01-01T00:02:0{index}+00:00",
+        )
+        store.set_node_status(
+            node.id,
+            "validating",
+            created_at=f"2026-01-01T00:03:0{index}+00:00",
+        )
+        store.set_node_status(
+            node.id,
+            status,
+            created_at=f"2026-01-01T00:04:0{index}+00:00",
+        )
+        expected_rows.append(
+            {
+                "node_id": node.id,
+                "attempt_id": attempt.attempt_id,
+                "outcome": status,
+                "decision": decision,
+                "metrics": {"score": score},
+                "artifacts": ["stage-15/decision.md"],
+                "branch_run_dir": str(branch_run_dir),
+            }
+        )
+
+    rows = EvidenceAggregator(tmp_path).write_evidence_registry(
+        metric_name="score",
+        direction="maximize",
+    )
+
+    assert rows == expected_rows
+    registry_path = tmp_path / "hypothesis_aggregate" / "evidence_registry.jsonl"
+    assert [
+        json.loads(line)
+        for line in registry_path.read_text(encoding="utf-8").splitlines()
+    ] == expected_rows

@@ -231,6 +231,39 @@ def test_rcconfig_from_dict_parses_experiment_repair_max_cycles(tmp_path: Path):
     assert config.experiment.repair.max_cycles == 7
 
 
+def test_hypothesis_validation_config_defaults_enabled() -> None:
+    try:
+        from researchclaw.config import HypothesisValidationConfig
+    except ImportError:
+        pytest.fail("HypothesisValidationConfig is not implemented")
+
+    defaults = HypothesisValidationConfig()
+
+    assert defaults.enabled is True
+    assert defaults.max_concurrent_branches == 1
+    assert defaults.max_attempts_per_node == 1
+    assert defaults.workspace_isolation == "shared"
+
+
+def test_rcconfig_from_dict_parses_hypothesis_validation_config(
+    tmp_path: Path,
+) -> None:
+    data = _valid_config_data()
+    data["hypothesis_validation"] = {
+        "enabled": True,
+        "max_concurrent_branches": 3,
+        "max_attempts_per_node": 2,
+        "workspace_isolation": "worktree",
+    }
+
+    config = RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
+
+    assert config.hypothesis_validation.enabled is True
+    assert config.hypothesis_validation.max_concurrent_branches == 3
+    assert config.hypothesis_validation.max_attempts_per_node == 2
+    assert config.hypothesis_validation.workspace_isolation == "worktree"
+
+
 def test_result_analysis_agent_config_defaults() -> None:
     defaults = ResultAnalysisAgentConfig()
 

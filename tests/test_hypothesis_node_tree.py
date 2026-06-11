@@ -1,3 +1,9 @@
+"""Legacy hypothesis compatibility tests.
+
+These tests cover the old node_tree materialized view for historical
+hypothesis_tree sidecars.
+"""
+
 from __future__ import annotations
 
 import json

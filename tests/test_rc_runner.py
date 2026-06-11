@@ -48,6 +48,13 @@ def run_dir(tmp_path: Path) -> Path:
     return path
 
 
+def _with_hypothesis_validation(config: RCConfig, *, enabled: bool) -> RCConfig:
+    return replace(
+        config,
+        hypothesis_validation=replace(config.hypothesis_validation, enabled=enabled),
+    )
+
+
 def _done(stage: Stage, artifacts: tuple[str, ...] = ("out.md",)) -> StageResult:
     return StageResult(stage=stage, status=StageStatus.DONE, artifacts=artifacts)
 
@@ -725,6 +732,7 @@ def test_pivot_decision_triggers_rollback_to_hypothesis_gen(
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
+    rc_config = _with_hypothesis_validation(rc_config, enabled=False)
     seen: list[Stage] = []
     pivot_count = 0
 
@@ -753,6 +761,75 @@ def test_pivot_decision_triggers_rollback_to_hypothesis_gen(
     history = json.loads(history_path.read_text())
     assert len(history) == 1
     assert history[0]["decision"] == "pivot"
+
+
+def test_default_hypothesis_validation_skips_legacy_decision_recursion(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    seen: list[Stage] = []
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        seen.append(stage)
+        if stage == Stage.RESEARCH_DECISION:
+            return _pivot_result(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-default-hypothesis-validation",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    assert rc_config.hypothesis_validation.enabled is True
+    assert seen.count(Stage.HYPOTHESIS_GEN) == 1
+    assert seen.count(Stage.RESEARCH_DECISION) == 1
+    assert not (run_dir / "decision_history.json").exists()
+
+
+def test_default_hypothesis_validation_skips_cycle_archive_wiring(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    from researchclaw.pipeline import hypothesis_cycle_archive as cycle_archive
+
+    calls: list[str | None] = []
+
+    def archive(run_dir: Path, *, decision: str | None = None) -> Path | None:
+        _ = run_dir
+        calls.append(decision)
+        return None
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        return StageResult(
+            stage=stage,
+            status=StageStatus.DONE,
+            artifacts=("decision.md",),
+            decision="proceed",
+        )
+
+    monkeypatch.setattr(cycle_archive, "archive_current_hypothesis_cycle", archive)
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-default-no-cycle-archive",
+        config=rc_config,
+        adapters=adapters,
+        from_stage=Stage.RESEARCH_DECISION,
+        to_stage=Stage.RESEARCH_DECISION,
+    )
+
+    assert rc_config.hypothesis_validation.enabled is True
+    assert calls == []
 
 
 def test_experiment_loop_continue_runs_10_11_12_13_then_14(
@@ -1155,6 +1232,7 @@ def test_extend_decision_triggers_rollback_to_hypothesis_gen(
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
+    rc_config = _with_hypothesis_validation(rc_config, enabled=False)
     seen: list[Stage] = []
     extend_count = 0
 
@@ -1185,6 +1263,7 @@ def test_extend_writes_extension_context_file(
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
+    rc_config = _with_hypothesis_validation(rc_config, enabled=False)
     extend_count = 0
 
     def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
@@ -1237,6 +1316,7 @@ def test_pivot_cleans_old_extension_context(
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
+    rc_config = _with_hypothesis_validation(rc_config, enabled=False)
     (run_dir / "hypothesis_extension_context.md").write_text(
         "stale extension context",
         encoding="utf-8",
@@ -1268,6 +1348,7 @@ def test_max_pivot_count_prevents_infinite_loop(
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
+    rc_config = _with_hypothesis_validation(rc_config, enabled=False)
     seen: list[Stage] = []
 
     def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
@@ -1335,6 +1416,7 @@ def test_decision_history_records_extend(
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
+    rc_config = _with_hypothesis_validation(rc_config, enabled=False)
     extend_count = 0
 
     def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
@@ -1461,6 +1543,7 @@ def test_extend_after_human_gate_uses_edited_decision(
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
+    rc_config = _with_hypothesis_validation(rc_config, enabled=False)
     rc_config = _with_hitl_required_stages(rc_config, (5, 9, 15, 20))
     _write_human_gate_artifacts(
         run_dir,
@@ -1490,6 +1573,7 @@ def test_pivot_after_human_gate_uses_edited_decision(
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
+    rc_config = _with_hypothesis_validation(rc_config, enabled=False)
     rc_config = _with_hitl_required_stages(rc_config, (5, 9, 15, 20))
     _write_human_gate_artifacts(
         run_dir,
@@ -1568,6 +1652,7 @@ def test_extension_context_uses_human_edited_rationale_on_extend(
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
+    rc_config = _with_hypothesis_validation(rc_config, enabled=False)
     rc_config = _with_hitl_required_stages(rc_config, (5, 9, 15, 20))
     rationale = "Human edited rationale must appear in extension context."
     _write_human_gate_artifacts(run_dir, "EXTEND", rationale)

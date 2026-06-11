@@ -1,4 +1,10 @@
 # pyright: reportPrivateUsage=false
+"""Legacy hypothesis compatibility tests.
+
+These tests pin the old single-mainline hypothesis_tree sidecars while the
+default pipeline path uses per-hypothesis validation.
+"""
+
 from __future__ import annotations
 
 import json
@@ -394,6 +400,7 @@ def _pipeline_config(tmp_path: Path) -> Any:
             "api_key": "inline",
         },
         "experiment": {},
+        "hypothesis_validation": {"enabled": False},
     }
     return RCConfig.from_dict(data, project_root=tmp_path, check_paths=False)
 
@@ -730,8 +737,8 @@ class TestHypothesisTreePipeline:
         assert ht.get_current_node_id(tmp_path) == "h-1"
 
 
-class TestHypothesisCycleArchivePipeline:
-    def test_pipeline_proceed_archives_cycle(
+class TestHypothesisCycleArchiveCompat:
+    def test_pipeline_no_longer_writes_cycle_archive(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from researchclaw.pipeline import runner as rc_runner
@@ -753,235 +760,38 @@ class TestHypothesisCycleArchivePipeline:
 
         rc_runner.execute_pipeline(
             run_dir=tmp_path,
-            run_id="run-proceed-archive",
+            run_id="run-no-cycle-archive",
             config=_pipeline_config(tmp_path),
             adapters=_pipeline_adapters(),
             from_stage=Stage.HYPOTHESIS_GEN,
         )
 
-        cycle = _cycle_dir(tmp_path, "root", "h-1") / "cycle-001"
-        assert (cycle / "stage-15" / "decision.md").is_file()
-        assert json.loads((cycle / "manifest.json").read_text(encoding="utf-8"))[
-            "decision"
-        ] == "proceed"
+        assert not (
+            tmp_path / "hypothesis_tree" / "node_tree" / "root" / "h-1" / "_artifacts"
+        ).exists()
+        assert _node_json(tmp_path, "h-1")["status"] == "completed"
 
-    def test_pipeline_extend_archives_parent_then_child(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_existing_cycle_archive_manifest_still_readable(
+        self, tmp_path: Path
     ) -> None:
-        from researchclaw.pipeline import runner as rc_runner
-        from researchclaw.pipeline.stages import Stage
-
-        hypothesis_idx = 0
-        decision_count = 0
-
-        def mock_execute_stage(stage: Any, **kwargs: Any) -> Any:
-            _ = kwargs
-            nonlocal hypothesis_idx, decision_count
-            if stage == Stage.HYPOTHESIS_GEN:
-                hypothesis_idx += 1
-            _write_pipeline_stage_artifacts(tmp_path, stage, max(1, hypothesis_idx))
-            if stage == Stage.RESEARCH_DECISION:
-                decision = "extend" if decision_count == 0 else "proceed"
-                decision_count += 1
-                decision_md = f"## Decision\n{decision.upper()}"
-                _write_pipeline_decision_artifacts(tmp_path, decision, decision_md)
-                ht.record_stage15_decision(
-                    tmp_path, decision, decision_md, human_edited=False
-                )
-                return _done_result(stage, decision=decision)
-            return _done_result(stage)
-
-        monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
-
-        rc_runner.execute_pipeline(
-            run_dir=tmp_path,
-            run_id="run-extend-archive",
-            config=_pipeline_config(tmp_path),
-            adapters=_pipeline_adapters(),
-            from_stage=Stage.HYPOTHESIS_GEN,
-        )
-
-        parent_manifest = json.loads(
-            (
-                _cycle_dir(tmp_path, "root", "h-1")
-                / "cycle-001"
-                / "manifest.json"
-            ).read_text(encoding="utf-8")
-        )
-        child_manifest = json.loads(
-            (
-                _cycle_dir(tmp_path, "root", "h-1", "h-2")
-                / "cycle-001"
-                / "manifest.json"
-            ).read_text(encoding="utf-8")
-        )
-        assert parent_manifest["decision"] == "extend"
-        assert child_manifest["decision"] == "proceed"
-
-    def test_pipeline_pivot_archives_sibling(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from researchclaw.pipeline import runner as rc_runner
-        from researchclaw.pipeline import hypothesis_node_tree as nt
-        from researchclaw.pipeline.stages import Stage
-
-        hypothesis_idx = 0
-        decision_count = 0
-
-        def mock_execute_stage(stage: Any, **kwargs: Any) -> Any:
-            _ = kwargs
-            nonlocal hypothesis_idx, decision_count
-            if stage == Stage.HYPOTHESIS_GEN:
-                hypothesis_idx += 1
-            _write_pipeline_stage_artifacts(tmp_path, stage, max(1, hypothesis_idx))
-            if stage == Stage.RESEARCH_DECISION:
-                decision = "pivot" if decision_count == 0 else "proceed"
-                decision_count += 1
-                decision_md = f"## Decision\n{decision.upper()}"
-                _write_pipeline_decision_artifacts(tmp_path, decision, decision_md)
-                ht.record_stage15_decision(
-                    tmp_path, decision, decision_md, human_edited=False
-                )
-                return _done_result(stage, decision=decision)
-            return _done_result(stage)
-
-        monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
-
-        rc_runner.execute_pipeline(
-            run_dir=tmp_path,
-            run_id="run-pivot-archive",
-            config=_pipeline_config(tmp_path),
-            adapters=_pipeline_adapters(),
-            from_stage=Stage.HYPOTHESIS_GEN,
-        )
-
-        assert (_cycle_dir(tmp_path, "root", "h-1") / "cycle-001").is_dir()
-        assert (_cycle_dir(tmp_path, "root", "h-2") / "cycle-001").is_dir()
-        assert nt.read_index(tmp_path)["nodes"]["h-2"]["pivoted_from"] == "h-1"
-
-    def test_pipeline_archive_before_rollback_rename(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from researchclaw.pipeline import runner as rc_runner
-        from researchclaw.pipeline.stages import Stage
-
-        hypothesis_idx = 0
-        decision_count = 0
-
-        def mock_execute_stage(stage: Any, **kwargs: Any) -> Any:
-            _ = kwargs
-            nonlocal hypothesis_idx, decision_count
-            if stage == Stage.HYPOTHESIS_GEN:
-                hypothesis_idx += 1
-            _write_pipeline_stage_artifacts(tmp_path, stage, max(1, hypothesis_idx))
-            if stage == Stage.RESEARCH_DECISION:
-                decision = "extend" if decision_count == 0 else "proceed"
-                decision_count += 1
-                decision_md = f"## Decision\n{decision.upper()}"
-                _write_pipeline_decision_artifacts(tmp_path, decision, decision_md)
-                ht.record_stage15_decision(
-                    tmp_path, decision, decision_md, human_edited=False
-                )
-                return _done_result(stage, decision=decision)
-            return _done_result(stage)
-
-        monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
-
-        rc_runner.execute_pipeline(
-            run_dir=tmp_path,
-            run_id="run-pre-rename-archive",
-            config=_pipeline_config(tmp_path),
-            adapters=_pipeline_adapters(),
-            from_stage=Stage.HYPOTHESIS_GEN,
-        )
-
-        assert (
-            _cycle_dir(tmp_path, "root", "h-1")
-            / "cycle-001"
-            / "stage-08"
-            / "hypotheses.md"
-        ).is_file()
-        assert (tmp_path / "stage-08_v1").is_dir()
-
-    def test_pipeline_human_gate_final_decision_archived(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from researchclaw.pipeline import executor as rc_executor
-        from researchclaw.pipeline import runner as rc_runner
+        from researchclaw.pipeline import hypothesis_cycle_archive as ca
         from researchclaw.pipeline.stages import Stage
 
         _write_pipeline_stage_artifacts(tmp_path, Stage.HYPOTHESIS_GEN, 1)
         ht.finalize_after_stage8(tmp_path, _hypothesis_text(1))
-        stage15 = tmp_path / "stage-15"
-        stage15.mkdir(parents=True, exist_ok=True)
-        (stage15 / "decision.md").write_text("## Decision\nEXTEND", encoding="utf-8")
-        (stage15 / ".gate_proposal.json").write_text("{}", encoding="utf-8")
-
-        def mock_execute_stage(stage: Any, **kwargs: Any) -> Any:
-            if stage == Stage.RESEARCH_DECISION:
-                return rc_executor.execute_stage(stage, **kwargs)
-            _write_pipeline_stage_artifacts(tmp_path, stage, 1)
-            return _done_result(stage)
-
-        monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
-
-        for _ in range(2):
-            (stage15 / ".gate_proposal.json").write_text("{}", encoding="utf-8")
-            rc_runner.execute_pipeline(
-                run_dir=tmp_path,
-                run_id="run-human-archive",
-                config=_pipeline_config(tmp_path),
-                adapters=_pipeline_adapters(),
-                from_stage=Stage.RESEARCH_DECISION,
-                to_stage=Stage.RESEARCH_DECISION,
-            )
-
-        cycle_root = _cycle_dir(tmp_path, "root", "h-1")
-        assert [path.name for path in sorted(cycle_root.iterdir())] == ["cycle-001"]
-        manifest = json.loads(
-            (cycle_root / "cycle-001" / "manifest.json").read_text(encoding="utf-8")
-        )
-        assert manifest["decision"] == "extend"
-
-    def test_pipeline_archive_failure_non_blocking(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from researchclaw.pipeline import hypothesis_cycle_archive as ca
-        from researchclaw.pipeline import runner as rc_runner
-        from researchclaw.pipeline.stages import Stage
-
-        calls: list[str] = []
-
-        def fail_archive(run_dir: Path, *, decision: str | None = None) -> Path | None:
-            _ = run_dir
-            calls.append(str(decision))
-            raise RuntimeError("archive unavailable")
-
-        def mock_execute_stage(stage: Any, **kwargs: Any) -> Any:
-            _ = kwargs
-            _write_pipeline_stage_artifacts(tmp_path, stage, 1)
-            if stage == Stage.RESEARCH_DECISION:
-                decision_md = "## Decision\nPROCEED"
-                _write_pipeline_decision_artifacts(tmp_path, "proceed", decision_md)
-                ht.record_stage15_decision(
-                    tmp_path, "proceed", decision_md, human_edited=False
-                )
-                return _done_result(stage, decision="proceed")
-            return _done_result(stage)
-
-        monkeypatch.setattr(ca, "archive_current_hypothesis_cycle", fail_archive)
-        monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
-
-        rc_runner.execute_pipeline(
-            run_dir=tmp_path,
-            run_id="run-archive-failure",
-            config=_pipeline_config(tmp_path),
-            adapters=_pipeline_adapters(),
-            from_stage=Stage.HYPOTHESIS_GEN,
+        _write_pipeline_stage_artifacts(tmp_path, Stage.RESULT_ANALYSIS, 1)
+        decision_md = "## Decision\nPROCEED"
+        _write_pipeline_decision_artifacts(tmp_path, "proceed", decision_md)
+        ht.record_stage15_decision(
+            tmp_path, "proceed", decision_md, human_edited=False
         )
 
-        assert calls == ["proceed"]
-        assert _node_json(tmp_path, "h-1")["status"] == "completed"
+        cycle = ca.archive_current_hypothesis_cycle(tmp_path, decision="proceed")
+
+        assert cycle == _cycle_dir(tmp_path, "root", "h-1") / "cycle-001"
+        manifest = json.loads((cycle / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["decision"] == "proceed"
+        assert (cycle / "stage-15" / "decision.md").is_file()
 
 
 class TestHypothesisTreeEdgeCases:

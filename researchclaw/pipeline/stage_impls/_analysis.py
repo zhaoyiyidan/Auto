@@ -793,6 +793,7 @@ def _hypothesis_protocol_decision(
     *,
     stage_dir: Path,
     run_dir: Path,
+    config: RCConfig,
     llm: LLMClient | None,
 ) -> StageResult | None:
     protocol_path = _find_prior_file(run_dir, "experiment_protocol.json")
@@ -835,15 +836,20 @@ def _hypothesis_protocol_decision(
         json.dumps(verdict_payload, indent=2, sort_keys=True),
         encoding="utf-8",
     )
-    try:
-        from researchclaw.pipeline.hypothesis_tree import record_stage15_decision
+    from researchclaw.pipeline.hypothesis_mode import (
+        per_hypothesis_validation_enabled,
+    )
 
-        record_stage15_decision(run_dir, decision, decision_md, human_edited=False)
-    except Exception:
-        logger.warning(
-            "Failed to record hypothesis tree decision (hypothesis judge)",
-            exc_info=True,
-        )
+    if not per_hypothesis_validation_enabled(config):
+        try:
+            from researchclaw.pipeline.hypothesis_tree import record_stage15_decision
+
+            record_stage15_decision(run_dir, decision, decision_md, human_edited=False)
+        except Exception:
+            logger.warning(
+                "Failed to record hypothesis tree decision (hypothesis judge)",
+                exc_info=True,
+            )
     return StageResult(
         stage=Stage.RESEARCH_DECISION,
         status=StageStatus.DONE,
@@ -908,17 +914,22 @@ def _agent_requirements_decision(
         "Agent requirements gate: verdict=%s, decision=%s, requirements_unmet=%s",
         verdict.get("verdict"), decision, requirements_unmet,
     )
-    try:
-        from researchclaw.pipeline.hypothesis_tree import record_stage15_decision
+    from researchclaw.pipeline.hypothesis_mode import (
+        per_hypothesis_validation_enabled,
+    )
 
-        record_stage15_decision(
-            run_dir, decision, decision_md, human_edited=False
-        )
-    except Exception:
-        logger.warning(
-            "Failed to record hypothesis tree decision (agent gate)",
-            exc_info=True,
-        )
+    if not per_hypothesis_validation_enabled(config):
+        try:
+            from researchclaw.pipeline.hypothesis_tree import record_stage15_decision
+
+            record_stage15_decision(
+                run_dir, decision, decision_md, human_edited=False
+            )
+        except Exception:
+            logger.warning(
+                "Failed to record hypothesis tree decision (agent gate)",
+                exc_info=True,
+            )
     return StageResult(
         stage=Stage.RESEARCH_DECISION,
         status=StageStatus.DONE,
@@ -944,7 +955,7 @@ def _execute_research_decision(
         return agent_decision
 
     hypothesis_decision = _hypothesis_protocol_decision(
-        stage_dir=stage_dir, run_dir=run_dir, llm=llm
+        stage_dir=stage_dir, run_dir=run_dir, config=config, llm=llm
     )
     if hypothesis_decision is not None:
         return hypothesis_decision
@@ -1058,14 +1069,19 @@ Generated: {_utcnow_iso()}
         logger.warning("T3.1: Decision quality warnings: %s", _quality_warnings)
 
     logger.info("Research decision: %s", decision)
-    try:
-        from researchclaw.pipeline.hypothesis_tree import record_stage15_decision
+    from researchclaw.pipeline.hypothesis_mode import (
+        per_hypothesis_validation_enabled,
+    )
 
-        record_stage15_decision(
-            run_dir, decision, decision_md, human_edited=False
-        )
-    except Exception:
-        logger.warning("Failed to record hypothesis tree decision", exc_info=True)
+    if not per_hypothesis_validation_enabled(config):
+        try:
+            from researchclaw.pipeline.hypothesis_tree import record_stage15_decision
+
+            record_stage15_decision(
+                run_dir, decision, decision_md, human_edited=False
+            )
+        except Exception:
+            logger.warning("Failed to record hypothesis tree decision", exc_info=True)
 
     return StageResult(
         stage=Stage.RESEARCH_DECISION,

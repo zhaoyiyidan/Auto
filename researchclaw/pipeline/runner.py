@@ -18,6 +18,7 @@ from researchclaw.experiment.metric_resolution import resolve_experiment_metric
 from researchclaw.knowledge.base import write_stage_to_kb
 from researchclaw.notify.pipeline import notify_terminal_failure
 from researchclaw.pipeline.executor import StageResult, execute_stage
+from researchclaw.pipeline.hypothesis_mode import per_hypothesis_validation_enabled
 from researchclaw.pipeline.stages import (
     DECISION_ROLLBACK,
     EXPERIMENT_ROUTE_TARGETS,
@@ -519,6 +520,7 @@ def execute_pipeline(
     skip_noncritical: bool = False,
     kb_root: Path | None = None,
     cancel_event: "threading.Event | None" = None,
+    initialize_run_globals: bool = True,
 ) -> list[StageResult]:
     """Execute pipeline stages sequentially from *from_stage* to *to_stage* (inclusive)."""
 
@@ -528,33 +530,36 @@ def execute_pipeline(
 
     # Force the domain detector to honor a deployed profile (if any) so
     # every stage picks the same adapter.  Safe no-op when empty.
-    try:
-        from researchclaw.domains.detector import set_forced_profile
-        forced = getattr(config.project, "profile", "") or ""
-        set_forced_profile(forced)
-    except Exception:  # noqa: BLE001
-        pass
+    if initialize_run_globals:
+        try:
+            from researchclaw.domains.detector import set_forced_profile
+            forced = getattr(config.project, "profile", "") or ""
+            set_forced_profile(forced)
+        except Exception:  # noqa: BLE001
+            pass
 
     # ── Integration hooks: EventLog, ExperimentMemory ──
     event_log = None
-    try:
-        from researchclaw.pipeline.event_log import EventLog, EventType, create_event
-        event_log = EventLog(log_dir=run_dir)
-        event_log.append(create_event(
-            EventType.PIPELINE_START, run_id=run_id,
-            stages=total_stages, from_stage=int(from_stage),
-        ))
-    except Exception:
-        logger.debug("Event log initialisation skipped")
+    if initialize_run_globals:
+        try:
+            from researchclaw.pipeline.event_log import EventLog, EventType, create_event
+            event_log = EventLog(log_dir=run_dir)
+            event_log.append(create_event(
+                EventType.PIPELINE_START, run_id=run_id,
+                stages=total_stages, from_stage=int(from_stage),
+            ))
+        except Exception:
+            logger.debug("Event log initialisation skipped")
 
     exp_memory = None
-    try:
-        from researchclaw.memory.experiment_memory import ExperimentMemory
-        _mem_dir = run_dir / "experiment_memory"
-        _mem_dir.mkdir(parents=True, exist_ok=True)
-        exp_memory = ExperimentMemory(store_dir=str(_mem_dir))
-    except Exception:
-        logger.debug("Experiment memory initialisation skipped")
+    if initialize_run_globals:
+        try:
+            from researchclaw.memory.experiment_memory import ExperimentMemory
+            _mem_dir = run_dir / "experiment_memory"
+            _mem_dir.mkdir(parents=True, exist_ok=True)
+            exp_memory = ExperimentMemory(store_dir=str(_mem_dir))
+        except Exception:
+            logger.debug("Experiment memory initialisation skipped")
 
     experiment_loop_stages = {
         Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
@@ -627,6 +632,7 @@ def execute_pipeline(
                     skip_noncritical=skip_noncritical,
                     kb_root=kb_root,
                     cancel_event=cancel_event,
+                    initialize_run_globals=initialize_run_globals,
                 )
                 results.extend(revised_results)
                 break
@@ -832,19 +838,6 @@ def execute_pipeline(
                         exc_info=True,
                     )
 
-        if stage == Stage.RESEARCH_DECISION and result.status == StageStatus.DONE:
-            try:
-                from researchclaw.pipeline.hypothesis_cycle_archive import (
-                    archive_current_hypothesis_cycle,
-                )
-
-                archive_current_hypothesis_cycle(run_dir, decision=result.decision)
-            except Exception:
-                logger.warning(
-                    "Hypothesis cycle archive failed (non-blocking)",
-                    exc_info=True,
-                )
-
         # ── Stop after to_stage if specified ──
         if to_stage is not None and stage == to_stage:
             logger.info("[%s] Reached --to-stage %s, stopping.", run_id, stage.name)
@@ -860,6 +853,7 @@ def execute_pipeline(
             stage == Stage.RESEARCH_DECISION
             and result.status == StageStatus.DONE
             and result.decision in DECISION_ROLLBACK
+            and not per_hypothesis_validation_enabled(config)
         ):
             pivot_count = _read_pivot_count(run_dir)
             if pivot_count < MAX_DECISION_PIVOTS:
@@ -899,6 +893,7 @@ def execute_pipeline(
                     skip_noncritical=skip_noncritical,
                     kb_root=kb_root,
                     cancel_event=cancel_event,
+                    initialize_run_globals=initialize_run_globals,
                 )
                 results.extend(pivot_results)
                 _promote_best_stage14(run_dir, config)

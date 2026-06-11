@@ -20,6 +20,9 @@ from researchclaw.pipeline._helpers import (
     _synthesize_perspectives,
     _utcnow_iso,
 )
+from researchclaw.pipeline.stage_impls._hypothesis_context import (
+    build_hypothesis_context,
+)
 from researchclaw.pipeline.stages import Stage, StageStatus
 from researchclaw.prompts import PromptManager
 
@@ -110,24 +113,7 @@ def _execute_hypothesis_gen(
     llm: LLMClient | None = None,
     prompts: PromptManager | None = None,
 ) -> StageResult:
-    synthesis = _read_prior_artifact(run_dir, "synthesis.md") or ""
-    extension_context = ""
-    extension_context_path = run_dir / "hypothesis_extension_context.md"
-    if extension_context_path.exists():
-        try:
-            raw_extension_context = extension_context_path.read_text(
-                encoding="utf-8"
-            ).strip()
-        except OSError:
-            raw_extension_context = ""
-        if raw_extension_context:
-            extension_context = (
-                "\n\n## Hypothesis Extension Context\n"
-                "Generate deeper follow-up hypotheses from the prior hypothesis "
-                "and experiment evidence below. Do not treat this as a blank-slate "
-                "pivot.\n\n"
-                f"{raw_extension_context}"
-            )
+    context = build_hypothesis_context(run_dir, stage_dir)
 
     if llm is not None:
         _pm = prompts or PromptManager()
@@ -149,6 +135,8 @@ def _execute_hypothesis_gen(
                     config,
                     llm=llm,
                     prompts=_pm,
+                    research_context=context.research_context,
+                    extension_context=context.extension_context,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
@@ -162,8 +150,8 @@ def _execute_hypothesis_gen(
             perspectives_dir = stage_dir / "perspectives"
             variables = {
                 "topic": config.research.topic,
-                "synthesis": synthesis,
-                "extension_context": extension_context,
+                "synthesis": context.research_context,
+                "extension_context": context.extension_block,
             }
             perspectives = _multi_perspective_generate(
                 llm, _active_roles, variables, perspectives_dir
@@ -249,6 +237,10 @@ def _execute_hypothesis_gen(
     return StageResult(
         stage=Stage.HYPOTHESIS_GEN,
         status=StageStatus.DONE,
-        artifacts=("hypotheses.md",) + novelty_artifacts,
+        artifacts=(
+            "hypotheses.md",
+            "context_snapshot.md",
+            "context_manifest.json",
+        ) + novelty_artifacts,
         evidence_refs=("stage-08/hypotheses.md",),
     )

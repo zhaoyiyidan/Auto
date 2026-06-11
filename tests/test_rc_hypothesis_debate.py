@@ -352,6 +352,16 @@ class TinyPromptManager:
         }
 
 
+class ExtensionPromptManager:
+    def debate_roles_hypothesis(self) -> dict[str, dict[str, str]]:
+        return {
+            "innovator": {
+                "system": "system {topic}",
+                "user": "user {synthesis}\n{extension_context}",
+            }
+        }
+
+
 class ThreeRolePromptManager:
     def debate_roles_hypothesis(self) -> dict[str, dict[str, str]]:
         return {
@@ -548,3 +558,134 @@ def test_run_acp_debate_stops_after_passing_first_judge(
         "debate-innovator-judge-r1",
         "debate-final-synth",
     ]
+
+
+def test_run_acp_debate_uses_passed_research_and_extension_context(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    responses = {
+        "debate-innovator-claim-r1": "## H1\nweak claim",
+        "debate-innovator-judge-r1": (
+            '{"verdict": "fail", "criticisms": ["not measurable"], '
+            '"fatal_flaws": [], "confidence": 0.2}'
+        ),
+        "debate-innovator-claim-r2": "## H1\nrevised measurable claim",
+        "debate-innovator-judge-r2": (
+            '{"verdict": "pass", "criticisms": [], "fatal_flaws": [], '
+            '"confidence": 0.9}'
+        ),
+        "debate-final-synth": "## H1\nHypothesis Statement: final claim",
+    }
+    fork_log: list[str] = []
+    close_log: list[str] = []
+    clients: dict[str, FakeACPClient] = {}
+    main = FakeACPClient("main", responses, fork_log, close_log)
+
+    def fake_fork(
+        archive_path: Path,
+        fork_name: str,
+        base_config: ACPConfig,
+    ) -> FakeACPClient:
+        _ = archive_path, base_config
+        fork_log.append(fork_name)
+        client = FakeACPClient(fork_name, responses, fork_log, close_log)
+        clients[fork_name] = client
+        return client
+
+    monkeypatch.setattr(ACPClient, "fork_from_archive", staticmethod(fake_fork))
+
+    run_dir = tmp_path / "run"
+    stage8 = run_dir / "stage-08"
+    stage8.mkdir(parents=True)
+    config = SimpleNamespace(
+        research=SimpleNamespace(topic="routing"),
+        llm=SimpleNamespace(acp=main.config),
+    )
+    research_context = (
+        "# Synthesis\nGap.\n\n"
+        "## User Prior Knowledge\n"
+        "USER PRIOR: stress-test routing under load."
+    )
+    extension_context = "EXTENSION SEED: retry policy helped prior H1."
+
+    run_acp_debate(
+        run_dir,
+        stage8,
+        config,
+        main,
+        ExtensionPromptManager(),
+        research_context=research_context,
+        extension_context=extension_context,
+    )
+
+    round1_claim = clients["debate-innovator-claim-r1"].chat_calls[0][1][0][
+        "content"
+    ]
+    round2_claim = clients["debate-innovator-claim-r2"].chat_calls[0][1][0][
+        "content"
+    ]
+    final_prompt = clients["debate-final-synth"].chat_calls[0][1][0]["content"]
+    assert "USER PRIOR: stress-test routing under load." in round1_claim
+    assert "USER PRIOR: stress-test routing under load." in round2_claim
+    assert "USER PRIOR: stress-test routing under load." in final_prompt
+    assert "EXTENSION SEED: retry policy helped prior H1." in round1_claim
+    assert "Hypothesis Extension Context" in round1_claim
+    assert "EXTENSION SEED: retry policy helped prior H1." not in round2_claim
+    assert "Hypothesis Extension Context" not in round2_claim
+    assert "EXTENSION SEED: retry policy helped prior H1." not in final_prompt
+
+
+def test_run_acp_debate_without_context_params_reads_disk_inputs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    responses = {
+        "debate-innovator-claim-r1": "## H1\nstrong claim",
+        "debate-innovator-judge-r1": (
+            '{"verdict": "pass", "criticisms": [], "fatal_flaws": [], '
+            '"confidence": 0.95}'
+        ),
+        "debate-final-synth": "## H1\nHypothesis Statement: final claim",
+    }
+    fork_log: list[str] = []
+    close_log: list[str] = []
+    clients: dict[str, FakeACPClient] = {}
+    main = FakeACPClient("main", responses, fork_log, close_log)
+
+    def fake_fork(
+        archive_path: Path,
+        fork_name: str,
+        base_config: ACPConfig,
+    ) -> FakeACPClient:
+        _ = archive_path, base_config
+        fork_log.append(fork_name)
+        client = FakeACPClient(fork_name, responses, fork_log, close_log)
+        clients[fork_name] = client
+        return client
+
+    monkeypatch.setattr(ACPClient, "fork_from_archive", staticmethod(fake_fork))
+
+    run_dir = tmp_path / "run"
+    stage7 = run_dir / "stage-07"
+    stage8 = run_dir / "stage-08"
+    stage7.mkdir(parents=True)
+    stage8.mkdir()
+    (stage7 / "synthesis.md").write_text(
+        "## Synthesis\nDisk synthesis gap.", encoding="utf-8"
+    )
+    (run_dir / "hypothesis_extension_context.md").write_text(
+        "Disk extension seed.", encoding="utf-8"
+    )
+    config = SimpleNamespace(
+        research=SimpleNamespace(topic="routing"),
+        llm=SimpleNamespace(acp=main.config),
+    )
+
+    run_acp_debate(run_dir, stage8, config, main, ExtensionPromptManager())
+
+    round1_claim = clients["debate-innovator-claim-r1"].chat_calls[0][1][0][
+        "content"
+    ]
+    assert "Disk synthesis gap." in round1_claim
+    assert "Disk extension seed." in round1_claim

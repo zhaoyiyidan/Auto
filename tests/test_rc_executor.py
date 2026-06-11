@@ -3468,6 +3468,37 @@ class TestHypothesisGenDebate:
         assert result.status == StageStatus.DONE
         assert "Prior H1 opened a follow-up mechanism" in prompt_text
 
+    def test_hypothesis_gen_with_user_context_injects_into_all_perspectives(
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _stub_novelty_check(monkeypatch)
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-08"
+        stage_dir.mkdir(parents=True)
+        _write_prior_artifact(run_dir, 7, "synthesis.md", "# Synthesis\nGap found.")
+        user_text = "Expert prior: prioritize calibration drift hypotheses."
+        (stage_dir / "user_context.md").write_text(user_text, encoding="utf-8")
+        fake_llm = FakeLLMClient("## H1\nUser-informed hypothesis")
+
+        result = rc_executor._execute_hypothesis_gen(
+            stage_dir, run_dir, rc_config, adapters, llm=fake_llm
+        )
+
+        role_prompts = [call[0]["content"] for call in fake_llm.calls[:3]]
+        assert result.status == StageStatus.DONE
+        assert len(role_prompts) == 3
+        assert all("## User Prior Knowledge" in prompt for prompt in role_prompts)
+        assert all(user_text in prompt for prompt in role_prompts)
+        assert "context_snapshot.md" in result.artifacts
+        assert "context_manifest.json" in result.artifacts
+        assert (stage_dir / "context_snapshot.md").exists()
+        assert (stage_dir / "context_manifest.json").exists()
+
     def test_hypothesis_gen_without_extension_context_uses_synthesis_only(
         self,
         tmp_path: Path,
@@ -3491,6 +3522,7 @@ class TestHypothesisGenDebate:
         assert result.status == StageStatus.DONE
         assert "Gap found" in prompt_text
         assert "Hypothesis Extension Context" not in prompt_text
+        assert "User Prior Knowledge" not in prompt_text
 
     def test_hypothesis_gen_acp_debate_success_preserves_clean_contract(
         self,
@@ -3605,6 +3637,51 @@ class TestHypothesisGenDebate:
         assert "hypotheses.md" in result.artifacts
         assert "Debate-derived hypothesis" in output
         assert not (stage_dir / "perspectives").exists()
+
+    def test_hypothesis_gen_acp_debate_receives_built_context(
+        self,
+        tmp_path: Path,
+        rc_config: RCConfig,
+        adapters: AdapterBundle,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _stub_novelty_check(monkeypatch)
+        from researchclaw.pipeline.stage_impls import _hypothesis_debate
+
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        stage_dir = run_dir / "stage-08"
+        stage_dir.mkdir(parents=True)
+        _write_prior_artifact(run_dir, 7, "synthesis.md", "# Synthesis\nGap found.")
+        user_text = "Expert prior: favor stress-testable routing claims."
+        extension_text = "Prior H1 revealed a retry-policy mechanism."
+        (stage_dir / "user_context.md").write_text(user_text, encoding="utf-8")
+        (run_dir / "hypothesis_extension_context.md").write_text(
+            extension_text, encoding="utf-8"
+        )
+        config = self._acp_config(rc_config, tmp_path, enable_debate=True)
+        captured: dict[str, object] = {}
+
+        def fake_debate(*args: object, **kwargs: object) -> str:
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return "## H1: Context-aware hypothesis\nStatement: from debate."
+
+        monkeypatch.setattr(_hypothesis_debate, "run_acp_debate", fake_debate)
+
+        result = rc_executor._execute_hypothesis_gen(
+            stage_dir, run_dir, config, adapters, llm=FakeLLMClient("unused")
+        )
+
+        kwargs = cast(dict[str, object], captured["kwargs"])
+        research_context = str(kwargs["research_context"])
+        extension_context = str(kwargs["extension_context"])
+        assert result.status == StageStatus.DONE
+        assert "## User Prior Knowledge" in research_context
+        assert user_text in research_context
+        assert extension_text not in research_context
+        assert extension_context == extension_text
+        assert user_text not in extension_context
 
     def test_hypothesis_gen_acp_debate_failure_falls_back_to_perspectives(
         self,

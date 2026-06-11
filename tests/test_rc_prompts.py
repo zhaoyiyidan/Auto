@@ -220,6 +220,29 @@ class TestPromptManagerDefaults:
         )
         assert "import error" in irp.user
 
+    def test_sub_prompt_decision_review(self) -> None:
+        pm = PromptManager()
+        rp = pm.sub_prompt(
+            "decision_review",
+            decision="PROCEED",
+            decision_md="## Decision\nPROCEED\n",
+            analysis="# Analysis\nUseful evidence.",
+        )
+        rendered = rp.system + "\n" + rp.user
+        assert "PROCEED" in rendered
+        for header in (
+            "Decision Reviewed",
+            "Short Rationale",
+            "Evidence Considered",
+            "Criteria Assessment",
+            "Why This Decision",
+            "Why Not The Alternatives",
+            "Caveats For Reviewer",
+            "Recommended Human Review Focus",
+        ):
+            assert header in rendered
+        assert rp.system
+
 
 class TestResearchDecisionPrompts:
     def test_ml_research_decision_contains_extend_option(self) -> None:

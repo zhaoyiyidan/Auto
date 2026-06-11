@@ -995,6 +995,45 @@ _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
         "json_mode": True,
         "max_tokens": 2000,
     },
+    "decision_review": {
+        "system": (
+            "You write an auditable, human-facing review note explaining a research "
+            "go/no-go decision that has ALREADY been finalized. You are NOT "
+            "re-deciding and must not contradict it. Give concrete, checkable "
+            "reasons grounded in the provided evidence. Do not reveal hidden "
+            "chain-of-thought or internal deliberation; provide auditable "
+            "justification only."
+        ),
+        "user": (
+            "FINALIZED DECISION:\n"
+            "{decision}\n\n"
+            "AUTHORITATIVE DECISION FILE (`decision.md`):\n"
+            "```markdown\n{decision_md}\n```\n\n"
+            "PRIOR ANALYSIS EVIDENCE:\n"
+            "```markdown\n{analysis}\n```\n\n"
+            "Write Markdown for a human reviewer. The note explains the finalized "
+            "decision only; it must not introduce a new decision or contradict "
+            "`decision.md`.\n\n"
+            "Output exactly these sections in this order:\n"
+            "## Decision Reviewed\n"
+            "Restate {decision} verbatim in this section.\n\n"
+            "## Short Rationale\n"
+            "Summarize the main auditable reason for the finalized decision.\n\n"
+            "## Evidence Considered\n"
+            "List the concrete artifacts, metrics, observations, or limitations used.\n\n"
+            "## Criteria Assessment\n"
+            "Assess the decision against experiment sufficiency, evidence quality, "
+            "risk, and readiness for the next pipeline step.\n\n"
+            "## Why This Decision\n"
+            "Explain why {decision} best fits the supplied evidence.\n\n"
+            "## Why Not The Alternatives\n"
+            "Briefly explain why the other available routes are less appropriate.\n\n"
+            "## Caveats For Reviewer\n"
+            "Name uncertainties, weak evidence, or checks the reviewer should not skip.\n\n"
+            "## Recommended Human Review Focus\n"
+            "Give a concise checklist of what the human reviewer should inspect."
+        ),
+    },
     "hypothesis_verdict_fallback": {
         "system": (
             "You are a strict scientific hypothesis judge. You only use "

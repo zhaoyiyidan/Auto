@@ -142,7 +142,7 @@ CONTRACTS: dict[Stage, StageContract] = {
     Stage.RESEARCH_DECISION: StageContract(
         stage=Stage.RESEARCH_DECISION,
         input_files=("analysis.md",),
-        output_files=("decision.md",),
+        output_files=("decision.md", "decision_review.md"),
         dod="PROCEED/PIVOT/EXTEND decision with evidence-based justification",
         error_code="E15_DECISION_FAIL",
         max_retries=0,

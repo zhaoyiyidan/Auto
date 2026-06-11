@@ -578,6 +578,78 @@ def _write_decision_structured_json(
     return decision_payload
 
 
+def _decision_review_unavailable(decision: str) -> str:
+    """Return a transparent degraded-mode note without fabricating rationale."""
+    decision_upper = str(decision or "proceed").upper()
+    lines = [
+        "# Decision Review",
+        "",
+        f"Decision Reviewed: {decision_upper}",
+        "",
+        "agent rationale unavailable: Stage 15 could not generate an "
+        "agent-authored review note because the LLM was unavailable or review "
+        "generation failed.",
+        "",
+        "This explanatory artifact is in degraded mode. The authoritative route "
+        "remains `decision.md`; this file does not provide a Short Rationale or "
+        "infer reasons beyond the finalized decision.",
+        "",
+        "Sections not generated:",
+        f"- Decision Reviewed: {decision_upper}",
+        "- Short Rationale: not generated",
+        "- Evidence Considered: not generated",
+        "- Criteria Assessment: not generated",
+        "- Why This Decision: not generated",
+        "- Why Not The Alternatives: not generated",
+        "- Caveats For Reviewer: not generated",
+        "- Recommended Human Review Focus: not generated",
+        "",
+        "Reviewer action: inspect `decision.md` and the prior analysis artifacts "
+        "directly before approving this gate.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _write_decision_review(
+    *,
+    stage_dir: Path,
+    run_dir: Path,
+    decision: str,
+    decision_md: str,
+    llm: LLMClient | None,
+    prompts: PromptManager | None = None,
+) -> None:
+    """Generate and save the human-facing Stage 15 decision explanation."""
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    path = stage_dir / "decision_review.md"
+    if llm is None:
+        path.write_text(_decision_review_unavailable(decision), encoding="utf-8")
+        return
+    try:
+        pm = prompts or PromptManager()
+        analysis = _read_prior_artifact(run_dir, "analysis.md") or ""
+        review_prompt = pm.sub_prompt(
+            "decision_review",
+            decision=str(decision).upper(),
+            decision_md=decision_md,
+            analysis=analysis,
+        )
+        resp = _chat_with_prompt(
+            llm,
+            review_prompt.system,
+            review_prompt.user,
+            strip_thinking=True,
+        )
+        text = (resp.content or "").strip()
+        path.write_text(
+            text or _decision_review_unavailable(decision),
+            encoding="utf-8",
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("Stage 15: decision_review generation failed", exc_info=True)
+        path.write_text(_decision_review_unavailable(decision), encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Requirements gate. Reads the manifest's optional `requirements:` list, calls
 # the LLM judge, persists the verdict, and decides PROCEED with a
@@ -850,10 +922,17 @@ def _hypothesis_protocol_decision(
                 "Failed to record hypothesis tree decision (hypothesis judge)",
                 exc_info=True,
             )
+    _write_decision_review(
+        stage_dir=stage_dir,
+        run_dir=run_dir,
+        decision=decision,
+        decision_md=decision_md,
+        llm=llm,
+    )
     return StageResult(
         stage=Stage.RESEARCH_DECISION,
         status=StageStatus.DONE,
-        artifacts=("decision.md", "decision_structured.json"),
+        artifacts=("decision.md", "decision_structured.json", "decision_review.md"),
         evidence_refs=("stage-15/decision.md",),
         decision=decision,
     )
@@ -930,10 +1009,17 @@ def _agent_requirements_decision(
                 "Failed to record hypothesis tree decision (agent gate)",
                 exc_info=True,
             )
+    _write_decision_review(
+        stage_dir=stage_dir,
+        run_dir=run_dir,
+        decision=decision,
+        decision_md=decision_md,
+        llm=llm,
+    )
     return StageResult(
         stage=Stage.RESEARCH_DECISION,
         status=StageStatus.DONE,
-        artifacts=("decision.md", "decision_structured.json"),
+        artifacts=("decision.md", "decision_structured.json", "decision_review.md"),
         evidence_refs=("stage-15/decision.md",),
         decision=decision,
     )
@@ -1083,10 +1169,19 @@ Generated: {_utcnow_iso()}
         except Exception:
             logger.warning("Failed to record hypothesis tree decision", exc_info=True)
 
+    _write_decision_review(
+        stage_dir=stage_dir,
+        run_dir=run_dir,
+        decision=decision,
+        decision_md=decision_md,
+        llm=llm,
+        prompts=prompts,
+    )
+
     return StageResult(
         stage=Stage.RESEARCH_DECISION,
         status=StageStatus.DONE,
-        artifacts=("decision.md", "decision_structured.json"),
+        artifacts=("decision.md", "decision_structured.json", "decision_review.md"),
         evidence_refs=("stage-15/decision.md",),
         decision=decision,
     )

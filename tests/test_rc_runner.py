@@ -1622,10 +1622,14 @@ def test_full_auto_no_sentinel_created(
             "## Decision\nPROCEED\n## Justification\nAuto approved.",
             encoding="utf-8",
         )
+        (stage_dir / "decision_review.md").write_text(
+            "# Decision Review\n\nDecision Reviewed: PROCEED\n",
+            encoding="utf-8",
+        )
         return StageResult(
             stage=Stage.RESEARCH_DECISION,
             status=StageStatus.DONE,
-            artifacts=("decision.md",),
+            artifacts=("decision.md", "decision_review.md"),
             decision="proceed",
         )
 

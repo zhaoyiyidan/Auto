@@ -141,10 +141,14 @@ def _stage15_done_executor(decision_text: str = "PROCEED"):
             json.dumps({"decision": decision_text.lower()}),
             encoding="utf-8",
         )
+        (stage_dir / "decision_review.md").write_text(
+            f"# Decision Review\n\nDecision Reviewed: {decision_text}\n",
+            encoding="utf-8",
+        )
         return rc_executor.StageResult(
             stage=Stage.RESEARCH_DECISION,
             status=StageStatus.DONE,
-            artifacts=("decision.md", "decision_structured.json"),
+            artifacts=("decision.md", "decision_structured.json", "decision_review.md"),
             decision=decision_text.lower(),
         )
 
@@ -3251,6 +3255,45 @@ class TestFinalizeDecisionFromArtifact:
         assert data["decision"] == "extend"
         assert "Human edited rationale wins" in data["raw_text_excerpt"]
 
+    def test_writes_unavailable_review_when_review_missing(
+        self, tmp_path: Path
+    ) -> None:
+        run_dir, stage_dir = self._setup_decision(
+            tmp_path,
+            "## Decision\nPROCEED\n## Justification\nHuman approved.",
+        )
+
+        result = rc_executor._finalize_research_decision_from_artifact(
+            stage_dir, run_dir
+        )
+
+        content = (stage_dir / "decision_review.md").read_text(encoding="utf-8")
+        assert "decision_review.md" in result.artifacts
+        assert "PROCEED" in content
+        assert "agent rationale unavailable" in content.lower()
+
+    def test_replaces_stale_review_when_human_changes_decision(
+        self, tmp_path: Path
+    ) -> None:
+        run_dir, stage_dir = self._setup_decision(
+            tmp_path,
+            "## Decision\nEXTEND\n## Justification\nHuman wants follow-up.",
+        )
+        (stage_dir / "decision_review.md").write_text(
+            "# Decision Review\n\nDecision Reviewed: PROCEED\n",
+            encoding="utf-8",
+        )
+        (stage_dir / "decision_structured.json").write_text(
+            json.dumps({"decision": "proceed"}),
+            encoding="utf-8",
+        )
+
+        rc_executor._finalize_research_decision_from_artifact(stage_dir, run_dir)
+
+        content = (stage_dir / "decision_review.md").read_text(encoding="utf-8")
+        assert "EXTEND" in content
+        assert "agent rationale unavailable" in content.lower()
+
     def test_raises_stale_when_decision_missing(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "run"
         stage_dir = run_dir / "stage-15"
@@ -3331,10 +3374,14 @@ class TestExecuteStageGateResume:
                 "## Decision\nPROCEED\n## Justification\nFresh run.",
                 encoding="utf-8",
             )
+            (stage_dir / "decision_review.md").write_text(
+                "# Decision Review\n\nDecision Reviewed: PROCEED\n",
+                encoding="utf-8",
+            )
             return rc_executor.StageResult(
                 stage=Stage.RESEARCH_DECISION,
                 status=StageStatus.DONE,
-                artifacts=("decision.md",),
+                artifacts=("decision.md", "decision_review.md"),
                 decision="proceed",
             )
 

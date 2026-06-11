@@ -176,6 +176,7 @@ from researchclaw.pipeline.stage_impls._execution import (  # noqa: E402
 # Stages 14-15 (extracted to stage_impls/_analysis.py)
 # ---------------------------------------------------------------------------
 from researchclaw.pipeline.stage_impls._analysis import (  # noqa: E402
+    _decision_review_unavailable,
     _execute_result_analysis,
     _parse_decision,
     _write_decision_structured_json,
@@ -679,6 +680,29 @@ def _finalize_research_decision_from_artifact(
 
     decision_md = decision_path.read_text(encoding="utf-8")
     decision = _parse_decision(decision_md)
+    review_path = stage_dir / "decision_review.md"
+    prior_decision = ""
+    sentinel_path = _gate_proposal_sentinel_path(stage_dir)
+    if sentinel_path.is_file():
+        try:
+            sentinel = json.loads(sentinel_path.read_text(encoding="utf-8"))
+            prior_decision = str(sentinel.get("decision_at_generation") or "").lower()
+        except (OSError, json.JSONDecodeError):
+            prior_decision = ""
+    structured_path = stage_dir / "decision_structured.json"
+    if not prior_decision and structured_path.is_file():
+        try:
+            structured = json.loads(structured_path.read_text(encoding="utf-8"))
+            prior_decision = str(structured.get("decision") or "").lower()
+        except (OSError, json.JSONDecodeError):
+            prior_decision = ""
+    review_missing = not review_path.is_file() or review_path.stat().st_size == 0
+    review_stale = bool(prior_decision and prior_decision != decision)
+    if review_missing or review_stale:
+        review_path.write_text(
+            _decision_review_unavailable(decision),
+            encoding="utf-8",
+        )
     _write_decision_structured_json(stage_dir, decision_md, decision)
     _clear_gate_proposal_sentinel(stage_dir)
     from researchclaw.pipeline.hypothesis_mode import (
@@ -701,7 +725,7 @@ def _finalize_research_decision_from_artifact(
     return StageResult(
         stage=Stage.RESEARCH_DECISION,
         status=StageStatus.DONE,
-        artifacts=("decision.md", "decision_structured.json"),
+        artifacts=("decision.md", "decision_structured.json", "decision_review.md"),
         evidence_refs=("stage-15/decision.md",),
         decision=decision,
     )

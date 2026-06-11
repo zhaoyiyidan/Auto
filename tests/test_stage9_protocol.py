@@ -88,10 +88,15 @@ def test_stage9_deterministic_writes_protocol_and_derived_task_spec(
     )
 
     assert result.status is StageStatus.DONE
-    assert result.artifacts == ("experiment_protocol.json", "task_spec.yaml")
+    assert result.artifacts == (
+        "experiment_protocol.json",
+        "task_spec.yaml",
+        "experiment_design_intent.md",
+    )
     assert result.evidence_refs == (
         "stage-09/experiment_protocol.json",
         "stage-09/task_spec.yaml",
+        "stage-09/experiment_design_intent.md",
     )
 
     protocol = ExperimentProtocol.from_path(stage_dir / "experiment_protocol.json")

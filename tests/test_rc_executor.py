@@ -257,7 +257,11 @@ class TestWorkspaceAgentStageWiring:
         )
 
         assert result.status is StageStatus.DONE
-        assert result.artifacts == ("experiment_protocol.json", "task_spec.yaml")
+        assert result.artifacts == (
+            "experiment_protocol.json",
+            "task_spec.yaml",
+            "experiment_design_intent.md",
+        )
         spec = TaskSpec.from_path(stage_dir / "task_spec.yaml")
         assert spec.workspace == cfg.experiment.workspace_agent.workspace_path
         assert spec.primary_metric == "primary_metric"
@@ -265,6 +269,163 @@ class TestWorkspaceAgentStageWiring:
         assert spec.objective
         assert spec.expected_outputs
         assert (stage_dir / "experiment_protocol.json").is_file()
+        intent_md = stage_dir / "experiment_design_intent.md"
+        assert intent_md.is_file()
+        assert intent_md.read_text(encoding="utf-8").strip()
+
+    def test_stage9_intent_md_nonempty_when_llm_none(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        cfg = _workspace_agent_rc_config(tmp_path)
+        _write_prior_artifact(run_dir, 8, "hypotheses.md", "# Hypothesis\nImprove X")
+        stage_dir = run_dir / "stage-09"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_experiment_design(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        assert result.status is StageStatus.DONE
+        text = (stage_dir / "experiment_design_intent.md").read_text(encoding="utf-8")
+        assert text.strip()
+        for header in (
+            "## What This Experiment Does",
+            "## How It Will Be Run",
+            "## Metrics And Success Criteria",
+            "## Review Notes",
+        ):
+            assert header in text
+        assert "Advisory" in text or "advisory" in text
+
+    def test_stage9_intent_md_is_not_protocol_serialization(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        import json as _json
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        _write_prior_artifact(run_dir, 8, "hypotheses.md", "# Hypothesis\nImprove X")
+        stage_dir = run_dir / "stage-09"
+        stage_dir.mkdir()
+
+        rc_executor._execute_experiment_design(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        md = (stage_dir / "experiment_design_intent.md").read_text(encoding="utf-8")
+        protocol_json = (stage_dir / "experiment_protocol.json").read_text(
+            encoding="utf-8"
+        )
+        assert "schema_version" not in md
+        assert md.strip() != protocol_json.strip()
+        with pytest.raises(_json.JSONDecodeError):
+            _json.loads(md)
+
+    def test_stage9_intent_md_uses_llm_when_available(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        cfg = _workspace_agent_rc_config(tmp_path)
+        _write_prior_artifact(run_dir, 8, "hypotheses.md", "# Hypothesis\nImprove X")
+        stage_dir = run_dir / "stage-09"
+        stage_dir.mkdir()
+        marker = "INTENT_PROSE_FROM_LLM_MARKER"
+        llm = FakeLLMClient(
+            "## What This Experiment Does\n"
+            f"{marker}\n"
+            "## How It Will Be Run\nrun it\n"
+            "## Metrics And Success Criteria\nf1\n"
+            "## Review Notes\ncheck things\n"
+        )
+
+        result = rc_executor._execute_experiment_design(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=llm,
+        )
+
+        assert result.status is StageStatus.DONE
+        md = (stage_dir / "experiment_design_intent.md").read_text(encoding="utf-8")
+        assert marker in md
+
+    def test_stage9_intent_md_never_fails_stage_on_llm_error(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        from researchclaw.experiment.workspace import TaskSpec
+
+        class RaisingLLMClient:
+            def chat(self, messages, **kwargs):
+                _ = messages, kwargs
+                raise RuntimeError("LLM down")
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        _write_prior_artifact(run_dir, 8, "hypotheses.md", "# Hypothesis\nImprove X")
+        stage_dir = run_dir / "stage-09"
+        stage_dir.mkdir()
+
+        result = rc_executor._execute_experiment_design(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=RaisingLLMClient(),
+        )
+
+        assert result.status is StageStatus.DONE
+        intent = stage_dir / "experiment_design_intent.md"
+        assert intent.is_file() and intent.read_text(encoding="utf-8").strip()
+        assert (stage_dir / "experiment_protocol.json").is_file()
+        spec = TaskSpec.from_path(stage_dir / "task_spec.yaml")
+        assert spec.objective
+
+    def test_stage9_outputs_satisfy_executor_enforcement(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        from researchclaw.pipeline.contracts import CONTRACTS
+        from researchclaw.pipeline.executor import _select_output_files
+        from researchclaw.pipeline.stages import Stage
+
+        cfg = _workspace_agent_rc_config(tmp_path)
+        _write_prior_artifact(run_dir, 8, "hypotheses.md", "# Hypothesis\nImprove X")
+        stage_dir = run_dir / "stage-09"
+        stage_dir.mkdir()
+
+        rc_executor._execute_experiment_design(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=None,
+        )
+
+        outputs = _select_output_files(CONTRACTS[Stage.EXPERIMENT_TASK_SPEC], cfg)
+        assert "experiment_design_intent.md" in outputs
+        for name in outputs:
+            path = stage_dir / name
+            assert path.exists() and path.stat().st_size > 0
 
     def test_stage9_uses_llm_task_spec_fields(
         self,

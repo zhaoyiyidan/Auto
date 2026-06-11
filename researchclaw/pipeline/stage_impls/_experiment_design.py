@@ -30,6 +30,16 @@ from researchclaw.prompts import PromptManager
 
 logger = logging.getLogger(__name__)
 
+_MINIMAL_INTENT_MD = (
+    "# Experiment Design Intent\n\n"
+    "> Advisory human-review artifact. Not consumed by Stage 10+. "
+    "Edits here do not alter experiment_protocol.json or task_spec.yaml.\n\n"
+    "## What This Experiment Does\n_(pending - see experiment_protocol.json)_\n\n"
+    "## How It Will Be Run\n_(pending)_\n\n"
+    "## Metrics And Success Criteria\n_(pending)_\n\n"
+    "## Review Notes\n- Confirm the experiment matches the stated hypotheses.\n"
+)
+
 
 def _execute_experiment_task_spec(
     stage_dir: Path,
@@ -54,11 +64,24 @@ def _execute_experiment_task_spec(
         encoding="utf-8",
     )
     (stage_dir / "task_spec.yaml").write_text(spec.to_yaml(), encoding="utf-8")
+    intent_md = _build_intent_md(config, hypotheses_md, protocol, llm)
+    (stage_dir / "experiment_design_intent.md").write_text(
+        intent_md,
+        encoding="utf-8",
+    )
     return StageResult(
         stage=Stage.EXPERIMENT_TASK_SPEC,
         status=StageStatus.DONE,
-        artifacts=("experiment_protocol.json", "task_spec.yaml"),
-        evidence_refs=("stage-09/experiment_protocol.json", "stage-09/task_spec.yaml"),
+        artifacts=(
+            "experiment_protocol.json",
+            "task_spec.yaml",
+            "experiment_design_intent.md",
+        ),
+        evidence_refs=(
+            "stage-09/experiment_protocol.json",
+            "stage-09/task_spec.yaml",
+            "stage-09/experiment_design_intent.md",
+        ),
     )
 
 
@@ -264,6 +287,121 @@ def _task_spec_from_protocol(
             expected_outputs=["outputs/metrics.json"],
         ),
     )
+
+
+def _template_intent_md(
+    config: RCConfig,
+    hypotheses_md: str,
+    protocol: ExperimentProtocol,
+) -> str:
+    """Deterministic prose fallback for the human-review gate artifact."""
+    topic = str(getattr(config.research, "topic", "") or "").strip()
+    if not topic:
+        topic = "this research topic"
+    hypotheses = parse_hypotheses_md(hypotheses_md)
+    primary = protocol.primary_metric()
+    if hypotheses:
+        hypothesis_lines = "\n".join(
+            f"- {hypothesis.id}: {hypothesis.statement}"
+            for hypothesis in hypotheses
+            if hypothesis.statement
+        )
+    else:
+        hypothesis_lines = (
+            "- (no explicit hypotheses parsed; see experiment_protocol.json)"
+        )
+    return (
+        "# Experiment Design Intent\n\n"
+        "> Advisory human-review artifact. Not consumed by Stage 10+. "
+        "Edits here do not alter experiment_protocol.json or task_spec.yaml.\n\n"
+        "## What This Experiment Does\n"
+        f"This experiment investigates **{topic}**. It aims to test the following "
+        "hypotheses:\n"
+        f"{hypothesis_lines}\n\n"
+        "## How It Will Be Run\n"
+        "A code agent implements and evaluates the design in the configured "
+        "workspace, then reports the primary metric. The machine-readable plan "
+        "lives in `task_spec.yaml` and `experiment_protocol.json` (this note "
+        "does not replace them).\n\n"
+        "## Metrics And Success Criteria\n"
+        f"The primary metric is **{primary.name}** (direction: {primary.direction}). "
+        "The experiment is considered to support a hypothesis when the planned "
+        "comparison moves this metric in the intended direction per the "
+        "protocol's decision rules.\n\n"
+        "## Review Notes\n"
+        "- Confirm the primary metric genuinely reflects the hypotheses.\n"
+        "- Check the design is feasible within the configured time budget.\n"
+        "- This file is advisory only; approving the gate approves the machine "
+        "spec, not this prose.\n"
+    )
+
+
+def _intent_md_from_llm(
+    config: RCConfig,
+    hypotheses_md: str,
+    protocol: ExperimentProtocol,
+    llm: LLMClient | None,
+) -> str | None:
+    if llm is None:
+        return None
+    topic = str(getattr(config.research, "topic", "") or "").strip()
+    primary = protocol.primary_metric()
+    hypothesis_excerpt = hypotheses_md.strip()[:2000]
+    system = (
+        "You write a concise, human-facing experiment design intent note in "
+        "Markdown for a scientific reviewer. Use plain prose. No code blocks, "
+        "no JSON."
+    )
+    user = (
+        "Write a short Markdown note that helps a reviewer quickly approve or "
+        "reject an experiment design at a gate. Use EXACTLY these four sections "
+        "as H2 headers, in this order:\n"
+        "## What This Experiment Does\n"
+        "## How It Will Be Run\n"
+        "## Metrics And Success Criteria\n"
+        "## Review Notes\n\n"
+        "State clearly that the note is advisory and is not consumed by Stage 10+.\n\n"
+        f"Topic: {topic}\n"
+        f"Primary metric: {primary.name} (direction: {primary.direction})\n"
+        "Hypotheses (markdown excerpt):\n"
+        f"{hypothesis_excerpt}\n"
+    )
+    try:
+        response = _chat_with_prompt(
+            llm,
+            system,
+            user,
+            json_mode=False,
+            max_tokens=1200,
+        )
+        text = str(getattr(response, "content", "") or "").strip()
+        return text or None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Stage 09: intent MD LLM generation failed: %s", exc)
+        return None
+
+
+def _build_intent_md(
+    config: RCConfig,
+    hypotheses_md: str,
+    protocol: ExperimentProtocol,
+    llm: LLMClient | None,
+) -> str:
+    """Return non-empty Markdown for human review without failing Stage 9."""
+    try:
+        text = _intent_md_from_llm(config, hypotheses_md, protocol, llm)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Stage 09: intent MD generation error: %s", exc)
+        text = None
+    if not text or not text.strip():
+        try:
+            text = _template_intent_md(config, hypotheses_md, protocol)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Stage 09: intent MD template failed: %s", exc)
+            text = None
+    if not text or not text.strip():
+        text = _MINIMAL_INTENT_MD
+    return text.strip() + "\n"
 
 
 def _workspace_path(config: RCConfig) -> str:

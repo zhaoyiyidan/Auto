@@ -71,7 +71,7 @@ def test_workspace_native_stage_contracts_are_exact():
     expected = {
         Stage.EXPERIMENT_TASK_SPEC: (
             ("hypotheses.md",),
-            ("experiment_protocol.json", "task_spec.yaml"),
+            ("experiment_protocol.json", "task_spec.yaml", "experiment_design_intent.md"),
             "E09_TASKSPEC_REJECT",
             0,
         ),
@@ -112,6 +112,24 @@ def test_workspace_native_stage_contracts_are_exact():
         assert contract.output_files == outputs
         assert contract.error_code == error_code
         assert contract.max_retries == max_retries
+
+
+def test_stage9_intent_md_is_last_output_and_machine_files_unchanged():
+    contract = CONTRACTS[Stage.EXPERIMENT_TASK_SPEC]
+    # Markdown is the LAST output so the existing machine artifacts keep their
+    # identity, order, and downstream expectations.
+    assert contract.output_files[-1] == "experiment_design_intent.md"
+    assert contract.output_files[:2] == ("experiment_protocol.json", "task_spec.yaml")
+
+
+def test_stage9_max_retries_still_zero():
+    assert CONTRACTS[Stage.EXPERIMENT_TASK_SPEC].max_retries == 0
+
+
+def test_stage10_input_contract_unchanged_by_intent_md():
+    stage10 = CONTRACTS[Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR]
+    assert stage10.input_files == ("task_spec.yaml",)
+    assert "experiment_design_intent.md" not in stage10.input_files
 
 
 def test_stage_contract_has_no_collider_output_files_field():

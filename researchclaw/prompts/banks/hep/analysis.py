@@ -1,0 +1,131 @@
+"""Generated prompt bank segment.
+
+This module was split from the legacy monolithic prompt bank without
+changing rendered prompt content.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+STAGES: dict[str, dict[str, Any]] = {
+    'result_analysis': {
+        "system": (
+            "You are a quantitative HEP phenomenologist. Always cite exact "
+            "numbers from the parameter-scan output and quote them in "
+            "natural units with explicit CL levels."
+        ),
+        "user": (
+            "{preamble}\n\n"
+            "{data_context}\n\n"
+            "Analyse the parameter-scan output and produce a markdown report "
+            "with physics interpretation. Use the ACTUAL numerical values "
+            "provided — do NOT invent numbers. Quote everything in natural "
+            "units (GeV, pb, fb, cm², Ω h²) and explicit CL levels "
+            "(95% CL is the HEP convention).\n\n"
+            "SANITY CHECKS (perform BEFORE interpreting results):\n"
+            "1. MONOTONICITY: Cross sections should behave monotonically in "
+            "the appropriate limit (σ ∝ g⁴ at fixed masses; σ decreases "
+            "with mediator mass for large m_med). If the scan shows "
+            "non-monotonic dependence, flag potential numerical issues "
+            "(overflow, interference dip mis-handled).\n"
+            "2. STANDARD-MODEL BASELINE: The SM prediction (no new physics) "
+            "must reproduce known tree-level results. Compare with a PDG "
+            "quoted cross section at the benchmark point if available.\n"
+            "3. CROSS-REGIME CONSISTENCY: Scalar vs. vector mediators should "
+            "give comparable limits in the large-mediator-mass EFT limit. "
+            "Wildly different exclusions in that regime suggest a bug.\n"
+            "4. REGIME COVERAGE: If results come from a single (m_DM, m_med) "
+            "grid and a single mediator spin, explicitly note that the "
+            "conclusions are specific to that regime. Do NOT generalise.\n"
+            "5. ABLATION ISOLATION: Compare per-point values across "
+            "conditions. If two conditions produce IDENTICAL cross "
+            "sections at the same grid point, the ablation did not change "
+            "the computation. Flag this as a RED FLAG and recommend a "
+            "code-path audit.\n"
+            "6. METRIC DEFINITION CHECK: Look for a `METRIC_DEF:` line. If "
+            "absent, flag that the primary observable is UNDEFINED — "
+            "direction, units, and formula are unknown, so limits cannot "
+            "be interpreted. This is a critical methodology gap.\n"
+            "7. CONDITION COMPLETENESS: Look for `REGISTERED_CONDITIONS:`. "
+            "If some conditions are missing or `CONDITION_FAILED:` appears, "
+            "list them and assess whether the surviving conditions still "
+            "answer the physics question.\n"
+            "8. DEGENERATE METRICS: If every condition produces the same "
+            "exclusion contour (or the same cross section at the central "
+            "point), flag as DEGENERATE. Common causes: (a) the mediator "
+            "is so heavy the EFT limit absorbs all differences; (b) the "
+            "observable is saturated by the SM background; (c) a bug "
+            "short-circuits the computation. Look for "
+            "`WARNING: DEGENERATE_METRICS` and cross-check manually.\n"
+            "9. THEORETICAL UNCERTAINTY BAND: If uncertainties (scale, "
+            "PDF, form-factor) are not propagated, flag that the quoted "
+            "exclusion is optimistic and recommend including the envelope.\n\n"
+            "Required sections: Metrics Summary (numerical values in "
+            "natural units), Consensus Findings (physics conclusions with "
+            "high confidence), Contested Points (with evidence-based "
+            "resolution, e.g. 'the vector-mediator exclusion is stronger "
+            "only in the on-shell regime'), Statistical Checks, Methodology "
+            "Audit, Limitations (theoretical uncertainties, approximations, "
+            "regime restrictions), Conclusion.\n"
+            "In the Conclusion, include:\n"
+            "- Result-quality rating (1-10) from an HEP-referee perspective.\n"
+            "- Key physics findings (3-5): e.g. 'Scalar mediators below "
+            "1.2 TeV are excluded for g_χ = g_q = 1 by the combination of "
+            "LZ and ATLAS monojet.'\n"
+            "- Methodology gaps (e.g. 'NLO K-factors not included', "
+            "'nuclear form-factor uncertainty dropped').\n"
+            "- Recommendation: PROCEED / PIVOT / EXTEND.\n\n"
+            "Run context:\n{context}"
+        ),
+        "max_tokens": 8192,
+    },
+    'research_decision': {
+        "system": (
+            "You are an HEP-ph research program lead making go/no-go "
+            "decisions on whether the parameter-scan output is ready for "
+            "JHEP submission."
+        ),
+        "user": (
+            "Based on the analysis, make one of three decisions:\n"
+            "- **PROCEED** — physics results are sufficient and statistically "
+            "defensible; move to paper writing.\n"
+            "- **PIVOT** — the hypothesis is fundamentally flawed (model "
+            "inconsistency, EFT breakdown, ruled out by an overlooked "
+            "bound); generate new hypotheses.\n"
+            "- **EXTEND** — the current hypothesis produced useful physics "
+            "evidence and should lead to deeper follow-up hypotheses.\n\n"
+            "Experiment-level repair and rerun decisions have already been handled "
+            "before this stage.\n\n"
+            "MINIMUM QUALITY CRITERIA for PROCEED (ALL must be met):\n"
+            "1. At least 2 BSM conditions AND a SM / null baseline have "
+            "numerical results.\n"
+            "2. The primary observable is defined (direction, natural "
+            "units, CL level).\n"
+            "3. The scan covers at least a 25×25 grid (625 points) or an "
+            "equivalent resolution.\n"
+            "4. No identical per-point cross sections across supposedly-"
+            "different conditions (ablation integrity).\n"
+            "5. The analysis quality rating is ≥ 4/10.\n"
+            "6. Theoretical uncertainties (scale, PDF, form factors) are "
+            "at least mentioned, even if not fully propagated.\n"
+            "If any criterion is not met, choose PIVOT for hypothesis-level flaws "
+            "or PROCEED with explicit caveats when the remaining issue is "
+            "experiment quality.\n\n"
+            "Output markdown with sections:\n"
+            "## Decision\n"
+            "State exactly one of: PROCEED, PIVOT, or EXTEND.\n\n"
+            "## Justification\n"
+            "Why this decision is warranted, citing specific physics "
+            "evidence.\n\n"
+            "## Evidence\n"
+            "Key numerical data points (exclusion contours, cross sections, "
+            "relic-compatible regions) supporting the decision.\n\n"
+            "## Next Actions\n"
+            "Concrete physics steps (e.g. 'add one-loop EW correction', "
+            "'widen m_med range to 5 TeV', 'include spin-dependent DD bound').\n\n"
+            "Analysis:\n{analysis}"
+        ),
+    },
+}

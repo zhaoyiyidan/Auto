@@ -17,6 +17,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from researchclaw.prompts import PromptManager
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,9 +71,15 @@ class ExperimentDiagnosis:
 
     def to_repair_prompt(self) -> str:
         """Generate a structured repair prompt for OpenCode."""
-        lines = ["## EXPERIMENT DIAGNOSIS\n"]
-        lines.append(f"Completion rate: {self.completion_rate:.0%} "
-                     f"({len(self.conditions_completed)}/{self.total_planned} conditions)\n")
+        pm = PromptManager()
+        lines = [
+            pm.block(
+                "diagnosis_header",
+                completion_rate=f"{self.completion_rate:.0%}",
+                completed_count=str(len(self.conditions_completed)),
+                total_planned=str(self.total_planned),
+            )
+        ]
 
         if self.conditions_completed:
             lines.append(f"Completed: {', '.join(self.conditions_completed)}")

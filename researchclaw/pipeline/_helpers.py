@@ -1375,30 +1375,19 @@ def _generate_framework_diagram_prompt(
 
     # Use LLM to generate the prompt if available
     if llm is not None:
-        _system = (
-            "You are an expert academic figure designer. Generate a detailed text-to-image "
-            "prompt for creating a methodology framework/architecture overview diagram.\n\n"
-            "Requirements:\n"
-            "- Academic style: clean, professional, suitable for a top-tier ML conference paper\n"
-            "- Color palette: sophisticated and harmonious (suggest specific hex colors, "
-            "prefer muted blues #4477AA, teals #44AA99, warm accents #CCBB44, soft purples #AA3377)\n"
-            "- Layout: left-to-right or top-to-bottom data flow, with clearly labeled components\n"
-            "- Components: boxes/modules with rounded corners, directional arrows, clear labels\n"
-            "- Information density: high but not cluttered — each box should have a short label\n"
-            "- Text on figure: minimal, only component names and key annotations\n"
-            "- Background: white or very light grey\n"
-            "- Style: vector-art look, flat design with subtle shadows, NO photorealism\n\n"
-            "Output ONLY the prompt text (no markdown headers, no explanations). "
-            "The prompt should be 150-300 words, highly specific and actionable."
-        )
-        _user = (
-            f"Paper title: {title}\n"
-            f"Research topic: {topic}\n\n"
-            f"Method section excerpt:\n{_method_section}\n\n"
-            "Generate a detailed text-to-image prompt for the methodology framework diagram."
+        _prompt = PromptManager().sub_prompt(
+            "framework_diagram_prompt",
+            title=title,
+            topic=topic,
+            method_section=_method_section,
         )
         try:
-            resp = _chat_with_prompt(llm, _system, _user, max_tokens=1024)
+            resp = _chat_with_prompt(
+                llm,
+                _prompt.system,
+                _prompt.user,
+                max_tokens=_prompt.max_tokens or 1024,
+            )
             _llm_prompt = resp.content.strip()
             if len(_llm_prompt) > 50:
                 return (

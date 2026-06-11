@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from researchclaw.prompts.metadata import apply_sub_prompt_metadata
+
 
 # -- Canonical section word-count targets ----------------------------------
 # Single source of truth for per-section word-count ranges.
@@ -142,6 +144,41 @@ _DEFAULT_BLOCKS: dict[str, str] = {
         "  The harness provides: time budget enforcement, NaN/Inf detection,\n"
         "  validated metric reporting, and results.json output. NOT using it\n"
         "  means your metrics may be lost or malformed.\n"
+    ),
+    "manifest_schema_example": (
+        "Required run_manifest.json format example (MUST match this field shape; "
+        "replace placeholder values with actual run values):\n"
+        "{manifest_example}\n\n"
+    ),
+    "stage10_validation_boundary": (
+        "Stage 10 validation boundary (MUST):\n"
+        "1. You may run static checks, syntax/compile checks, unit tests, and at "
+        "most one tiny smoke test whose purpose is code-path validation only.\n"
+        "2. Any smoke test MUST use toy/synthetic or very small data, at most one "
+        "seed, at most one condition per critical code path, and a throwaway "
+        "output directory that is not listed in result_paths.\n"
+        "3. MUST NOT run the formal experiment, grid search, parameter sweep, "
+        "multi-seed run, timing benchmark, or launch.command during Stage 10.\n"
+        "4. MUST NOT create or update the final result artifacts listed in "
+        "result_paths; ResearchClaw Stage 12 will run the manifest command and "
+        "collect those outputs.\n\n"
+    ),
+    "diagnosis_header": (
+        "## EXPERIMENT DIAGNOSIS\n\n"
+        "Completion rate: {completion_rate} "
+        "({completed_count}/{total_planned} conditions)\n"
+    ),
+    "scope_reduction": (
+        "\n## SCOPE REDUCTION REQUIRED\n"
+        "The experiment had {n_planned} conditions but only {n_completed} "
+        "completed within the time budget of {time_budget_sec}s.\n"
+        "**Reduce to at most {max_conditions} conditions:**\n"
+        "1. Keep the BASELINE condition (no modification)\n"
+        "2. Keep the PROPOSED method (paper's main contribution)\n"
+        "3. Keep 1 ablation (remove most impactful component)\n"
+        "4. Remove all other conditions\n"
+        "5. Reduce epochs by 30-50% if still tight on time\n"
+        "6. Reduce seeds from 3 to 2 if needed\n"
     ),
     "topic_constraint": (
         "\n\n=== HARD TOPIC CONSTRAINT ===\n"
@@ -747,6 +784,508 @@ _DEFAULT_BLOCKS: dict[str, str] = {
 # -- Sub-prompts (secondary LLM calls within a stage) --------------------
 
 _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
+    "workspace_codegen": {
+        "system": (
+            "You are a workspace-native code agent working inside an existing git "
+            "repository. Modify this repository to implement the experiment. Do not "
+            "emit code blocks for ResearchClaw to parse."
+        ),
+        "user": (
+            "TOPIC:\n{topic}\n\n"
+            "TASK SPEC:\n{exp_plan}\n\n"
+            "PRIMARY METRIC: {metric}\n\n"
+            "PACKAGE HINTS:\n{pkg_hint}\n\n"
+            "COMPUTE BUDGET:\n{compute_budget}\n\n"
+            "EXTRA GUIDANCE:\n{extra_guidance}\n\n"
+            "Completion contract (MUST):\n"
+            "1. MUST inspect the existing workspace before editing.\n"
+            "2. MUST modify the existing repository in place, using its structure.\n"
+            "3. MUST prepare a launch command or script for the experiment run.\n"
+            "4. MUST write {manifest_filename} in the workspace root or .researchclaw/.\n"
+            "5. MUST include schema_version, code_commit, launch.command, launch.cwd, "
+            "launch.env, launch.resources, result_paths, and metrics in the manifest.\n"
+            "6. MUST make the final git commit after all task changes are ready; "
+            "the committed tree MUST include every file changed for this task, including {manifest_filename}.\n"
+            "7. MUST set manifest.code_commit to the final HEAD commit. If you need "
+            "the SHA after committing, update the manifest and amend the same commit.\n"
+            "8. MUST finish by verifying `git status --porcelain` is empty.\n\n"
+            "{manifest_schema_example}"
+            "{stage10_validation_boundary}"
+            "Boundaries (MUST NOT):\n"
+            "1. MUST NOT submit the job yourself. Do not submit the job yourself; "
+            "ResearchClaw's submitter will run the manifest command.\n"
+            "2. MUST NOT fabricate a job_id or final result registry entry.\n"
+            "3. MUST NOT assume a fixed entrypoint, file layout, or script name.\n"
+            "4. MUST NOT emit code blocks for ResearchClaw to parse as the output.\n"
+        ),
+    },
+    "workspace_repair": {
+        "system": (
+            "You are a workspace-native code agent working inside an existing git "
+            "repository. Improve the experiment in place. Do not emit code blocks "
+            "for ResearchClaw to parse."
+        ),
+        "user": (
+            "{request_section}"
+            "TOPIC:\n{topic}\n\n"
+            "TARGET: {metric_direction} {metric_key}\n\n"
+            "ORIGINAL EXPERIMENT PLAN:\n{exp_plan}\n\n"
+            "KNOWN PROJECT FILES FROM PRIOR STAGES:\n{project_files}\n\n"
+            "PRIOR RUN SUMMARIES:\n{run_summaries}\n\n"
+            "{results_section}"
+            "Completion contract (MUST):\n"
+            "1. MUST inspect the existing workspace before editing.\n"
+            "2. MUST improve the existing repository in place, using its structure.\n"
+            "3. MUST prepare a launch command or script for the improved run.\n"
+            "4. MUST write {manifest_filename} in the workspace root or .researchclaw/.\n"
+            "5. MUST include code_commit, launch.command, launch.cwd, launch.env, "
+            "launch.resources, and result_paths in the manifest.\n"
+            "6. MUST make the final git commit after all task changes are ready; "
+            "the committed tree MUST include every file changed for this task, including {manifest_filename}.\n"
+            "7. MUST set manifest.code_commit to the final HEAD commit. If you need "
+            "the SHA after committing, update the manifest and amend the same commit.\n"
+            "8. MUST finish by verifying `git status --porcelain` is empty.\n\n"
+            "{manifest_schema_example}"
+            "{stage10_validation_boundary}"
+            "Boundaries (MUST NOT):\n"
+            "1. MUST NOT submit the job yourself. Do not submit the job yourself; "
+            "ResearchClaw's submitter will run the manifest command.\n"
+            "2. MUST NOT fabricate a job_id or final result registry entry.\n"
+            "3. MUST NOT assume a fixed entrypoint, file layout, or script name.\n"
+            "4. MUST NOT emit code blocks for ResearchClaw to parse as the output.\n"
+        ),
+    },
+    "experiment_repair_instructions": {
+        "system": "",
+        "user": (
+            "# EXPERIMENT REPAIR TASK\n\n"
+            "The previous experiment run had failures. Your job is to fix "
+            "the specific issues identified below. Do NOT rewrite from scratch — "
+            "fix ONLY the identified problems.\n"
+            "{diagnosis_prompt}"
+            "{scope_reduction}"
+            "{dependency_fixes}"
+            "{current_code}"
+            "\n## CONSTRAINTS\n"
+            "- Time budget: {time_budget_sec} seconds total\n"
+            "- Pre-cached datasets: CIFAR-10, CIFAR-100, MNIST, FashionMNIST, STL-10 at /opt/datasets\n"
+            "- Every condition MUST output: condition=CONDNAME metric=VALUE\n"
+            "- The code must run without errors for at least 1 seed per condition\n"
+            "\n## WORKSPACE AGENT INSTRUCTIONS\n"
+            "- Modify the configured workspace repository directly.\n"
+            "- Update run_manifest.json so the harness can submit the experiment.\n"
+            "- Make the final git commit after all task changes are ready, including run_manifest.json.\n"
+            "- Set run_manifest.json code_commit to final HEAD; amend the same commit if needed.\n"
+            "- Finish by verifying `git status --porcelain` is empty.\n"
+            "- Do not submit the job yourself; the ResearchClaw harness owns submission.\n"
+            "- Do not return pasted source files as markdown code blocks.\n"
+        ),
+    },
+    "evidence_organizer": {
+        "system": "You are the Stage 14 Evidence Organizer Agent.",
+        "user": (
+            "Your only job is to read the listed current-run evidence files and write a factual,\n"
+            "structured report to:\n\n"
+            "{stage_dir}/analysis.md\n\n"
+            "You may optionally also write analysis_structured.json in the same directory.\n\n"
+            "Read rules:\n"
+            "- Read only paths listed in the evidence bundle below.\n"
+            "- Use manifest.result_paths via the listed result_files as the source of current experiment results.\n"
+            "- Do not glob the workspace outputs directory.\n"
+            "- Do not read raw workspace-agent session logs unless they are explicitly listed.\n"
+            "- Do not read downstream decision-stage artifacts.\n\n"
+            "analysis.md must use exactly these sections:\n\n"
+            "# Experiment Analysis\n"
+            "{sections}\n\n"
+            "DO NOT:\n"
+            "- make a research judgment;\n"
+            "- decide or recommend PROCEED, PIVOT, or EXTEND;\n"
+            "- add recommendation, next actions, quality assessment, or missing evidence sections;\n"
+            "- audit sufficiency or correctness;\n"
+            "- edit code, run experiments, create commits, or change artifacts outside Stage 14.\n"
+            "{retry_block}"
+            "Evidence bundle:\n"
+            "```json\n"
+            "{bundle_json}\n"
+            "```\n"
+        ),
+    },
+    "hypothesis_judge": {
+        "system": (
+            "You are a critical scientific judge. Your only task is to identify "
+            "problems in a candidate hypothesis set. Do not rewrite the claim and "
+            "do not propose fixes. Return only JSON."
+        ),
+        "user": (
+            "Evaluate the candidate hypothesis set for falsifiability, novelty, "
+            "measurable predictions, feasibility, baseline coverage, and alignment "
+            "with the synthesis.\n\n"
+            "## Research Topic\n{topic}\n\n"
+            "## Synthesis\n{synthesis}\n\n"
+            "## Candidate Claim\n{candidate_claim}\n\n"
+            "Return exactly this JSON shape:\n"
+            "{\n"
+            '  "verdict": "pass" | "fail",\n'
+            '  "criticisms": ["problem 1", "problem 2"],\n'
+            '  "fatal_flaws": ["fatal flaw if any"],\n'
+            '  "confidence": 0.0\n'
+            "}\n"
+            "Use verdict pass only if no serious issue remains. Criticisms must "
+            "state problems only, not suggestions or rewrites."
+        ),
+        "json_mode": True,
+    },
+    "hypothesis_synthesizer": {
+        "system": (
+            "You are a senior research director producing the final Stage 8 "
+            "hypotheses. Output only the hypotheses document."
+        ),
+        "user": (
+            "Synthesize the candidate sets into a final clean hypotheses.md file.\n\n"
+            "Hard output rules:\n"
+            "- Do not mention agent names, perspectives, debate rounds, judges, "
+            "criticisms, verdicts, sessions, forks, or process metadata.\n"
+            "- Do not include provenance labels such as Candidate Set.\n"
+            "- Produce 2-4 final hypotheses.\n"
+            "- For each hypothesis include: Hypothesis Statement, Rationale, "
+            "Measurable Prediction, Failure Condition, Required Baselines.\n\n"
+            "## Research Topic\n{topic}\n\n"
+            "## Synthesis\n{synthesis}\n\n"
+            "## Candidate Hypothesis Material\n{claims_text}"
+        ),
+    },
+    "requirements_judge": {
+        "system": (
+            "You are a strict research auditor. You read the requirements that a study "
+            "MUST satisfy, then audit the post-run experiment summary and the agent's "
+            "canonical results.json against each requirement. You quote concrete evidence "
+            "and only mark a requirement as met when there is direct, unambiguous support "
+            "in the data. You do not invent facts. You are terse and precise."
+        ),
+        "user": (
+            "REQUIREMENTS to verify (JSON list of objects):\n"
+            "{requirements_json}\n\n"
+            "EXPERIMENT_SUMMARY (post-run, built by stage-14):\n"
+            "```json\n{summary_excerpt}\n```\n\n"
+            "AGENT_RESULTS (results.json written by the agent at workspace root):\n"
+            "```json\n{results_excerpt}\n```\n\n"
+            "TASK\n"
+            "----\n"
+            "For each requirement, decide whether it is MET based ONLY on the data above.\n"
+            "Cite the concrete value or text you used as evidence (max 200 chars per cite).\n"
+            "When a must_pass requirement is unmet, write what is missing — concrete enough "
+            "that an agent could fix it in a follow-up run.\n\n"
+            "Then produce a single overall verdict:\n"
+            "  * \"proceed\"  — every must_pass requirement is met (any optional may fail)\n"
+            "  * \"reject\"   — at least one must_pass requirement is unmet\n"
+            "  * \"partial\"  — all must_pass met but ≥1 optional unmet\n\n"
+            "Finally produce delta_feedback: a short bulleted list of the must_pass items still "
+            "failing, phrased as instructions to the agent for a rerun (e.g. \"Compute X for "
+            "condition Y; report it under metrics.X\").  Empty string if nothing is failing.\n\n"
+            "OUTPUT — return ONLY a single JSON object, no prose, no fences:\n"
+            "{\n"
+            '  "per_requirement": [\n'
+            '    {"id": "<req-id>", "must_pass": <bool>, "met": <bool>, "evidence": "...", "missing": "..."},\n'
+            "    ...\n"
+            "  ],\n"
+            '  "verdict": "proceed" | "reject" | "partial",\n'
+            '  "delta_feedback": "..."\n'
+            "}\n"
+        ),
+        "json_mode": True,
+        "max_tokens": 2000,
+    },
+    "hypothesis_verdict_fallback": {
+        "system": (
+            "You are a strict scientific hypothesis judge. You only use "
+            "the provided summary and never invent missing measurements."
+        ),
+        "user": (
+            "A deterministic experiment-protocol decision rule was inconclusive "
+            "because a metric was missing or non-numeric. Read the rule and summary, "
+            "then decide the hypothesis verdict. Return only JSON with keys "
+            '`verdict` ("supported", "refuted", or "inconclusive") and `rationale`.\n\n'
+            "RULE:\n{rule_json}\n\n"
+            "SUMMARY:\n{summary_json}"
+        ),
+        "json_mode": True,
+        "max_tokens": 1000,
+    },
+    "search_agent": {
+        "system": "# Manual Literature Search Agent Prompt",
+        "user": (
+            "You are a literature search agent. Find real, relevant papers for the "
+            "research topic below. Prefer peer-reviewed papers, strong preprints, "
+            "surveys, baselines, benchmarks, seminal work, and credible negative "
+            "or limitation evidence. Inspect the abstract and paper body whenever "
+            "a full text or PDF is available.\n\n"
+            "## Topic\n{topic}\n\n"
+            "## Research Goal\n{goal_text}\n\n"
+            "## Problem Tree\n{problem_tree}\n\n"
+            "## Search Queries\n{query_lines}\n\n"
+            "Minimum publication year: {year_min}\n\n"
+            "## Stage 3 Search Plan\n```yaml\n{plan_text}\n```\n\n"
+            "## Output Requirements\n"
+            "Return only JSONL. Each line must be one JSON object for one paper. "
+            "Do not wrap the output in Markdown. Use these fields exactly:\n\n"
+            "{fields}\n\n"
+            "paper_type must be one of: seminal, survey, method, benchmark, "
+            "baseline, negative_result, related.\n\n"
+            "If full text is available, fill full_text_summary and key_evidence "
+            "with claims grounded in the paper body. If it is not available, set "
+            "full_text_available to false and explain the evidence limit in "
+            "quality_notes.\n\n"
+            "## Example JSONL Line\n"
+            "{template}\n"
+        ),
+    },
+    "paper_continuation_method": {
+        "system": "{base_system}",
+        "user": (
+            "{preamble}\n\n"
+            "{topic_constraint}{exp_metrics_instruction}\n\n"
+            "{narrative_writing_rules}\n"
+            "{anti_hedging_rules}\n\n"
+            "CITATION REQUIREMENT: The Method section MUST cite at least 3-5 related "
+            "technical papers (foundations your method builds on). The Experiments section "
+            "MUST cite baseline method papers. Use [cite_key] syntax.\n"
+            "{citation_instruction}\n\n"
+            "You are continuing a paper. The sections written so far are:\n\n"
+            "---\n{previous_sections}\n---\n\n"
+            "Now write the next sections, maintaining consistency with the above:\n\n"
+            "5. **Method** (1000-1500 words): formal problem definition with mathematical notation "
+            "($x$, $\\theta$, etc.), detailed algorithm description with equations, step-by-step procedure, "
+            "complexity analysis, design rationale for key choices. Include algorithm pseudocode if applicable. "
+            "Write as FLOWING PROSE — do NOT use bullet-point lists for method components.\n"
+            "6. **Experiments** (800-1200 words): detailed experimental setup, datasets with statistics "
+            "(size, splits, features), all baselines and their implementations, hyperparameter settings "
+            "in a markdown table, evaluation metrics with mathematical definitions, hardware and runtime info.\n"
+            "METHOD NAMES IN TABLES: Use SHORT abbreviations (4-8 chars) for method names "
+            "in tables. Define abbreviation mappings in a footnote. "
+            "NEVER put method names longer than 20 characters in table cells.\n\n"
+            "Outline:\n{outline}\n\n"
+            "Output markdown with ## headers. Continue from where Part 1 ended."
+        ),
+    },
+    "paper_continuation_results": {
+        "system": "{base_system}",
+        "user": (
+            "{preamble}\n\n"
+            "{topic_constraint}{exp_metrics_instruction}\n\n"
+            "{narrative_writing_rules}\n"
+            "{anti_hedging_rules}\n"
+            "{anti_repetition_rules}\n\n"
+            "CITATION REQUIREMENT: The Discussion section MUST cite at least 3-5 papers "
+            "when comparing findings with prior work. The Conclusion may cite 1-2 "
+            "foundational references.\n"
+            "{citation_instruction}\n\n"
+            "You are completing a paper. The sections written so far are:\n\n"
+            "---\n{previous_sections}\n---\n\n"
+            "Now write the final sections, maintaining consistency:\n\n"
+            "7. **Results** (600-800 words):\n"
+            "   - START with an AGGREGATED results table (Table 1): rows = methods, columns = metrics.\n"
+            "     Each cell = mean ± std across seeds. Bold the best value per column.\n"
+            "     EVERY table MUST have a descriptive caption that allows understanding without "
+            "     reading the main text. NEVER use just 'Table 1' as a caption.\n"
+            "   - Follow with a PER-REGIME table (Table 2) breaking down by easy/hard regimes.\n"
+            "   - Include a STATISTICAL COMPARISON table (Table 3): paired t-tests between key methods.\n"
+            "   - NEVER dump raw per-seed numbers in the main text. Aggregate first, then discuss.\n"
+            "   - MUST include at least 2 figures using markdown image syntax: ![Caption](charts/filename.png)\n"
+            "     One figure MUST be a performance comparison chart. Figures MUST be referenced "
+            "     in text: 'As shown in Figure 1, ...'\n"
+            "8. **Discussion** (400-600 words): interpretation of key findings, unexpected results, "
+            "comparison with prior work (CITE 3-5 papers here!), practical implications.\n"
+            "9. **Limitations** (200-300 words): honest assessment of scope, dataset, methodology. "
+            "ALL caveats consolidated HERE — nowhere else in the paper.\n"
+            "10. **Conclusion** (100-200 words MAXIMUM — this is a HARD LIMIT): "
+            "Summarize contributions in 2-3 sentences. State main finding in 1 sentence. "
+            "Suggest 2-3 concrete future directions in 1-2 sentences. "
+            "Do NOT repeat any specific numbers from Results. Do NOT restate the abstract. "
+            "A good conclusion is SHORT and forward-looking.\n\n"
+            "CRITICAL FORMATTING RULES FOR ALL SECTIONS:\n"
+            "- Write as FLOWING PROSE paragraphs, NOT bullet-point lists\n"
+            "- NEVER dump raw metric paths like 'config/method_name/seed_3/primary_metric'\n"
+            "- All numbers must be rounded to 4 decimal places maximum\n"
+            "- Every table MUST have a descriptive caption (not just 'Table 1')\n"
+            "- Use \\begin{algorithm} or pseudocode notation, NOT \\begin{verbatim}\n\n"
+            "Output markdown with ## headers. Do NOT include a References section."
+        ),
+    },
+    "paper_continuation_hep_method": {
+        "system": "{base_system}",
+        "user": (
+            "{preamble}\n\n"
+            "{topic_constraint}{exp_metrics_instruction}\n\n"
+            "{narrative_writing_rules}\n"
+            "{anti_hedging_rules}\n\n"
+            "CITATION REQUIREMENT: The Model section MUST cite the original paper(s) "
+            "defining the Lagrangian / EFT operators being studied. The Phenomenology "
+            "section MUST cite each experimental bound invoked (ATLAS/CMS/LZ/XENONnT/"
+            "Fermi-LAT original papers, not reviews). Use [cite_key] syntax.\n"
+            "{citation_instruction}\n\n"
+            "You are continuing an HEP phenomenology paper. The sections written so far are:\n\n"
+            "---\n{previous_sections}\n---\n\n"
+            "Now write the next sections:\n\n"
+            "4. **Model / Theoretical framework** (1200-1800 words): the Lagrangian density "
+            "(LaTeX, numbered equations), particle content, gauge structure, free parameters "
+            "and their allowed ranges. Provide the Feynman rules or EFT operator coefficients "
+            "relevant to the observables considered. Write as FLOWING PROSE with numbered "
+            "equations — do NOT use bullet lists.\n"
+            "5. **Phenomenology / Computational setup** (800-1200 words): the observables "
+            "(cross sections, decay widths, relic density, direct-detection rates) and the "
+            "formulas or tool-chain used to compute them. List every experimental constraint "
+            "imposed with explicit CL level and reference. Units MUST be natural (GeV, pb, "
+            "cm^2, Omega_h^2).\n\n"
+            "Outline:\n{outline}\n\n"
+            "Output markdown with ## headers. Continue from where Part 1 ended."
+        ),
+    },
+    "paper_continuation_hep_results": {
+        "system": "{base_system}",
+        "user": (
+            "{preamble}\n\n"
+            "{topic_constraint}{exp_metrics_instruction}\n\n"
+            "{narrative_writing_rules}\n"
+            "{anti_hedging_rules}\n"
+            "{anti_repetition_rules}\n\n"
+            "CITATION REQUIREMENT: Discussion must cite 3-5 prior JHEP/PRD phenomenology "
+            "analyses that studied the same or neighbouring parameter space. Cite each "
+            "experimental bound plotted on the exclusion figures.\n"
+            "{citation_instruction}\n\n"
+            "You are completing an HEP phenomenology paper. Sections so far:\n\n"
+            "---\n{previous_sections}\n---\n\n"
+            "Now write the final sections:\n\n"
+            "6. **Results** (800-1200 words): report parameter-space scans and 95% CL "
+            "exclusion contours. Include tabulated predictions and a headline log-log "
+            "exclusion plot (use ![Caption](charts/filename.png) markdown). Overlay "
+            "current bounds and projected sensitivities. Discuss complementarity between "
+            "direct, indirect, and collider probes.\n"
+            "7. **Discussion** (400-800 words): comparison with earlier work, theoretical "
+            "and experimental uncertainties (QCD scale, PDF, nuclear form factors, "
+            "astrophysical J-factors), comment on the tension / consistency with "
+            "independent constraints.\n"
+            "8. **Conclusions** (200-400 words): summarise the main physical findings; "
+            "state falsifiable predictions for HL-LHC / DARWIN / LZ / CTA and the "
+            "timescale on which they can test the model.\n\n"
+            "CRITICAL FORMATTING RULES:\n"
+            "- Use FLOWING PROSE, not bullet lists, except for equation labels.\n"
+            "- All numerical values in natural units; keep 3-4 significant figures.\n"
+            "- Figures referenced with 'As shown in Fig. 1, ...' style.\n"
+            "- Every table caption is descriptive (not 'Table 1').\n"
+            "- Do NOT add 'Broader Impact', 'Reproducibility Checklist', 'Ethics', or "
+            "'Societal Impact' sections.\n\n"
+            "Output markdown with ## headers. Do NOT include a References section."
+        ),
+    },
+    "compiled_pdf_review": {
+        "system": (
+            "You are a meticulous, critical academic reviewer. "
+            "You have reviewed 100+ papers at top venues. "
+            "Score honestly — most papers deserve 4-6, not 7-9. "
+            "Flag any sign of AI-generated boilerplate."
+        ),
+        "user": (
+            "You are a senior Area Chair at a top AI conference (NeurIPS/ICML/ICLR) "
+            "reviewing a paper submission. Provide a rigorous, structured review.\n\n"
+            "PAPER TOPIC: {topic}\n\n"
+            "LaTeX source:\n```latex\n{tex_content}\n```\n\n"
+            "REVIEW INSTRUCTIONS:\n"
+            "Score each dimension 1-10 (1=unacceptable, 5=borderline, 8=strong accept, "
+            "10=best paper candidate). Be critical but fair.\n\n"
+            "DIMENSIONS:\n"
+            "1. SOUNDNESS: Are claims well-supported? Is methodology correct? "
+            "Are there logical gaps or unsupported claims?\n"
+            "2. PRESENTATION: Is the writing clear, flowing, and professional? "
+            "Are there grammar errors, bullet lists in prose sections, or "
+            "boilerplate phrases? Is it free of AI-generated slop?\n"
+            "3. CONTRIBUTION: Is the contribution significant? Does it advance "
+            "the field beyond incremental improvement?\n"
+            "4. ORIGINALITY: Is the approach novel? Does it differentiate clearly "
+            "from prior work?\n"
+            "5. CLARITY: Are the method and results easy to understand? Are figures "
+            "and tables well-designed with descriptive captions?\n"
+            "6. SIGNIFICANCE: Would the community benefit from this work? Does it "
+            "open new research directions?\n"
+            "7. REPRODUCIBILITY: Are experimental details sufficient to reproduce "
+            "results? Are hyperparameters, datasets, and metrics clearly stated?\n\n"
+            "Also evaluate:\n"
+            "- Are all figures referenced in the text?\n"
+            "- Are tables properly formatted (booktabs style, no vertical rules)?\n"
+            "- Does the related work critically compare, not just list papers?\n"
+            "- Are statistical measures (std, CI, multiple seeds) reported?\n"
+            "- Is there a clear limitations section?\n\n"
+            "Return a JSON object:\n"
+            "{\n"
+            '  "soundness": N,\n'
+            '  "presentation": N,\n'
+            '  "contribution": N,\n'
+            '  "originality": N,\n'
+            '  "clarity": N,\n'
+            '  "significance": N,\n'
+            '  "reproducibility": N,\n'
+            '  "overall_score": N,\n'
+            '  "confidence": N,\n'
+            '  "decision": "accept" or "reject",\n'
+            '  "strengths": ["strength1", "strength2", ...],\n'
+            '  "weaknesses": ["weakness1", "weakness2", ...],\n'
+            '  "critical_issues": ["issue requiring revision", ...],\n'
+            '  "minor_issues": ["formatting/typo issues", ...],\n'
+            '  "summary": "2-3 sentence overall assessment"\n'
+            "}\n"
+        ),
+        "json_mode": False,
+    },
+    "citation_relevance": {
+        "system": "You assess citation relevance. Return only valid JSON.",
+        "user": (
+            "Research topic: {topic}\n\n"
+            "Rate the relevance of each citation to the research topic "
+            "on a scale of 0.0 to 1.0.\n"
+            "Return ONLY a JSON object mapping cite_key to relevance score.\n"
+            "Example: {\"smith2020\": 0.9, \"jones2019\": 0.2}\n\n"
+            "Citations:\n{citations_text}"
+        ),
+        "json_mode": True,
+    },
+    "framework_diagram_prompt": {
+        "system": (
+            "You are an expert academic figure designer. Generate a detailed text-to-image "
+            "prompt for creating a methodology framework/architecture overview diagram.\n\n"
+            "Requirements:\n"
+            "- Academic style: clean, professional, suitable for a top-tier ML conference paper\n"
+            "- Color palette: sophisticated and harmonious (suggest specific hex colors, "
+            "prefer muted blues #4477AA, teals #44AA99, warm accents #CCBB44, soft purples #AA3377)\n"
+            "- Layout: left-to-right or top-to-bottom data flow, with clearly labeled components\n"
+            "- Components: boxes/modules with rounded corners, directional arrows, clear labels\n"
+            "- Information density: high but not cluttered — each box should have a short label\n"
+            "- Text on figure: minimal, only component names and key annotations\n"
+            "- Background: white or very light grey\n"
+            "- Style: vector-art look, flat design with subtle shadows, NO photorealism\n\n"
+            "Output ONLY the prompt text (no markdown headers, no explanations). "
+            "The prompt should be 150-300 words, highly specific and actionable."
+        ),
+        "user": (
+            "Paper title: {title}\n"
+            "Research topic: {topic}\n\n"
+            "Method section excerpt:\n{method_section}\n\n"
+            "Generate a detailed text-to-image prompt for the methodology framework diagram."
+        ),
+        "max_tokens": 1024,
+    },
+    "topic_quality_eval": {
+        "system": (
+            "You are a senior {domain_label} researcher evaluating research topic quality."
+        ),
+        "user": (
+            "Evaluate this research topic for a top ML conference paper. "
+            "Score 1-10 on: (a) novelty, (b) specificity, (c) feasibility. "
+            "If overall score < 5, suggest a revised topic.\n\n"
+            "Topic: {topic}\n\n"
+            "Reply as JSON: {\"novelty\": N, \"specificity\": N, "
+            "\"feasibility\": N, \"overall\": N, \"suggestion\": \"...\"}"
+        ),
+        "json_mode": True,
+    },
     "hypothesis_synthesize": {
         "system": (
             "You are a senior research director synthesizing multiple perspectives "
@@ -1149,3 +1688,5 @@ _DEFAULT_SUB_PROMPTS: dict[str, dict[str, Any]] = {
         "max_tokens": 4096,
     },
 }
+
+apply_sub_prompt_metadata(_DEFAULT_SUB_PROMPTS)

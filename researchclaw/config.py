@@ -429,6 +429,7 @@ class PromptsConfig:
 
     custom_file: str = ""  # Path to custom prompts YAML (empty = use defaults)
     extra_prompts: tuple[tuple[str, str], ...] = ()  # (stage_name, path_or_text)
+    audit_capture: bool = False  # Write rendered prompts to run artifacts when true
 
 
 # ── Agent B: Intelligence & Memory configs ────────────────────────
@@ -758,6 +759,7 @@ class RCConfig:
                     for stage, value in (prompts.get("extra_prompts") or {}).items()
                     if str(stage).strip() and str(value).strip()
                 ),
+                audit_capture=bool(prompts.get("audit_capture", False)),
             ),
             web_search=WebSearchConfig(
                 enabled=bool(web_search.get("enabled", True)),

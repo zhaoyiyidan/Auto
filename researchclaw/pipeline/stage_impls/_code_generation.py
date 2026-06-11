@@ -36,26 +36,13 @@ _CONTINUOUS_ENVS = {
 }
 
 
-_STAGE10_VALIDATION_BOUNDARY = (
-    "Stage 10 validation boundary (MUST):\n"
-    "1. You may run static checks, syntax/compile checks, unit tests, and at "
-    "most one tiny smoke test whose purpose is code-path validation only.\n"
-    "2. Any smoke test MUST use toy/synthetic or very small data, at most one "
-    "seed, at most one condition per critical code path, and a throwaway "
-    "output directory that is not listed in result_paths.\n"
-    "3. MUST NOT run the formal experiment, grid search, parameter sweep, "
-    "multi-seed run, timing benchmark, or launch.command during Stage 10.\n"
-    "4. MUST NOT create or update the final result artifacts listed in "
-    "result_paths; ResearchClaw Stage 12 will run the manifest command and "
-    "collect those outputs.\n\n"
-)
-
-
 def _run_manifest_schema_example(
     *,
     primary_metric: str,
     metric_direction: str,
+    prompts: PromptManager | None = None,
 ) -> str:
+    pm = prompts or PromptManager()
     direction = (
         metric_direction
         if metric_direction in {"maximize", "minimize"}
@@ -88,11 +75,14 @@ def _run_manifest_schema_example(
             "direction": direction,
         },
     }
-    return (
-        "Required run_manifest.json format example (MUST match this field shape; "
-        "replace placeholder values with actual run values):\n"
-        f"{json.dumps(example, indent=2)}\n\n"
+    return pm.block(
+        "manifest_schema_example",
+        manifest_example=json.dumps(example, indent=2),
     )
+
+
+def _rendered_prompt_text(system: str, user: str) -> str:
+    return f"{system}\n\n{user}" if system else user
 
 
 def _workspace_codegen_prompt(
@@ -106,37 +96,24 @@ def _workspace_codegen_prompt(
     manifest_filename: str,
     metric_direction: str = "maximize",
 ) -> str:
-    return (
-        "You are a workspace-native code agent working inside an existing git "
-        "repository. Modify this repository to implement the experiment. Do not "
-        "emit code blocks for ResearchClaw to parse.\n\n"
-        f"TOPIC:\n{topic}\n\n"
-        f"TASK SPEC:\n{exp_plan}\n\n"
-        f"PRIMARY METRIC: {metric}\n\n"
-        f"PACKAGE HINTS:\n{pkg_hint}\n\n"
-        f"COMPUTE BUDGET:\n{compute_budget}\n\n"
-        f"EXTRA GUIDANCE:\n{extra_guidance}\n\n"
-        "Completion contract (MUST):\n"
-        "1. MUST inspect the existing workspace before editing.\n"
-        "2. MUST modify the existing repository in place, using its structure.\n"
-        "3. MUST prepare a launch command or script for the experiment run.\n"
-        f"4. MUST write {manifest_filename} in the workspace root or .researchclaw/.\n"
-        "5. MUST include schema_version, code_commit, launch.command, launch.cwd, "
-        "launch.env, launch.resources, result_paths, and metrics in the manifest.\n"
-        "6. MUST make the final git commit after all task changes are ready; "
-        f"the committed tree MUST include every file changed for this task, including {manifest_filename}.\n"
-        "7. MUST set manifest.code_commit to the final HEAD commit. If you need "
-        "the SHA after committing, update the manifest and amend the same commit.\n"
-        "8. MUST finish by verifying `git status --porcelain` is empty.\n\n"
-        f"{_run_manifest_schema_example(primary_metric=metric, metric_direction=metric_direction)}"
-        f"{_STAGE10_VALIDATION_BOUNDARY}"
-        "Boundaries (MUST NOT):\n"
-        "1. MUST NOT submit the job yourself. Do not submit the job yourself; "
-        "ResearchClaw's submitter will run the manifest command.\n"
-        "2. MUST NOT fabricate a job_id or final result registry entry.\n"
-        "3. MUST NOT assume a fixed entrypoint, file layout, or script name.\n"
-        "4. MUST NOT emit code blocks for ResearchClaw to parse as the output.\n"
+    pm = PromptManager()
+    prompt = pm.sub_prompt(
+        "workspace_codegen",
+        topic=topic,
+        exp_plan=exp_plan,
+        metric=metric,
+        pkg_hint=pkg_hint,
+        compute_budget=compute_budget,
+        extra_guidance=extra_guidance,
+        manifest_filename=manifest_filename,
+        manifest_schema_example=_run_manifest_schema_example(
+            primary_metric=metric,
+            metric_direction=metric_direction,
+            prompts=pm,
+        ),
+        stage10_validation_boundary=pm.block("stage10_validation_boundary"),
     )
+    return _rendered_prompt_text(prompt.system, prompt.user)
 
 
 def _repair_or_refine_prompt(
@@ -168,38 +145,26 @@ def _repair_or_refine_prompt(
             f"\n\nEXECUTION RECORD:\n{execution_record or '{}'}\n\n"
             f"RESULT ARTIFACTS:\n{result_artifacts or '{}'}\n"
         )
-    return (
-        "You are a workspace-native code agent working inside an existing git "
-        "repository. Improve the experiment in place. Do not emit code blocks "
-        "for ResearchClaw to parse.\n\n"
-        f"{request_section}"
-        f"TOPIC:\n{topic}\n\n"
-        f"TARGET: {metric_direction} {metric_key}\n\n"
-        f"ORIGINAL EXPERIMENT PLAN:\n{exp_plan}\n\n"
-        f"KNOWN PROJECT FILES FROM PRIOR STAGES:\n{project_files}\n\n"
-        f"PRIOR RUN SUMMARIES:\n{summaries}\n\n"
-        f"{results_section}"
-        "Completion contract (MUST):\n"
-        "1. MUST inspect the existing workspace before editing.\n"
-        "2. MUST improve the existing repository in place, using its structure.\n"
-        "3. MUST prepare a launch command or script for the improved run.\n"
-        f"4. MUST write {manifest_filename} in the workspace root or .researchclaw/.\n"
-        "5. MUST include code_commit, launch.command, launch.cwd, launch.env, "
-        "launch.resources, and result_paths in the manifest.\n"
-        "6. MUST make the final git commit after all task changes are ready; "
-        f"the committed tree MUST include every file changed for this task, including {manifest_filename}.\n"
-        "7. MUST set manifest.code_commit to the final HEAD commit. If you need "
-        "the SHA after committing, update the manifest and amend the same commit.\n"
-        "8. MUST finish by verifying `git status --porcelain` is empty.\n\n"
-        f"{_run_manifest_schema_example(primary_metric=metric_key, metric_direction=metric_direction)}"
-        f"{_STAGE10_VALIDATION_BOUNDARY}"
-        "Boundaries (MUST NOT):\n"
-        "1. MUST NOT submit the job yourself. Do not submit the job yourself; "
-        "ResearchClaw's submitter will run the manifest command.\n"
-        "2. MUST NOT fabricate a job_id or final result registry entry.\n"
-        "3. MUST NOT assume a fixed entrypoint, file layout, or script name.\n"
-        "4. MUST NOT emit code blocks for ResearchClaw to parse as the output.\n"
+    pm = PromptManager()
+    prompt = pm.sub_prompt(
+        "workspace_repair",
+        request_section=request_section,
+        topic=topic,
+        metric_direction=metric_direction,
+        metric_key=metric_key,
+        exp_plan=exp_plan,
+        project_files=project_files,
+        run_summaries=summaries,
+        results_section=results_section,
+        manifest_filename=manifest_filename,
+        manifest_schema_example=_run_manifest_schema_example(
+            primary_metric=metric_key,
+            metric_direction=metric_direction,
+            prompts=pm,
+        ),
+        stage10_validation_boundary=pm.block("stage10_validation_boundary"),
     )
+    return _rendered_prompt_text(prompt.system, prompt.user)
 
 
 def _execute_code_agent_implement_or_repair(

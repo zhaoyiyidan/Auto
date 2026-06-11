@@ -17,7 +17,7 @@ from researchclaw.config import RCConfig
 from researchclaw.hardware import HardwareProfile, detect_hardware, ensure_torch_available, is_metric_name
 from researchclaw.llm import create_llm_client
 from researchclaw.llm.client import LLMClient
-from researchclaw.prompts import PromptManager
+from researchclaw.prompts import PromptManager, RenderedPrompt
 from researchclaw.pipeline.stages import (
     NEXT_STAGE,
     Stage,
@@ -43,6 +43,34 @@ def _select_output_files(contract, config) -> tuple[str, ...]:
     if contract is None:
         return ()
     return tuple(contract.output_files)
+
+
+def _prompt_audit_sink_for_run(
+    config: RCConfig,
+    run_dir: Path,
+) -> Callable[[str, RenderedPrompt], None] | None:
+    """Return a rendered-prompt audit sink when prompt capture is enabled."""
+    if not getattr(config.prompts, "audit_capture", False):
+        return None
+
+    prompt_dir = run_dir / "prompts"
+
+    def _sink(stage: str, prompt: RenderedPrompt) -> None:
+        prompt_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "prompt_id": prompt.prompt_id or stage,
+            "version": prompt.version,
+            "system": prompt.system,
+            "user": prompt.user,
+            "json_mode": prompt.json_mode,
+            "max_tokens": prompt.max_tokens,
+        }
+        (prompt_dir / f"{stage}.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    return _sink
 
 # ---------------------------------------------------------------------------
 # Domain detection (extracted to _domain.py)
@@ -755,6 +783,7 @@ def execute_stage(
                     stage_key: path_or_text
                     for stage_key, path_or_text in getattr(config.prompts, "extra_prompts", ())  # type: ignore[attr-defined]
                 } or None,
+                audit_sink=_prompt_audit_sink_for_run(config, run_dir),
             )
             try:
                 result = executor(

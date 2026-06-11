@@ -469,29 +469,14 @@ def _build_judge_prompt(
     topic: str,
 ) -> tuple[list[dict[str, str]], str]:
     """Construct a strict judge prompt that returns machine-readable JSON."""
-    system = (
-        "You are a critical scientific judge. Your only task is to identify "
-        "problems in a candidate hypothesis set. Do not rewrite the claim and "
-        "do not propose fixes. Return only JSON."
+    pm = PromptManager()
+    prompt = pm.sub_prompt(
+        "hypothesis_judge",
+        topic=topic,
+        synthesis=synthesis,
+        candidate_claim=candidate_claim,
     )
-    user = (
-        "Evaluate the candidate hypothesis set for falsifiability, novelty, "
-        "measurable predictions, feasibility, baseline coverage, and alignment "
-        "with the synthesis.\n\n"
-        f"## Research Topic\n{topic}\n\n"
-        f"## Synthesis\n{synthesis}\n\n"
-        f"## Candidate Claim\n{candidate_claim}\n\n"
-        "Return exactly this JSON shape:\n"
-        "{\n"
-        '  "verdict": "pass" | "fail",\n'
-        '  "criticisms": ["problem 1", "problem 2"],\n'
-        '  "fatal_flaws": ["fatal flaw if any"],\n'
-        '  "confidence": 0.0\n'
-        "}\n"
-        "Use verdict pass only if no serious issue remains. Criticisms must "
-        "state problems only, not suggestions or rewrites."
-    )
-    return [{"role": "user", "content": user}], system
+    return [{"role": "user", "content": prompt.user}], prompt.system
 
 
 def _build_synthesizer_prompt(
@@ -500,28 +485,18 @@ def _build_synthesizer_prompt(
     topic: str,
 ) -> tuple[list[dict[str, str]], str]:
     """Construct final synthesis prompt with explicit metadata exclusion."""
-    system = (
-        "You are a senior research director producing the final Stage 8 "
-        "hypotheses. Output only the hypotheses document."
-    )
     claim_blocks = []
     for idx, claim in enumerate(accepted_claims.values(), start=1):
         claim_blocks.append(f"## Candidate Set {idx}\n{claim}")
     claims_text = "\n\n---\n\n".join(claim_blocks)
-    user = (
-        "Synthesize the candidate sets into a final clean hypotheses.md file.\n\n"
-        "Hard output rules:\n"
-        "- Do not mention agent names, perspectives, debate rounds, judges, "
-        "criticisms, verdicts, sessions, forks, or process metadata.\n"
-        "- Do not include provenance labels such as Candidate Set.\n"
-        "- Produce 2-4 final hypotheses.\n"
-        "- For each hypothesis include: Hypothesis Statement, Rationale, "
-        "Measurable Prediction, Failure Condition, Required Baselines.\n\n"
-        f"## Research Topic\n{topic}\n\n"
-        f"## Synthesis\n{synthesis}\n\n"
-        f"## Candidate Hypothesis Material\n{claims_text}"
+    pm = PromptManager()
+    prompt = pm.sub_prompt(
+        "hypothesis_synthesizer",
+        topic=topic,
+        synthesis=synthesis,
+        claims_text=claims_text,
     )
-    return [{"role": "user", "content": user}], system
+    return [{"role": "user", "content": prompt.user}], prompt.system
 
 
 def _parse_judge_verdict(raw_text: str) -> dict[str, Any]:

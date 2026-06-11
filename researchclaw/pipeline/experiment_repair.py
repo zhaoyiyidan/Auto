@@ -12,6 +12,7 @@ from researchclaw.pipeline.experiment_diagnosis import (
     ExperimentDiagnosis,
 )
 from researchclaw.pipeline._helpers import _parse_metrics_from_stdout
+from researchclaw.prompts import PromptManager
 
 logger = logging.getLogger(__name__)
 
@@ -47,75 +48,49 @@ def build_repair_prompt(
     str
         A formatted prompt suitable for the persistent workspace code agent.
     """
-    sections: list[str] = []
-
-    sections.append("# EXPERIMENT REPAIR TASK\n")
-    sections.append(
-        "The previous experiment run had failures. Your job is to fix "
-        "the specific issues identified below. Do NOT rewrite from scratch — "
-        "fix ONLY the identified problems.\n"
-    )
-
-    # Diagnosis section
-    sections.append(diagnosis.to_repair_prompt())
+    pm = PromptManager()
 
     # Scope reduction guidance
+    scope_reduction = ""
     if any(d.type == DeficiencyType.TIME_GUARD_DOMINANT for d in diagnosis.deficiencies):
         n_planned = diagnosis.total_planned
         n_completed = len(diagnosis.conditions_completed)
         max_conditions = max(3, n_completed + 1)
-        sections.append(
-            f"\n## SCOPE REDUCTION REQUIRED\n"
-            f"The experiment had {n_planned} conditions but only {n_completed} "
-            f"completed within the time budget of {time_budget_sec}s.\n"
-            f"**Reduce to at most {max_conditions} conditions:**\n"
-            f"1. Keep the BASELINE condition (no modification)\n"
-            f"2. Keep the PROPOSED method (paper's main contribution)\n"
-            f"3. Keep 1 ablation (remove most impactful component)\n"
-            f"4. Remove all other conditions\n"
-            f"5. Reduce epochs by 30-50% if still tight on time\n"
-            f"6. Reduce seeds from 3 to 2 if needed\n"
+        scope_reduction = pm.block(
+            "scope_reduction",
+            n_planned=str(n_planned),
+            n_completed=str(n_completed),
+            time_budget_sec=str(time_budget_sec),
+            max_conditions=str(max_conditions),
         )
 
     # Dependency fixes
     dep_issues = [d for d in diagnosis.deficiencies if d.type == DeficiencyType.MISSING_DEPENDENCY]
+    dependency_lines: list[str] = []
     if dep_issues:
-        sections.append("\n## DEPENDENCY FIXES\n")
-        sections.append("Add these to requirements.txt:\n")
+        dependency_lines.append("\n## DEPENDENCY FIXES\n")
+        dependency_lines.append("Add these to requirements.txt:\n")
         for d in dep_issues:
             # Extract package name from description
-            sections.append(f"- {d.description}")
+            dependency_lines.append(f"- {d.description}")
 
     # Original code
-    sections.append("\n## CURRENT CODE (fix in-place)\n")
+    code_lines = ["\n## CURRENT CODE (fix in-place)\n"]
     for filename, content in sorted(original_code.items()):
         # Truncate very long files
         if len(content) > 5000:
             content = content[:5000] + "\n... (truncated)"
-        sections.append(f"### {filename}\n```python\n{content}\n```\n")
+        code_lines.append(f"### {filename}\n```python\n{content}\n```\n")
 
-    # Constraints
-    sections.append(
-        f"\n## CONSTRAINTS\n"
-        f"- Time budget: {time_budget_sec} seconds total\n"
-        f"- Pre-cached datasets: CIFAR-10, CIFAR-100, MNIST, FashionMNIST, STL-10 at /opt/datasets\n"
-        f"- Every condition MUST output: condition=CONDNAME metric=VALUE\n"
-        f"- The code must run without errors for at least 1 seed per condition\n"
+    prompt = pm.sub_prompt(
+        "experiment_repair_instructions",
+        diagnosis_prompt=diagnosis.to_repair_prompt(),
+        scope_reduction=scope_reduction,
+        dependency_fixes="\n".join(dependency_lines),
+        current_code="\n".join(code_lines),
+        time_budget_sec=str(time_budget_sec),
     )
-
-    # Workspace-agent instructions
-    sections.append(
-        "\n## WORKSPACE AGENT INSTRUCTIONS\n"
-        "- Modify the configured workspace repository directly.\n"
-        "- Update run_manifest.json so the harness can submit the experiment.\n"
-        "- Make the final git commit after all task changes are ready, including run_manifest.json.\n"
-        "- Set run_manifest.json code_commit to final HEAD; amend the same commit if needed.\n"
-        "- Finish by verifying `git status --porcelain` is empty.\n"
-        "- Do not submit the job yourself; the ResearchClaw harness owns submission.\n"
-        "- Do not return pasted source files as markdown code blocks.\n"
-    )
-
-    return "\n".join(sections)
+    return f"{prompt.system}\n\n{prompt.user}" if prompt.system else prompt.user
 
 
 # ---------------------------------------------------------------------------

@@ -2423,20 +2423,17 @@ def _check_citation_relevance(
         batch = citation_lines[batch_start:batch_start + _BATCH_SIZE]
         citations_text = "\n".join(batch)
 
-        prompt = (
-            f"Research topic: {topic}\n\n"
-            f"Rate the relevance of each citation to the research topic "
-            f"on a scale of 0.0 to 1.0.\n"
-            f"Return ONLY a JSON object mapping cite_key to relevance score.\n"
-            f"Example: {{\"smith2020\": 0.9, \"jones2019\": 0.2}}\n\n"
-            f"Citations:\n{citations_text}"
+        prompt = PromptManager().sub_prompt(
+            "citation_relevance",
+            topic=topic,
+            citations_text=citations_text,
         )
 
         try:
             resp = llm.chat(
-                [{"role": "user", "content": prompt}],
-                system="You assess citation relevance. Return only valid JSON.",
-                json_mode=True,
+                [{"role": "user", "content": prompt.user}],
+                system=prompt.system,
+                json_mode=prompt.json_mode,
                 strip_thinking=True,
             )
             parsed = _safe_json_loads(resp.content, {})

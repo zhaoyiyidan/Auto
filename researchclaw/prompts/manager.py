@@ -15,10 +15,11 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
+from researchclaw.prompts.metadata import PromptMetadata
 from researchclaw.prompts.shared import (
     _DEFAULT_BLOCKS,
     _DEFAULT_SUB_PROMPTS,
@@ -30,19 +31,42 @@ logger = logging.getLogger(__name__)
 # Domain identifiers accepted by ``PromptManager`` / ``_load_bank``.
 SUPPORTED_DOMAINS = ("ml", "hep_ph", "biology_metabolic")
 
+PRECEDENCE_DOC = (
+    "Prompt override precedence, lowest to highest: "
+    "domain bank < YAML custom_file < extra_prompts < evolution_overlay. "
+    "Domain bank entries are loaded first, YAML custom_file updates known "
+    "stage entries, prompts.extra_prompts appends per-stage guidance, and "
+    "evolution_overlay is appended last at render time."
+)
+
 
 # ---------------------------------------------------------------------------
 # Template rendering
 # ---------------------------------------------------------------------------
 
 
-def _render(template: str, variables: dict[str, str]) -> str:
+class PromptRenderError(ValueError):
+    """Raised when strict prompt rendering is missing required variables."""
+
+
+def _render(
+    template: str,
+    variables: dict[str, str],
+    *,
+    strict: bool = False,
+    required: tuple[str, ...] = (),
+) -> str:
     """Replace ``{var_name}`` placeholders with *variables* values.
 
     Only bare ``{word_chars}`` tokens are substituted — JSON schema examples
     like ``{candidates:[...]}`` are left untouched because the regex requires
     the closing ``}`` immediately after the identifier.
     """
+    if strict:
+        missing = tuple(key for key in required if key not in variables)
+        if missing:
+            names = ", ".join(missing)
+            raise PromptRenderError(f"Missing required prompt variables: {names}")
 
     def _replacer(match: re.Match[str]) -> str:
         key = match.group(1)
@@ -64,6 +88,8 @@ class RenderedPrompt:
     user: str
     json_mode: bool = False
     max_tokens: int | None = None
+    prompt_id: str = ""
+    version: str = "1.0.0"
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +143,7 @@ class PromptManager:
         *,
         domain: str = "ml",
         extra_prompts: dict[str, str] | None = None,
+        audit_sink: Callable[[str, RenderedPrompt], None] | None = None,
     ) -> None:
         self._domain = domain if domain in SUPPORTED_DOMAINS else "ml"
         stages, debate_hyp, debate_ana = _load_bank(self._domain)
@@ -138,6 +165,7 @@ class PromptManager:
         # time).  Keys are stage names; values are the resolved text after
         # reading any file paths.
         self._extras: dict[str, str] = {}
+        self._audit_sink = audit_sink
 
         if overrides_path:
             self._load_overrides(Path(overrides_path))
@@ -216,6 +244,7 @@ class PromptManager:
         stage: str,
         *,
         evolution_overlay: str = "",
+        strict: bool = False,
         **kwargs: Any,
     ) -> RenderedPrompt:
         """Return a fully rendered prompt for *stage* with variables filled.
@@ -224,11 +253,16 @@ class PromptManager:
         so the LLM can learn from prior run lessons.
         """
         entry = self._stages[stage]
+        meta = self.meta(stage)
         kw = {k: str(v) for k, v in kwargs.items()}
         kw.setdefault("extension_context", "")
-        user_text = _render(entry["user"], kw)
-        if evolution_overlay:
-            user_text = f"{user_text}\n\n{evolution_overlay}"
+        required = meta.required_variables if strict else ()
+        user_text = _render(
+            entry["user"],
+            kw,
+            strict=strict,
+            required=required,
+        )
         extra = self._extras.get(stage, "")
         if extra:
             user_text = (
@@ -237,12 +271,24 @@ class PromptManager:
                 "_(from prompts.extra_prompts in config.yaml)_\n\n"
                 f"{extra}"
             )
-        return RenderedPrompt(
-            system=_render(entry["system"], kw),
+        if evolution_overlay:
+            user_text = f"{user_text}\n\n{evolution_overlay}"
+        rendered = RenderedPrompt(
+            system=_render(
+                entry["system"],
+                kw,
+                strict=strict,
+                required=required,
+            ),
             user=user_text,
             json_mode=entry.get("json_mode", False),
             max_tokens=entry.get("max_tokens"),
+            prompt_id=meta.prompt_id or stage,
+            version=meta.version,
         )
+        if self._audit_sink is not None:
+            self._audit_sink(stage, rendered)
+        return rendered
 
     def system(self, stage: str) -> str:
         """Return the raw system prompt template for *stage*."""
@@ -263,6 +309,22 @@ class PromptManager:
     def max_tokens(self, stage: str) -> int | None:
         return self._stages[stage].get("max_tokens")
 
+    def meta(self, stage: str) -> PromptMetadata:
+        """Return read-only metadata for *stage*.
+
+        Stages without a ``meta`` dict receive an empty default keyed by the
+        requested stage name, preserving backward compatibility for overrides
+        and tests that construct ad-hoc entries.
+        """
+        return PromptMetadata.from_dict(
+            self._stages[stage].get("meta"),
+            prompt_id=stage,
+        )
+
+    def required_variables(self, stage: str) -> tuple[str, ...]:
+        """Return declared required template variables for *stage*."""
+        return self.meta(stage).required_variables
+
     # -- blocks -----------------------------------------------------------
 
     def block(self, name: str, **kwargs: Any) -> str:
@@ -277,10 +339,22 @@ class PromptManager:
     def sub_prompt(self, name: str, **kwargs: Any) -> RenderedPrompt:
         """Return a rendered sub-prompt (e.g. code_repair)."""
         entry = self._sub_prompts[name]
+        meta = self.sub_prompt_meta(name)
         kw = {k: str(v) for k, v in kwargs.items()}
         return RenderedPrompt(
             system=_render(entry["system"], kw),
             user=_render(entry["user"], kw),
+            json_mode=entry.get("json_mode", False),
+            max_tokens=entry.get("max_tokens"),
+            prompt_id=meta.prompt_id or name,
+            version=meta.version,
+        )
+
+    def sub_prompt_meta(self, name: str) -> PromptMetadata:
+        """Return read-only metadata for a sub-prompt."""
+        return PromptMetadata.from_dict(
+            self._sub_prompts[name].get("meta"),
+            prompt_id=name,
         )
 
     # -- debate roles (domain-specific) -----------------------------------

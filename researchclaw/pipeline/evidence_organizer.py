@@ -12,6 +12,7 @@ from researchclaw.config import RCConfig
 from researchclaw.experiment.acp_workspace_session import AcpWorkspaceSession
 from researchclaw.experiment.workspace import RunManifest
 from researchclaw.pipeline._helpers import _find_prior_file, _read_prior_artifact
+from researchclaw.prompts import PromptManager
 
 
 @dataclass(frozen=True)
@@ -102,39 +103,15 @@ def build_organizer_prompt(
 
     bundle_json = json.dumps(bundle, indent=2, sort_keys=True)
     sections = "\n".join(_FIXED_ANALYSIS_SECTIONS)
-    return f"""You are the Stage 14 Evidence Organizer Agent.
-
-Your only job is to read the listed current-run evidence files and write a factual,
-structured report to:
-
-{bundle.get("stage_dir", "stage-14")}/analysis.md
-
-You may optionally also write analysis_structured.json in the same directory.
-
-Read rules:
-- Read only paths listed in the evidence bundle below.
-- Use manifest.result_paths via the listed result_files as the source of current experiment results.
-- Do not glob the workspace outputs directory.
-- Do not read raw workspace-agent session logs unless they are explicitly listed.
-- Do not read downstream decision-stage artifacts.
-
-analysis.md must use exactly these sections:
-
-# Experiment Analysis
-{sections}
-
-DO NOT:
-- make a research judgment;
-- decide or recommend PROCEED, PIVOT, or EXTEND;
-- add recommendation, next actions, quality assessment, or missing evidence sections;
-- audit sufficiency or correctness;
-- edit code, run experiments, create commits, or change artifacts outside Stage 14.
-{retry_block}
-Evidence bundle:
-```json
-{bundle_json}
-```
-"""
+    pm = PromptManager()
+    prompt = pm.sub_prompt(
+        "evidence_organizer",
+        stage_dir=bundle.get("stage_dir", "stage-14"),
+        sections=sections,
+        retry_block=retry_block,
+        bundle_json=bundle_json,
+    )
+    return f"{prompt.system}\n\n{prompt.user}" if prompt.system else prompt.user
 
 
 def create_evidence_organizer_agent(

@@ -10,8 +10,6 @@ from typing import Any
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
-from researchclaw.experiment.metric_resolution import resolve_experiment_metric
-from researchclaw.experiment.protocol import ExperimentProtocol
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._domain import _detect_domain, _is_ml_domain
 from researchclaw.pipeline._helpers import (
@@ -20,7 +18,6 @@ from researchclaw.pipeline._helpers import (
     _chat_with_prompt,
     _collect_experiment_results,
     _collect_json_context,
-    _find_prior_file,
     _get_evolution_overlay,
     _multi_perspective_generate,
     _read_prior_artifact,
@@ -68,200 +65,23 @@ def _load_workspace_registry(run_dir: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _best_execution(
-    records: list[dict[str, Any]],
-    *,
-    primary_metric: str,
-    metric_direction: str,
-) -> dict[str, Any]:
-    best: dict[str, Any] = {}
-    best_value: float | None = None
-    for record in records:
-        metrics = record.get("metrics", {})
-        value = _numeric_metric(metrics.get(primary_metric) if isinstance(metrics, dict) else None)
-        if value is None:
-            continue
-        if best_value is None:
-            best = record
-            best_value = value
-        elif metric_direction == "maximize" and value > best_value:
-            best = record
-            best_value = value
-        elif metric_direction == "minimize" and value < best_value:
-            best = record
-            best_value = value
-    return best or (records[0] if records else {})
-
-
-def _numeric_metric(value: Any) -> float | None:
-    try:
-        if value is None:
-            return None
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _metrics_summary(records: list[dict[str, Any]]) -> dict[str, dict[str, float | int]]:
-    values: dict[str, list[float]] = {}
-    for record in records:
-        metrics = record.get("metrics", {})
-        if not isinstance(metrics, dict):
-            continue
-        for key, value in metrics.items():
-            numeric = _numeric_metric(value)
-            if numeric is not None:
-                values.setdefault(str(key), []).append(numeric)
-    return {
-        key: {
-            "min": min(items),
-            "max": max(items),
-            "mean": sum(items) / len(items),
-            "count": len(items),
-        }
-        for key, items in sorted(values.items())
-    }
-
-
-def _aggregate_stat_mean(stats: Any) -> float | None:
-    """Return the mean of an aggregate stat block, or a bare numeric value."""
-    if isinstance(stats, dict):
-        return _numeric_metric(stats.get("mean"))
-    return _numeric_metric(stats)
-
-
-def _condition_summaries(
-    records: list[dict[str, Any]],
-    primary_metric: str,
-) -> dict[str, dict[str, Any]]:
-    """Build per-condition summaries from ``metrics.aggregates`` of each record.
-
-    FIX#3: workspace agents emit per-condition statistics under
-    ``metrics.aggregates`` keyed by OPAQUE composite strings (the exact naming
-    varies across agent iterations, e.g. ``noise_0.00/epsilon_0.00/temp_False``
-    or ``condition_cross_entropy/.../logit_penalty_0/temp_False``). Keys are
-    treated as opaque and copied verbatim — never split or parsed.
-
-    The emitted ``metrics`` dict contains only FLAT FLOAT values because three
-    downstream consumers require ``isinstance(value, (int, float))``:
-    ``experiment_diagnosis._get_completed_conditions``,
-    ``verified_registry.from_summary``, and the runner variance gate. The raw
-    nested stats are preserved separately under ``aggregates`` for richer
-    downstream use (figures, prose) without breaking those consumers.
-
-    Records without an ``aggregates`` block contribute nothing, so legacy /
-    non-aggregate runs yield ``{}`` (preserving prior behavior).
-    """
-    summaries: dict[str, dict[str, Any]] = {}
-    for record in records:
-        metrics = record.get("metrics")
-        if not isinstance(metrics, dict):
-            continue
-        aggregates = metrics.get("aggregates")
-        if not isinstance(aggregates, dict) or not aggregates:
-            continue
-        # primary_metric in the record is a STRING pointer (e.g. "accuracy");
-        # resolve it to the numeric metric name to alias per condition.
-        pm_name = metrics.get("primary_metric")
-        if not isinstance(pm_name, str):
-            pm_name = primary_metric if isinstance(primary_metric, str) else None
-
-        for cond_key, per_metric in aggregates.items():
-            if not isinstance(per_metric, dict):
-                continue
-            flat: dict[str, float] = {}
-            n_seeds: int | None = None
-            for metric_name, stats in per_metric.items():
-                mean = _aggregate_stat_mean(stats)
-                if mean is None:
-                    continue
-                flat[str(metric_name)] = mean
-                flat[f"{metric_name}_mean"] = mean
-                if isinstance(stats, dict):
-                    for stat_key in ("std", "min", "max"):
-                        sv = _numeric_metric(stats.get(stat_key))
-                        if sv is not None:
-                            flat[f"{metric_name}_{stat_key}"] = sv
-                    nv = stats.get("n")
-                    if isinstance(nv, (int, float)) and n_seeds is None:
-                        n_seeds = int(nv)
-            if not flat:
-                continue
-            # Alias the primary metric to its numeric value (never a string).
-            if pm_name and pm_name in flat:
-                flat["primary_metric"] = flat[pm_name]
-                flat["primary_metric_mean"] = flat[pm_name]
-            seeds = n_seeds if n_seeds is not None else 1
-            summaries[str(cond_key)] = {
-                "status": "completed",
-                "n_runs": seeds,
-                "n_seeds": seeds,
-                "metrics": flat,
-                "aggregates": per_metric,
-            }
-    return summaries
-
-
-def _aggregates_into_metrics_summary(
-    metrics_summary: dict[str, dict[str, float | int]],
-    records: list[dict[str, Any]],
-) -> None:
-    """Fold per-condition aggregate stats into ``metrics_summary`` in place.
-
-    This exposes per-condition accuracy (and ``accuracy_percent``) to the
-    near-random-accuracy check, which reads ``metrics_summary`` only.
-    """
-    values: dict[str, list[float]] = {}
-    for record in records:
-        metrics = record.get("metrics")
-        if not isinstance(metrics, dict):
-            continue
-        aggregates = metrics.get("aggregates")
-        if not isinstance(aggregates, dict):
-            continue
-        for per_metric in aggregates.values():
-            if not isinstance(per_metric, dict):
-                continue
-            for metric_name, stats in per_metric.items():
-                mean = _aggregate_stat_mean(stats)
-                if mean is not None:
-                    values.setdefault(str(metric_name), []).append(mean)
-    for key, items in values.items():
-        if key in metrics_summary:
-            continue
-        metrics_summary[key] = {
-            "min": min(items),
-            "max": max(items),
-            "mean": sum(items) / len(items),
-            "count": len(items),
-        }
-
-
-def _attach_experiment_provenance(
-    summary: dict[str, Any],
-    best_execution: dict[str, Any],
-    records: list[dict[str, Any]],
-) -> None:
-    """Surface the agent's ``condition_plan`` / ``hypothesis_checks`` into summary.
-
-    These describe the planned experimental grid and the agent's own hypothesis
-    verification results. They were previously dropped, leaving downstream
-    trustworthiness judgments blind. Prefer the best execution's metrics, then
-    fall back to the most recent record that carries each field.
-    """
-    candidates: list[dict[str, Any]] = []
-    if isinstance(best_execution, dict):
-        candidates.append(best_execution)
-    candidates.extend(reversed(records))
-    for field_name in ("condition_plan", "hypothesis_checks"):
-        for record in candidates:
-            metrics = record.get("metrics") if isinstance(record, dict) else None
-            if not isinstance(metrics, dict):
-                continue
-            value = metrics.get(field_name)
-            if value:
-                summary[field_name] = value
-                break
+def _load_plan_and_expected_outputs(run_dir: Path) -> tuple[str, list[str]]:
+    plan_md = _read_prior_artifact(run_dir, "plan.md") or ""
+    expected_text = _read_prior_artifact(run_dir, "expected_outputs.json")
+    expected_outputs: list[str] = []
+    if expected_text:
+        try:
+            payload = json.loads(expected_text)
+        except json.JSONDecodeError:
+            payload = {}
+        outputs = payload.get("outputs") if isinstance(payload, dict) else None
+        if isinstance(outputs, list):
+            expected_outputs = [
+                item.strip()
+                for item in outputs
+                if isinstance(item, str) and item.strip()
+            ]
+    return plan_md, expected_outputs
 
 
 def _merge_result_hashes(
@@ -415,40 +235,39 @@ def _build_experiment_summary(
     config: RCConfig,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     _ = config
+    plan_md, expected_outputs = _load_plan_and_expected_outputs(run_dir)
     execution_records = _load_execution_records(run_dir)
     registry_records = _load_workspace_registry(run_dir)
     result_hashes = _merge_result_hashes(execution_records, registry_records)
-    primary_metric, metric_direction = resolve_experiment_metric(run_dir)
-    best_execution = _best_execution(
-        execution_records,
-        primary_metric=primary_metric,
-        metric_direction=metric_direction,
-    )
-    best_metric = (
-        _numeric_metric(best_execution.get("metrics", {}).get(primary_metric))
-        if best_execution
-        else None
-    )
-    best_commit = str(best_execution.get("code_commit", "")) if best_execution else ""
-    metrics_summary = _metrics_summary(execution_records)
-    _aggregates_into_metrics_summary(metrics_summary, execution_records)
-    condition_summaries = _condition_summaries(execution_records, primary_metric)
+    latest_execution = execution_records[-1] if execution_records else {}
+    completed_runs = [
+        record
+        for record in execution_records
+        if str(record.get("final_status", "")).strip().lower()
+        in {"completed", "succeeded", "success"}
+    ]
+    missing_expected_outputs: list[str] = []
+    for record in execution_records:
+        for item in record.get("missing_expected_outputs", []) or []:
+            if isinstance(item, str) and item not in missing_expected_outputs:
+                missing_expected_outputs.append(item)
+    observed_result_paths: list[str] = []
+    for record in execution_records:
+        for item in record.get("result_paths", []) or []:
+            if isinstance(item, str) and item not in observed_result_paths:
+                observed_result_paths.append(item)
     summary = {
-        "primary_metric": primary_metric,
-        "metric_direction": metric_direction,
-        "best_metric": best_metric,
-        "best_commit": best_commit,
-        "metrics_summary": metrics_summary,
+        "plan": plan_md,
+        "expected_outputs": expected_outputs,
+        "observed_result_paths": observed_result_paths,
+        "missing_expected_outputs": missing_expected_outputs,
+        "output_drift": bool(missing_expected_outputs),
         "iterations": len([r for r in registry_records if int(r.get("stage", 0)) == 13]),
         "n_runs": len(execution_records),
-        "best_run": best_execution,
+        "n_completed_runs": len(completed_runs),
+        "latest_run": latest_execution,
         "runs": execution_records,
-        "condition_summaries": condition_summaries,
     }
-    # FIX#3: pass through the agent's planned-condition grid and hypothesis
-    # checks (previously discarded) so downstream stages can judge whether the
-    # experiment actually answered the research question.
-    _attach_experiment_provenance(summary, best_execution, execution_records)
     provenance = {
         "base_sha": str(registry_records[0].get("base_sha", "")) if registry_records else "",
         "commits": _unique_commits(execution_records, registry_records),
@@ -867,45 +686,53 @@ def _hypothesis_protocol_decision(
     run_dir: Path,
     config: RCConfig,
     llm: LLMClient | None,
+    plan_md: str = "",
+    expected_outputs: list[str] | None = None,
 ) -> StageResult | None:
-    protocol_path = _find_prior_file(run_dir, "experiment_protocol.json")
-    if protocol_path is None:
+    _ = config
+    if not plan_md:
+        plan_md, expected_outputs = _load_plan_and_expected_outputs(run_dir)
+    expected_outputs = expected_outputs or []
+    if not plan_md.strip():
         return None
-    protocol = ExperimentProtocol.from_path(protocol_path)
-    if not protocol.decision_rules:
+    if llm is None:
         return None
-
-    from researchclaw.pipeline.hypothesis_judge import judge_hypotheses
 
     summary = _read_experiment_summary(run_dir)
     analysis = _read_prior_artifact(run_dir, "analysis.md") or ""
-    if analysis:
-        summary = dict(summary)
-        summary["analysis"] = analysis
-    verdict = judge_hypotheses(protocol, summary, llm=llm)
-    decision = str(verdict.get("decision") or "extend").lower()
-    decision_md = _format_hypothesis_decision_md(verdict)
+    prompt = (
+        "Use the experiment plan's decision criteria to decide whether the "
+        "research pipeline should PROCEED, PIVOT, or EXTEND. The plan is the "
+        "authoritative source for hypotheses, baselines, ablations, metrics, "
+        "and decision criteria. Do not invent a different protocol.\n\n"
+        "Return Markdown with a clear '## Decision' section containing exactly "
+        "one of PROCEED, PIVOT, or EXTEND.\n\n"
+        f"# Experiment Plan\n{plan_md}\n\n"
+        f"# Expected Outputs\n{json.dumps(expected_outputs, indent=2)}\n\n"
+        f"# Experiment Summary\n{json.dumps(summary, indent=2, sort_keys=True)}\n\n"
+        f"# Analysis\n{analysis}\n"
+    )
+    response = _chat_with_prompt(
+        llm,
+        "You judge research decisions against the experiment plan only.",
+        prompt,
+        strip_thinking=True,
+    )
+    decision_md = str(getattr(response, "content", "") or "").strip()
+    if not decision_md:
+        return None
+    decision = _parse_decision(decision_md)
 
     stage_dir.mkdir(parents=True, exist_ok=True)
     (stage_dir / "decision.md").write_text(decision_md, encoding="utf-8")
     decision_payload = {
         "decision": decision,
-        "source": "hypothesis_judge",
-        "per_hypothesis": verdict.get("per_hypothesis", {}),
-        "counts": verdict.get("counts", {}),
+        "source": "plan_decision_criteria",
+        "expected_outputs": expected_outputs,
         "generated": _utcnow_iso(),
     }
     (stage_dir / "decision_structured.json").write_text(
         json.dumps(decision_payload, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    verdict_payload = {
-        "source": "hypothesis_judge",
-        **verdict,
-        "generated": _utcnow_iso(),
-    }
-    (run_dir / "hypothesis_verdict.json").write_text(
-        json.dumps(verdict_payload, indent=2, sort_keys=True),
         encoding="utf-8",
     )
     from researchclaw.pipeline.hypothesis_mode import (
@@ -919,7 +746,7 @@ def _hypothesis_protocol_decision(
             record_stage15_decision(run_dir, decision, decision_md, human_edited=False)
         except Exception:
             logger.warning(
-                "Failed to record hypothesis tree decision (hypothesis judge)",
+                "Failed to record hypothesis tree decision (plan judge)",
                 exc_info=True,
             )
     _write_decision_review(
@@ -1040,8 +867,14 @@ def _execute_research_decision(
     if agent_decision is not None:
         return agent_decision
 
+    plan_md, expected_outputs = _load_plan_and_expected_outputs(run_dir)
     hypothesis_decision = _hypothesis_protocol_decision(
-        stage_dir=stage_dir, run_dir=run_dir, config=config, llm=llm
+        stage_dir=stage_dir,
+        run_dir=run_dir,
+        config=config,
+        llm=llm,
+        plan_md=plan_md,
+        expected_outputs=expected_outputs,
     )
     if hypothesis_decision is not None:
         return hypothesis_decision
@@ -1117,7 +950,17 @@ def _execute_research_decision(
         _pm = prompts or PromptManager()
         _overlay = _get_evolution_overlay(run_dir, "research_decision")
         sp = _pm.for_stage("research_decision", evolution_overlay=_overlay, analysis=analysis)
-        _user = sp.user + _degenerate_hint + _diagnosis_hint + _ablation_quality_hint
+        _plan_hint = ""
+        if plan_md.strip():
+            _plan_hint = (
+                "\n\n## EXPERIMENT PLAN DECISION CRITERIA\n"
+                "Use this plan as the source of truth for hypotheses, baselines, "
+                "ablations, metrics, expected outputs, and decision criteria.\n\n"
+                f"{plan_md}\n\n"
+                "Expected output paths:\n"
+                f"{json.dumps(expected_outputs, indent=2)}\n"
+            )
+        _user = sp.user + _plan_hint + _degenerate_hint + _diagnosis_hint + _ablation_quality_hint
         resp = _chat_with_prompt(llm, sp.system, _user)
         decision_md = resp.content
     else:

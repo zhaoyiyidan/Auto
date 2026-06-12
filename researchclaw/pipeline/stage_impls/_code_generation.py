@@ -11,7 +11,6 @@ from typing import Any
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
-from researchclaw.experiment.workspace import TaskSpec
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._helpers import StageResult, _read_prior_artifact
 from researchclaw.pipeline.stages import Stage, StageStatus
@@ -20,42 +19,13 @@ from researchclaw.prompts import PromptManager
 logger = logging.getLogger(__name__)
 
 
-_CONTINUOUS_ENVS = {
-    "pendulum",
-    "halfcheetah",
-    "hopper",
-    "walker2d",
-    "ant",
-    "humanoid",
-    "swimmer",
-    "reacher",
-    "invertedpendulum",
-    "inverteddoublependulum",
-    "mountaincarcontinuous",
-    "lunarlander-continuous",
-}
-
-
-def _run_manifest_schema_example(
-    *,
-    primary_metric: str,
-    metric_direction: str,
-    prompts: PromptManager | None = None,
-) -> str:
-    pm = prompts or PromptManager()
-    direction = (
-        metric_direction
-        if metric_direction in {"maximize", "minimize"}
-        else "maximize"
-    )
+def _run_manifest_schema_example(expected_outputs: list[str]) -> str:
+    result_paths = expected_outputs or ["outputs/results.json"]
     example = {
         "schema_version": "researchclaw.run_manifest.v1",
         "code_commit": "ACTUAL_GIT_COMMIT_SHA",
         "launch": {
-            "command": (
-                "python scripts/run_experiment.py "
-                "--metrics-path outputs/metrics.json"
-            ),
+            "command": "python scripts/run_experiment.py",
             "cwd": "/absolute/path/to/workspace",
             "env": {
                 "PYTHONPATH": "/absolute/path/to/workspace:${PYTHONPATH:-}",
@@ -67,18 +37,9 @@ def _run_manifest_schema_example(
                 "mem_gb": 16,
             },
         },
-        "result_paths": [
-            "outputs/metrics.json",
-        ],
-        "metrics": {
-            "primary": primary_metric or "primary_metric",
-            "direction": direction,
-        },
+        "result_paths": result_paths,
     }
-    return pm.block(
-        "manifest_schema_example",
-        manifest_example=json.dumps(example, indent=2),
-    )
+    return json.dumps(example, indent=2)
 
 
 def _rendered_prompt_text(system: str, user: str) -> str:
@@ -88,40 +49,41 @@ def _rendered_prompt_text(system: str, user: str) -> str:
 def _workspace_codegen_prompt(
     *,
     topic: str,
-    exp_plan: str,
-    metric: str,
-    pkg_hint: str,
-    compute_budget: str,
-    extra_guidance: str,
+    plan_md: str,
+    expected_outputs: list[str],
     manifest_filename: str,
-    metric_direction: str = "maximize",
 ) -> str:
-    pm = PromptManager()
-    prompt = pm.sub_prompt(
-        "workspace_codegen",
-        topic=topic,
-        exp_plan=exp_plan,
-        metric=metric,
-        pkg_hint=pkg_hint,
-        compute_budget=compute_budget,
-        extra_guidance=extra_guidance,
-        manifest_filename=manifest_filename,
-        manifest_schema_example=_run_manifest_schema_example(
-            primary_metric=metric,
-            metric_direction=metric_direction,
-            prompts=pm,
-        ),
-        stage10_validation_boundary=pm.block("stage10_validation_boundary"),
+    expected_json = json.dumps(
+        {
+            "schema_version": "researchclaw.expected_outputs.v1",
+            "outputs": expected_outputs,
+        },
+        indent=2,
     )
-    return _rendered_prompt_text(prompt.system, prompt.user)
+    return (
+        "You are a workspace-native code agent working inside an existing git "
+        "repository. Implement the experiment described by Stage 9. Do not "
+        "redesign the experiment.\n\n"
+        f"TOPIC:\n{topic}\n\n"
+        f"STAGE 9 PLAN (plan.md):\n{plan_md}\n\n"
+        f"EXPECTED OUTPUTS (expected_outputs.json):\n{expected_json}\n\n"
+        "You MUST modify the workspace as needed to implement and run this "
+        "experiment. You MUST write or update "
+        f"{manifest_filename}. The manifest result_paths MUST include every "
+        "path listed in expected_outputs.json. Extra result paths are allowed.\n\n"
+        "Required run_manifest.json format example:\n"
+        f"{_run_manifest_schema_example(expected_outputs)}\n\n"
+        "Make a final git commit containing every task change, including the "
+        "manifest. Set code_commit to the final HEAD and finish with clean git "
+        "status."
+    )
 
 
 def _repair_or_refine_prompt(
     *,
     topic: str,
-    metric_key: str,
-    metric_direction: str,
-    exp_plan: str,
+    plan_md: str,
+    expected_outputs: list[str],
     project_files: list[str],
     run_summaries: list[str],
     manifest_filename: str,
@@ -145,26 +107,30 @@ def _repair_or_refine_prompt(
             f"\n\nEXECUTION RECORD:\n{execution_record or '{}'}\n\n"
             f"RESULT ARTIFACTS:\n{result_artifacts or '{}'}\n"
         )
-    pm = PromptManager()
-    prompt = pm.sub_prompt(
-        "workspace_repair",
-        request_section=request_section,
-        topic=topic,
-        metric_direction=metric_direction,
-        metric_key=metric_key,
-        exp_plan=exp_plan,
-        project_files=project_files,
-        run_summaries=summaries,
-        results_section=results_section,
-        manifest_filename=manifest_filename,
-        manifest_schema_example=_run_manifest_schema_example(
-            primary_metric=metric_key,
-            metric_direction=metric_direction,
-            prompts=pm,
-        ),
-        stage10_validation_boundary=pm.block("stage10_validation_boundary"),
+    expected_json = json.dumps(
+        {
+            "schema_version": "researchclaw.expected_outputs.v1",
+            "outputs": expected_outputs,
+        },
+        indent=2,
     )
-    return _rendered_prompt_text(prompt.system, prompt.user)
+    return (
+        "You are repairing or refining a workspace experiment implementation. "
+        "Do not redesign the Stage 9 experiment plan; fix the implementation "
+        "so it satisfies the plan and expected outputs.\n\n"
+        f"{request_section}"
+        f"TOPIC:\n{topic}\n\n"
+        f"STAGE 9 PLAN:\n{plan_md}\n\n"
+        f"EXPECTED OUTPUTS:\n{expected_json}\n\n"
+        f"PRIOR RUN SUMMARIES:\n{summaries}\n\n"
+        f"PROJECT FILES:\n{json.dumps(project_files[:20], indent=2)}"
+        f"{results_section}\n\n"
+        f"Write or update {manifest_filename}; result_paths must include every "
+        "expected output path. Required run_manifest.json format example:\n"
+        f"{_run_manifest_schema_example(expected_outputs)}\n\n"
+        "Make a final git commit containing every task change and finish with "
+        "clean git status."
+    )
 
 
 def _execute_code_agent_implement_or_repair(
@@ -177,28 +143,35 @@ def _execute_code_agent_implement_or_repair(
     prompts: PromptManager | None = None,
 ) -> StageResult:
     _ = adapters
-    task_spec_text = _read_prior_artifact(run_dir, "task_spec.yaml")
-    if not task_spec_text:
+    plan_md = _read_prior_artifact(run_dir, "plan.md")
+    expected_outputs_text = _read_prior_artifact(run_dir, "expected_outputs.json")
+    if not plan_md:
         return StageResult(
             stage=Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
             status=StageStatus.FAILED,
             artifacts=(),
-            error="E10_CODE_AGENT_FAIL: missing task_spec.yaml",
+            error="E10_CODE_AGENT_FAIL: missing plan.md",
         )
-    try:
-        task_spec = TaskSpec.from_yaml(task_spec_text)
-    except Exception as exc:  # noqa: BLE001
+    if not expected_outputs_text:
         return StageResult(
             stage=Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
             status=StageStatus.FAILED,
             artifacts=(),
-            error=f"E10_CODE_AGENT_FAIL: invalid task_spec.yaml: {exc}",
+            error="E10_CODE_AGENT_FAIL: missing expected_outputs.json",
+        )
+    expected_outputs = _parse_expected_outputs(expected_outputs_text)
+    if not expected_outputs:
+        return StageResult(
+            stage=Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
+            status=StageStatus.FAILED,
+            artifacts=(),
+            error="E10_CODE_AGENT_FAIL: invalid expected_outputs.json",
         )
 
     from researchclaw.experiment import workspace_agent as workspace_agent_factory
     from researchclaw.pipeline import workspace_orchestrator
 
-    workspace = _resolve_workspace_path(config, task_spec.workspace)
+    workspace = Path(config.experiment.workspace_agent.workspace_path).resolve()
     manifest_filename = _manifest_filename(config)
     repair_request = _read_repair_request(run_dir)
     if repair_request:
@@ -210,9 +183,8 @@ def _execute_code_agent_implement_or_repair(
                 diagnosis = diagnosis_path.read_text(encoding="utf-8")
         prompt = _repair_or_refine_prompt(
             topic=config.research.topic,
-            metric_key=task_spec.primary_metric,
-            metric_direction=task_spec.metric_direction,
-            exp_plan=task_spec_text,
+            plan_md=plan_md,
+            expected_outputs=expected_outputs,
             project_files=[],
             run_summaries=[],
             manifest_filename=manifest_filename,
@@ -224,13 +196,9 @@ def _execute_code_agent_implement_or_repair(
     else:
         prompt = _workspace_codegen_prompt(
             topic=config.research.topic,
-            exp_plan=task_spec_text,
-            metric=task_spec.primary_metric,
-            pkg_hint="",
-            compute_budget="\n".join(task_spec.constraints),
-            extra_guidance="",
+            plan_md=plan_md,
+            expected_outputs=expected_outputs,
             manifest_filename=manifest_filename,
-            metric_direction=task_spec.metric_direction,
         )
     agent = workspace_agent_factory.create_workspace_agent(
         config,
@@ -326,14 +294,19 @@ def _consume_repair_request(run_dir: Path, repair_request: dict[str, Any]) -> No
     source.replace(target)
 
 
-def _resolve_workspace_path(config: RCConfig, workspace: str) -> Path:
-    configured = Path(config.experiment.workspace_agent.workspace_path)
-    if not workspace or workspace == ".":
-        return configured
-    path = Path(workspace).expanduser()
-    if path.is_absolute():
-        return path
-    return configured.parent / path
+def _parse_expected_outputs(text: str) -> list[str]:
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    outputs = payload.get("outputs") if isinstance(payload, dict) else None
+    if not isinstance(outputs, list):
+        return []
+    return [
+        str(item).strip()
+        for item in outputs
+        if isinstance(item, str) and item.strip()
+    ]
 
 
 def _manifest_filename(config: RCConfig) -> str:
@@ -373,18 +346,3 @@ def _write_agent_result(stage_dir: Path, result: object) -> None:
         json.dumps(asdict(result), indent=2, sort_keys=True),
         encoding="utf-8",
     )
-
-
-def _check_rl_compatibility(code: str) -> list[str]:
-    errors: list[str] = []
-    code_lower = code.lower()
-    if "dqn" not in code_lower:
-        return errors
-    for env_name in _CONTINUOUS_ENVS:
-        if env_name in code_lower:
-            errors.append(
-                f"RL COMPATIBILITY ERROR: DQN is used with continuous-action "
-                f"environment '{env_name}'. DQN only works with DISCRETE action "
-                "spaces. Use SAC, TD3, or PPO instead."
-            )
-    return errors

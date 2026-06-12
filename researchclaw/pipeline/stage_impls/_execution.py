@@ -3,20 +3,16 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
-from researchclaw.experiment.execution_contract import (
-    ExecutionContract,
-    default_contract,
-    evaluate_contract,
-)
 from researchclaw.experiment.manifest_validation import validate_manifest
-from researchclaw.experiment.metric_resolution import resolve_experiment_metric
-from researchclaw.experiment.workspace import RunManifest, TaskSpec
+from researchclaw.experiment.workspace import RunManifest
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._helpers import StageResult, _read_prior_artifact
 from researchclaw.pipeline.stages import Stage, StageStatus
@@ -60,6 +56,10 @@ def _execute_manifest_validate_and_prepare(
 
     workspace = Path(config.experiment.workspace_agent.workspace_path).resolve()
     validation = validate_manifest(manifest, workspace, allow_dirty=False)
+    expected_outputs = _load_expected_outputs(run_dir)
+    coverage_errors = _expected_output_manifest_errors(expected_outputs, manifest)
+    if coverage_errors:
+        validation = _validation_with_errors(validation, coverage_errors)
     (stage_dir / "manifest_validation.json").write_text(
         json.dumps(validation.to_dict(), indent=2, sort_keys=True),
         encoding="utf-8",
@@ -85,33 +85,6 @@ def _execute_manifest_validate_and_prepare(
             error="E11_MANIFEST_INVALID: " + "; ".join(validation.errors),
             decision="fix_code",
         )
-
-    task_spec = _load_task_spec(run_dir)
-    if task_spec is not None and task_spec.execution_contract is not None:
-        contract_errors = _contract_manifest_errors(
-            task_spec.execution_contract, manifest, manifest_payload
-        )
-        if contract_errors:
-            _write_repair_request(
-                run_dir,
-                origin_stage=11,
-                reason="contract_mismatch",
-                errors=contract_errors,
-                iteration=_read_experiment_iteration_count(run_dir),
-                generated=_utcnow_iso(),
-                diagnosis_ref=(
-                    "experiment_diagnosis.json"
-                    if (run_dir / "experiment_diagnosis.json").is_file()
-                    else ""
-                ),
-            )
-            return StageResult(
-                stage=Stage.MANIFEST_VALIDATE_AND_PREPARE,
-                status=StageStatus.FAILED,
-                artifacts=("manifest_validation.json",),
-                error="E11_MANIFEST_INVALID: " + "; ".join(contract_errors),
-                decision="fix_code",
-            )
 
     (stage_dir / "run_manifest.json").write_text(
         json.dumps(manifest_payload, indent=2, sort_keys=True),
@@ -191,12 +164,12 @@ def _execute_harness_submit_and_collect(
     except Exception as exc:  # noqa: BLE001
         return _failed(Stage.HARNESS_SUBMIT_AND_COLLECT, f"E12_HARNESS_FAIL: {exc}")
 
+    _mark_expected_output_drift(stage_dir, run_dir, config)
     output_artifacts = (
         "execution_record.json",
         "submit_result.json",
         "result_artifacts.json",
     )
-    _write_contract_evidence(stage_dir, run_dir, config)
     artifacts = _read_result_artifacts(stage_dir)
     if artifacts and not any(bool(item.get("exists")) for item in artifacts):
         return StageResult(
@@ -246,20 +219,25 @@ def _execute_experiment_route_decision(
     validation = _load_json_text(_read_prior_artifact(run_dir, "manifest_validation.json"))
     diagnosis_path = run_dir / "experiment_diagnosis.json"
     diagnosis = _load_json_file(diagnosis_path)
-    contract = _load_execution_contract(run_dir, config)
     route, reason, details = _route_from_experiment_evidence(
         execution=execution,
         artifacts=artifacts,
         validation=validation,
         diagnosis=diagnosis,
-        contract=contract,
     )
     iteration = _read_experiment_iteration_count(run_dir)
     generated = _utcnow_iso()
+    missing_expected_outputs = [
+        str(item)
+        for item in execution.get("missing_expected_outputs", [])
+        if isinstance(item, str) and item.strip()
+    ]
     decision = {
         "schema_version": "researchclaw.experiment_decision.v1",
         "route": route,
         "reason": reason,
+        "output_drift": bool(missing_expected_outputs),
+        "missing_expected_outputs": missing_expected_outputs,
         "evidence": _experiment_decision_evidence(
             execution=execution,
             diagnosis=diagnosis,
@@ -269,7 +247,6 @@ def _execute_experiment_route_decision(
         "iteration": iteration,
         "max_iterations": 3,
         "generated": generated,
-        "contract_schema_version": contract.schema_version,
     }
     (stage_dir / "experiment_decision.json").write_text(
         json.dumps(decision, indent=2, sort_keys=True),
@@ -282,15 +259,6 @@ def _execute_experiment_route_decision(
             origin_stage=13,
             reason=reason,
             errors=details,
-            iteration=iteration,
-            generated=generated,
-            diagnosis_ref="experiment_diagnosis.json" if diagnosis_path.is_file() else "",
-        )
-    elif route == "revise_task_spec":
-        _write_refine_request(
-            run_dir,
-            reason=reason,
-            suggested_changes=details,
             iteration=iteration,
             generated=generated,
             diagnosis_ref="experiment_diagnosis.json" if diagnosis_path.is_file() else "",
@@ -333,96 +301,75 @@ def _load_json_file(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _load_task_spec(run_dir: Path) -> TaskSpec | None:
-    text = _read_prior_artifact(run_dir, "task_spec.yaml")
+def _load_expected_outputs(run_dir: Path) -> list[str]:
+    text = _read_prior_artifact(run_dir, "expected_outputs.json")
     if not text:
-        return None
+        return []
     try:
-        return TaskSpec.from_yaml(text)
-    except Exception:  # noqa: BLE001
-        return None
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    outputs = payload.get("outputs") if isinstance(payload, dict) else None
+    if not isinstance(outputs, list):
+        return []
+    result: list[str] = []
+    for item in outputs:
+        if not isinstance(item, str):
+            continue
+        path = item.strip()
+        if path and path not in result:
+            result.append(path)
+    return result
 
 
-def _load_execution_contract(run_dir: Path, config: RCConfig) -> ExecutionContract:
-    task_spec = _load_task_spec(run_dir)
-    if task_spec is not None and task_spec.execution_contract is not None:
-        return task_spec.execution_contract
-
-    expected_outputs = (
-        task_spec.expected_outputs
-        if task_spec is not None and task_spec.expected_outputs
-        else ["outputs/metrics.json"]
-    )
-    primary_metric, metric_direction = resolve_experiment_metric(run_dir)
-    return default_contract(
-        primary_metric=primary_metric,
-        metric_direction=metric_direction,
-        expected_outputs=expected_outputs,
-    )
-
-
-def _contract_manifest_errors(
-    contract: ExecutionContract,
+def _expected_output_manifest_errors(
+    expected_outputs: list[str],
     manifest: RunManifest,
-    manifest_payload: dict[str, Any],
 ) -> list[str]:
-    errors: list[str] = []
-    manifest_paths = set(manifest.result_paths)
-    for artifact in contract.result_artifacts:
-        if artifact.required and artifact.path not in manifest_paths:
-            errors.append(
-                f"required result artifact {artifact.path!r} is missing from manifest.result_paths"
-            )
-
-    primary = contract.metrics.primary
-    nested_primary = _nested_manifest_primary(manifest_payload)
-    if nested_primary is None:
-        errors.append(
-            "manifest.metrics.primary must be an object with name and direction"
-        )
-        return errors
-    manifest_primary_name, manifest_primary_direction = nested_primary
-    if primary.name != manifest_primary_name:
-        errors.append(
-            "contract primary metric "
-            f"{primary.name!r} does not match manifest.metrics.primary.name "
-            f"{manifest_primary_name!r}"
-        )
-    if primary.direction != manifest_primary_direction:
-        errors.append(
-            "contract metric direction "
-            f"{primary.direction!r} does not match manifest.metrics.primary.direction "
-            f"{manifest_primary_direction!r}"
-        )
-    return errors
+    declared = set(manifest.result_paths)
+    return [
+        f"expected output {path!r} is missing from manifest.result_paths"
+        for path in expected_outputs
+        if path not in declared
+    ]
 
 
-def _nested_manifest_primary(data: dict[str, Any]) -> tuple[str, str] | None:
-    metrics = data.get("metrics")
-    if not isinstance(metrics, dict):
-        return None
-    primary = metrics.get("primary")
-    if not isinstance(primary, dict):
-        return None
-    if not primary.get("name") or not primary.get("direction"):
-        return None
-    return (
-        str(primary["name"]),
-        str(primary["direction"]),
-    )
+def _validation_with_errors(validation: Any, errors: list[str]) -> Any:
+    merged = [*list(getattr(validation, "errors", []) or []), *errors]
+    return replace(validation, ok=False, errors=merged)
 
-def _write_contract_evidence(stage_dir: Path, run_dir: Path, config: RCConfig) -> None:
-    execution = _load_json_file(stage_dir / "execution_record.json")
-    if not execution:
+
+def _mark_expected_output_drift(
+    stage_dir: Path,
+    run_dir: Path,
+    config: RCConfig,
+) -> None:
+    expected_outputs = _load_expected_outputs(run_dir)
+    record_path = stage_dir / "execution_record.json"
+    if not record_path.is_file():
         return
-    artifacts = _load_json_file(stage_dir / "result_artifacts.json")
-    evidence = evaluate_contract(
-        _load_execution_contract(run_dir, config),
-        execution,
-        artifacts,
-    )
-    (stage_dir / "contract_evidence.json").write_text(
-        json.dumps(evidence.to_dict(), indent=2, sort_keys=True),
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(record, dict):
+        return
+
+    workspace = Path(config.experiment.workspace_agent.workspace_path).resolve()
+    missing: list[str] = []
+    result_hashes = dict(record.get("result_hashes") or {})
+    for rel in expected_outputs:
+        path = (workspace / rel).resolve()
+        if not _is_within(path, workspace) or not path.exists():
+            missing.append(rel)
+            continue
+        if rel not in result_hashes:
+            result_hashes[rel] = _sha256_path(path)
+
+    record["missing_expected_outputs"] = missing
+    record["result_hashes"] = result_hashes
+    record_path.write_text(
+        json.dumps(record, indent=2, sort_keys=True),
         encoding="utf-8",
     )
 
@@ -433,20 +380,22 @@ def _route_from_experiment_evidence(
     artifacts: dict[str, Any],
     validation: dict[str, Any],
     diagnosis: dict[str, Any],
-    contract: ExecutionContract,
 ) -> tuple[str, str, list[str]]:
     _ = validation
-    if _diagnosis_requires_task_spec_revision(diagnosis):
+    missing_expected_outputs = [
+        str(item)
+        for item in execution.get("missing_expected_outputs", [])
+        if isinstance(item, str) and item.strip()
+    ]
+    if missing_expected_outputs:
         return (
-            "revise_task_spec",
-            "task_spec_objective_mismatch",
-            _diagnosis_details(diagnosis)
-            or ["Revise the experiment task spec to align objective, metrics, and expected outputs."],
+            "fix_code",
+            "missing_expected_outputs",
+            missing_expected_outputs,
         )
 
-    evidence = evaluate_contract(contract, execution, artifacts)
     final_status = str(execution.get("final_status", "")).strip().lower()
-    if evidence.completion_status == "incomplete":
+    if final_status in {"", "unknown", "submitted", "running", "pending"}:
         return ("rerun", "execution_incomplete", [f"final_status={final_status}"])
 
     if final_status == "timeout":
@@ -456,40 +405,21 @@ def _route_from_experiment_evidence(
             ["experiment timed out before Stage 13 could validate results"],
         )
 
-    if evidence.completion_status == "failed":
+    if final_status in {"failed", "error", "cancelled", "canceled"}:
         status = final_status or "missing"
         return ("fix_code", "execution_failed", [f"final_status={status}"])
 
-    metrics = execution.get("metrics")
-    metric_violations = [
-        item
-        for item in evidence.violations
-        if item == "metrics:empty" or item.startswith("metric:")
-    ]
-    if metric_violations:
-        if metric_violations == ["metrics:empty"]:
-            return ("fix_code", "metrics_missing", ["execution_record.metrics is empty"])
-        return ("fix_code", "metrics_missing", metric_violations)
-
-    if not isinstance(metrics, dict):
-        metrics = {}
-
-    artifact_violations = [
-        item
-        for item in evidence.violations
-        if item == "artifacts:all_missing" or item.startswith("artifact:")
-    ]
-    if artifact_violations:
-        if artifact_violations == ["artifacts:all_missing"]:
+    artifact_rows = artifacts.get("artifacts") if isinstance(artifacts, dict) else None
+    if isinstance(artifact_rows, list) and artifact_rows:
+        if not any(bool(item.get("exists")) for item in artifact_rows if isinstance(item, dict)):
             return (
                 "fix_code",
                 "result_artifacts_missing",
                 ["all declared result artifacts are missing"],
             )
-        return ("fix_code", "result_artifacts_missing", artifact_violations)
 
     if _diagnosis_sufficient(diagnosis) is False and (
-        _has_real_deficiency(diagnosis) or not evidence.metrics_have_numeric
+        _has_real_deficiency(diagnosis)
     ):
         return (
             "fix_code",
@@ -498,7 +428,7 @@ def _route_from_experiment_evidence(
             or ["experiment_diagnosis.json reports insufficient experiment quality"],
         )
 
-    return ("continue", "metrics meet objective; artifacts available", [])
+    return ("continue", "experiment completed; expected outputs available", [])
 
 
 # FIX#3: deficiency types that, ON THEIR OWN, must NOT trigger a fix_code
@@ -541,26 +471,6 @@ def _diagnosis_sufficient(diagnosis: dict[str, Any]) -> bool | None:
     return None
 
 
-def _diagnosis_requires_task_spec_revision(diagnosis: dict[str, Any]) -> bool:
-    if _diagnosis_sufficient(diagnosis) is not False:
-        return False
-    haystack = " ".join(_diagnosis_details(diagnosis)).lower()
-    quality = diagnosis.get("quality_assessment")
-    if isinstance(quality, dict):
-        haystack += " " + " ".join(str(item) for item in quality.get("deficiency_types", []))
-        if quality.get("repair_possible") is False:
-            haystack += " repair_not_possible"
-    markers = (
-        "task_spec",
-        "task spec",
-        "objective_mismatch",
-        "objective mismatch",
-        "plan_mismatch",
-        "expected_outputs",
-    )
-    return any(marker in haystack for marker in markers)
-
-
 def _diagnosis_details(diagnosis: dict[str, Any]) -> list[str]:
     details: list[str] = []
     diag = diagnosis.get("diagnosis")
@@ -595,22 +505,18 @@ def _experiment_decision_evidence(
     config: RCConfig,
 ) -> dict[str, Any]:
     _ = config
-    metrics = execution.get("metrics") if isinstance(execution.get("metrics"), dict) else {}
-    metric_key, metric_direction = resolve_experiment_metric(run_dir)
-    best_metric = metrics.get(metric_key)
-    if best_metric is None:
-        for value in metrics.values():
-            if isinstance(value, (int, float)):
-                best_metric = value
-                break
+    _ = run_dir
     quality = diagnosis.get("quality_assessment") if isinstance(diagnosis, dict) else {}
     if not isinstance(quality, dict):
         quality = {}
+    result_paths = execution.get("result_paths")
+    missing_expected_outputs = execution.get("missing_expected_outputs")
     return {
-        "primary_metric": metric_key,
-        "best_metric": best_metric,
-        "metric_direction": metric_direction,
-        "n_runs": int(execution.get("n_runs", 1 if metrics else 0) or 0),
+        "final_status": execution.get("final_status"),
+        "n_result_paths": len(result_paths) if isinstance(result_paths, list) else 0,
+        "missing_expected_outputs": (
+            missing_expected_outputs if isinstance(missing_expected_outputs, list) else []
+        ),
         "diagnosis_mode": quality.get("mode"),
         "diagnosis_sufficient": _diagnosis_sufficient(diagnosis),
     }
@@ -636,30 +542,6 @@ def _write_repair_request(
         "generated": generated,
     }
     (run_dir / "repair_request.json").write_text(
-        json.dumps(payload, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-
-
-def _write_refine_request(
-    run_dir: Path,
-    *,
-    reason: str,
-    suggested_changes: list[str],
-    iteration: int,
-    generated: str,
-    diagnosis_ref: str,
-) -> None:
-    payload = {
-        "schema_version": "researchclaw.refine_request.v1",
-        "origin_stage": 13,
-        "reason": reason,
-        "suggested_changes": suggested_changes or [reason],
-        "diagnosis_ref": diagnosis_ref,
-        "iteration": iteration,
-        "generated": generated,
-    }
-    (run_dir / "refine_request.json").write_text(
         json.dumps(payload, indent=2, sort_keys=True),
         encoding="utf-8",
     )
@@ -716,9 +598,9 @@ def _result_summary(execution_text: str) -> str:
     return json.dumps(
         {
             "final_status": payload.get("final_status"),
-            "metrics": payload.get("metrics", {}),
             "result_paths": payload.get("result_paths", []),
             "result_hashes": payload.get("result_hashes", {}),
+            "missing_expected_outputs": payload.get("missing_expected_outputs", []),
         },
         sort_keys=True,
     )
@@ -736,6 +618,31 @@ def _estimate_stage12_footprint_bytes(run_dir: Path) -> int:
             except OSError:
                 continue
     return total
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    if path.is_file():
+        _update_digest_from_file(digest, path)
+        return digest.hexdigest()
+    for child in sorted(item for item in path.rglob("*") if item.is_file()):
+        digest.update(child.relative_to(path).as_posix().encode("utf-8"))
+        _update_digest_from_file(digest, child)
+    return digest.hexdigest()
+
+
+def _update_digest_from_file(digest: "hashlib._Hash", path: Path) -> None:
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 
 def _failed(stage: Stage, error: str) -> StageResult:

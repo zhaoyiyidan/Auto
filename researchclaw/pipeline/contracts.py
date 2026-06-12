@@ -92,14 +92,18 @@ CONTRACTS: dict[Stage, StageContract] = {
     Stage.EXPERIMENT_TASK_SPEC: StageContract(
         stage=Stage.EXPERIMENT_TASK_SPEC,
         input_files=("hypotheses.md",),
-        output_files=("experiment_protocol.json", "task_spec.yaml", "experiment_design_intent.md"),
-        dod="Experiment protocol plus derived code-agent task spec with metric and scopes",
-        error_code="E09_TASKSPEC_REJECT",
+        output_files=("plan.md", "expected_outputs.json"),
+        dod=(
+            "Planning agent produced plan.md with hypotheses, baselines, "
+            "ablations, metrics and decision criteria; expected_outputs.json "
+            "lists result paths"
+        ),
+        error_code="E09_PLAN_INVALID",
         max_retries=0,
     ),
     Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR: StageContract(
         stage=Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
-        input_files=("task_spec.yaml",),
+        input_files=("plan.md", "expected_outputs.json"),
         output_files=("stage-10-workspace-agent-result.json", "run_manifest.json"),
         dod="Workspace code agent committed implementation and wrote run manifest",
         error_code="E10_CODE_AGENT_FAIL",

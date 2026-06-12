@@ -1,15 +1,11 @@
-"""Experiment protocol data model and deterministic hypothesis parsing."""
+"""Deterministic hypothesis parsing helpers."""
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
-
-PROTOCOL_SCHEMA_VERSION = "researchclaw.experiment_protocol.v1"
 
 _DIRECTION_MINIMIZE = {"minimize", "min", "lower", "lower_is_better", "down", "decrease"}
 _DIRECTION_MAXIMIZE = {"maximize", "max", "higher", "higher_is_better", "up", "increase"}
@@ -241,148 +237,6 @@ class DecisionRule:
             supported_if=data.get("supported_if") or "pass",
             description=data.get("description") or "",
         )
-
-
-@dataclass(frozen=True)
-class ExperimentProtocol:
-    schema_version: str = PROTOCOL_SCHEMA_VERSION
-    objective: str = ""
-    hypotheses: tuple[HypothesisSpec, ...] = ()
-    metrics: tuple[MetricSpec, ...] = ()
-    comparisons: tuple[ComparisonSpec, ...] = ()
-    decision_rules: tuple[DecisionRule, ...] = ()
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "schema_version",
-            str(self.schema_version or PROTOCOL_SCHEMA_VERSION),
-        )
-        object.__setattr__(self, "objective", str(self.objective or "").strip())
-        object.__setattr__(
-            self,
-            "hypotheses",
-            tuple(
-                item if isinstance(item, HypothesisSpec) else HypothesisSpec.from_dict(item)
-                for item in _iter_items(self.hypotheses)
-            ),
-        )
-        object.__setattr__(
-            self,
-            "metrics",
-            tuple(
-                item if isinstance(item, MetricSpec) else MetricSpec.from_dict(item)
-                for item in _iter_items(self.metrics)
-            ),
-        )
-        object.__setattr__(
-            self,
-            "comparisons",
-            tuple(
-                item if isinstance(item, ComparisonSpec) else ComparisonSpec.from_dict(item)
-                for item in _iter_items(self.comparisons)
-            ),
-        )
-        object.__setattr__(
-            self,
-            "decision_rules",
-            tuple(
-                item if isinstance(item, DecisionRule) else DecisionRule.from_dict(item)
-                for item in _iter_items(self.decision_rules)
-            ),
-        )
-
-    def primary_metric(self) -> MetricSpec:
-        for metric in self.metrics:
-            if metric.is_primary:
-                return metric
-        if self.metrics:
-            return self.metrics[0]
-        return MetricSpec(name="primary_metric", direction="maximize", is_primary=True)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": self.schema_version,
-            "objective": self.objective,
-            "hypotheses": [item.to_dict() for item in self.hypotheses],
-            "metrics": [item.to_dict() for item in self.metrics],
-            "comparisons": [item.to_dict() for item in self.comparisons],
-            "decision_rules": [item.to_dict() for item in self.decision_rules],
-        }
-
-    def to_json(self) -> str:
-        return json.dumps(self.to_dict(), indent=2, sort_keys=True)
-
-    @classmethod
-    def from_dict(cls, data: Any) -> ExperimentProtocol:
-        try:
-            data = data if isinstance(data, dict) else {}
-            return cls(
-                schema_version=data.get("schema_version") or PROTOCOL_SCHEMA_VERSION,
-                objective=data.get("objective") or "",
-                hypotheses=tuple(_iter_items(data.get("hypotheses"))),
-                metrics=tuple(_iter_items(data.get("metrics"))),
-                comparisons=tuple(_iter_items(data.get("comparisons"))),
-                decision_rules=tuple(_iter_items(data.get("decision_rules"))),
-            )
-        except Exception:  # noqa: BLE001
-            return cls()
-
-    @classmethod
-    def from_json(cls, text: str) -> ExperimentProtocol:
-        try:
-            return cls.from_dict(json.loads(text))
-        except Exception:  # noqa: BLE001
-            return cls()
-
-    @classmethod
-    def from_path(cls, path: Path) -> ExperimentProtocol:
-        try:
-            return cls.from_json(path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
-            return cls()
-
-    def validate(self) -> tuple[str, ...]:
-        warnings: list[str] = []
-        hypothesis_ids = {item.id for item in self.hypotheses}
-        metric_names = {item.name for item in self.metrics}
-        primary_count = sum(1 for item in self.metrics if item.is_primary)
-        if primary_count > 1:
-            warnings.append("multiple primary metrics declared")
-        for metric in self.metrics:
-            for hypothesis_id in metric.hypothesis_ids:
-                if hypothesis_id not in hypothesis_ids:
-                    warnings.append(
-                        f"metric {metric.name} references unknown hypothesis {hypothesis_id}"
-                    )
-        for comparison in self.comparisons:
-            if comparison.metric and comparison.metric not in metric_names:
-                warnings.append(
-                    f"comparison {comparison.id} references missing metric {comparison.metric}"
-                )
-            for hypothesis_id in comparison.hypothesis_ids:
-                if hypothesis_id not in hypothesis_ids:
-                    warnings.append(
-                        f"comparison {comparison.id} references unknown hypothesis {hypothesis_id}"
-                    )
-        for rule in self.decision_rules:
-            if rule.metric and rule.metric not in metric_names:
-                warnings.append(
-                    f"decision rule for {rule.hypothesis_id} references missing metric {rule.metric}"
-                )
-            if rule.hypothesis_id not in hypothesis_ids:
-                warnings.append(
-                    f"decision rule references unknown hypothesis {rule.hypothesis_id}"
-                )
-        return tuple(warnings)
-
-
-def _iter_items(value: Any) -> tuple[Any, ...]:
-    if value is None:
-        return ()
-    if isinstance(value, list | tuple):
-        return tuple(value)
-    return (value,)
 
 
 _HYPOTHESIS_HEADING_RE = re.compile(

@@ -220,7 +220,7 @@ def submit_and_collect(
         log_path=str(submit_result.metadata.get("log_path", "")),
         result_paths=manifest.result_paths,
         result_hashes=result_hashes,
-        metrics=_collect_metrics(manifest.result_paths, workspace),
+        missing_expected_outputs=[],
         elapsed_sec=round(time.monotonic() - started, 6),
         waited=wait,
         recorded_at=_utcnow_iso(),
@@ -408,21 +408,6 @@ def _collect_result_artifacts(
         artifacts=artifacts,
         collected_at=_utcnow_iso(),
     )
-
-
-def _collect_metrics(result_paths: list[str], workspace: Path) -> dict[str, object]:
-    metrics: dict[str, object] = {}
-    for rel in result_paths:
-        path = (workspace / rel).resolve()
-        if not path.is_file() or path.suffix.lower() != ".json":
-            continue
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if isinstance(payload, dict):
-            metrics.update(payload)
-    return metrics
 
 
 def _sha256_path(path: Path) -> str:

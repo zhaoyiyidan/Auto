@@ -1,23 +1,16 @@
-"""Stage 9: workspace-native experiment task specification."""
+"""Stage 9: workspace-aware experiment planning."""
 
 from __future__ import annotations
 
-import logging
 import json
-from pathlib import Path
+import logging
+import re
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from typing import Any
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
-from researchclaw.domains.detector import detect_domain
-from researchclaw.experiment.execution_contract import default_contract
-from researchclaw.experiment.protocol import (
-    ComparisonSpec,
-    DecisionRule,
-    ExperimentProtocol,
-    MetricSpec,
-    parse_hypotheses_md,
-)
-from researchclaw.experiment.workspace import TaskSpec
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._helpers import (
     StageResult,
@@ -30,59 +23,78 @@ from researchclaw.prompts import PromptManager
 
 logger = logging.getLogger(__name__)
 
-_MINIMAL_INTENT_MD = (
-    "# Experiment Design Intent\n\n"
-    "> Advisory human-review artifact. Not consumed by Stage 10+. "
-    "Edits here do not alter experiment_protocol.json or task_spec.yaml.\n\n"
-    "## What This Experiment Does\n_(pending - see experiment_protocol.json)_\n\n"
-    "## How It Will Be Run\n_(pending)_\n\n"
-    "## Metrics And Success Criteria\n_(pending)_\n\n"
-    "## Review Notes\n- Confirm the experiment matches the stated hypotheses.\n"
+EXPECTED_OUTPUTS_SCHEMA_VERSION = "researchclaw.expected_outputs.v1"
+_PLAN_REQUIRED_SECTIONS = (
+    ("hypothes", "Hypotheses"),
+    ("baseline", "Baselines"),
+    ("ablation", "Ablations"),
+    ("metric", "Metrics"),
+    ("decision", "Decision Criteria"),
+    ("expected output", "Expected Outputs"),
 )
+_HEADING_RE = re.compile(r"^(#{2,3})\s+(?P<title>.+?)\s*$", re.MULTILINE)
 
 
-def _execute_experiment_task_spec(
-    stage_dir: Path,
-    run_dir: Path,
-    config: RCConfig,
-    adapters: AdapterBundle,
-    *,
-    llm: LLMClient | None = None,
-    prompts: PromptManager | None = None,
-) -> StageResult:
-    _ = adapters, prompts
-    hypotheses_md = _read_prior_artifact(run_dir, "hypotheses.md") or ""
-    hint = _domain_metric_hint(config)
-    protocol = _protocol_from_llm(config, hypotheses_md, hint, llm)
-    if protocol is None:
-        protocol = _template_protocol(config, hypotheses_md, hint)
-    spec = _task_spec_from_protocol(config, protocol, hypotheses_md)
+@dataclass(frozen=True)
+class PlanningContext:
+    hypotheses_md: str
+    topic: str
+    workspace_path: str
+    workspace_tree: str
+    readme: str
+    dependencies: str
+    human_guidance: str
+    hardware_profile: str
 
-    stage_dir.mkdir(parents=True, exist_ok=True)
-    (stage_dir / "experiment_protocol.json").write_text(
-        protocol.to_json(),
-        encoding="utf-8",
+
+def validate_plan_md(text: str) -> list[str]:
+    source = str(text or "")
+    errors: list[str] = []
+    headings = list(_HEADING_RE.finditer(source))
+    lower_titles = [match.group("title").strip().lower() for match in headings]
+    for needle, label in _PLAN_REQUIRED_SECTIONS:
+        if not any(needle in title for title in lower_titles):
+            errors.append(f"missing required section: {label}")
+            continue
+        match = next(
+            item
+            for item in headings
+            if needle in item.group("title").strip().lower()
+        )
+        body = _section_body(source, headings, match)
+        if not body.strip():
+            errors.append(f"required section is empty: {label}")
+    body_text = "\n".join(
+        line
+        for line in source.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
     )
-    (stage_dir / "task_spec.yaml").write_text(spec.to_yaml(), encoding="utf-8")
-    intent_md = _build_intent_md(config, hypotheses_md, protocol, llm)
-    (stage_dir / "experiment_design_intent.md").write_text(
-        intent_md,
-        encoding="utf-8",
-    )
-    return StageResult(
-        stage=Stage.EXPERIMENT_TASK_SPEC,
-        status=StageStatus.DONE,
-        artifacts=(
-            "experiment_protocol.json",
-            "task_spec.yaml",
-            "experiment_design_intent.md",
-        ),
-        evidence_refs=(
-            "stage-09/experiment_protocol.json",
-            "stage-09/task_spec.yaml",
-            "stage-09/experiment_design_intent.md",
-        ),
-    )
+    if len(body_text.strip()) <= 200:
+        errors.append("plan.md is too short to be an actionable experiment plan")
+    return errors
+
+
+def validate_expected_outputs(data: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(data, dict):
+        return ["expected_outputs.json must contain an object"]
+    if data.get("schema_version") != EXPECTED_OUTPUTS_SCHEMA_VERSION:
+        errors.append(
+            f"schema_version must be {EXPECTED_OUTPUTS_SCHEMA_VERSION}"
+        )
+    outputs = data.get("outputs")
+    if not isinstance(outputs, list):
+        errors.append("outputs must be a list")
+        return errors
+    if not outputs:
+        errors.append("outputs must be a non-empty list")
+        return errors
+    for index, item in enumerate(outputs):
+        if not isinstance(item, str) or not item.strip():
+            errors.append(f"outputs[{index}] must be a non-empty string")
+            continue
+        errors.extend(_validate_output_path(item.strip(), index))
+    return errors
 
 
 def _execute_experiment_design(
@@ -94,7 +106,48 @@ def _execute_experiment_design(
     llm: LLMClient | None = None,
     prompts: PromptManager | None = None,
 ) -> StageResult:
-    return _execute_experiment_task_spec(
+    _ = adapters, prompts
+    if llm is None:
+        return _failed("E09_PLAN_INVALID: planning agent unavailable")
+
+    context = _collect_planning_context(config, run_dir)
+    try:
+        plan_md = _generate_plan_md(llm, context)
+        expected_outputs = _generate_expected_outputs(llm, context, plan_md)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Stage 09 planning agent failed: %s", exc)
+        return _failed(f"E09_PLAN_INVALID: planning agent failed: {exc}")
+
+    plan_errors = validate_plan_md(plan_md)
+    output_errors = validate_expected_outputs(expected_outputs)
+    errors = plan_errors + output_errors
+    if errors:
+        return _failed("E09_PLAN_INVALID: " + "; ".join(errors))
+
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    (stage_dir / "plan.md").write_text(plan_md.strip() + "\n", encoding="utf-8")
+    (stage_dir / "expected_outputs.json").write_text(
+        json.dumps(expected_outputs, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return StageResult(
+        stage=Stage.EXPERIMENT_TASK_SPEC,
+        status=StageStatus.DONE,
+        artifacts=("plan.md", "expected_outputs.json"),
+        evidence_refs=("stage-09/plan.md", "stage-09/expected_outputs.json"),
+    )
+
+
+def _execute_experiment_task_spec(
+    stage_dir: Path,
+    run_dir: Path,
+    config: RCConfig,
+    adapters: AdapterBundle,
+    *,
+    llm: LLMClient | None = None,
+    prompts: PromptManager | None = None,
+) -> StageResult:
+    return _execute_experiment_design(
         stage_dir,
         run_dir,
         config,
@@ -104,306 +157,145 @@ def _execute_experiment_design(
     )
 
 
-def _domain_metric_hint(config: RCConfig) -> tuple[str, str]:
-    try:
-        profile = detect_domain(topic=str(config.research.topic or ""))
-        name = str(profile.default_metric_key or "").strip() or "primary_metric"
-        direction = str(profile.default_metric_direction or "").strip() or "maximize"
-        if direction not in {"maximize", "minimize"}:
-            direction = "maximize"
-        return name, direction
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Stage 09: failed to resolve domain metric hint: %s", exc)
-        return "primary_metric", "maximize"
+def _collect_planning_context(config: RCConfig, run_dir: Path) -> PlanningContext:
+    workspace = Path(config.experiment.workspace_agent.workspace_path)
+    return PlanningContext(
+        hypotheses_md=_read_prior_artifact(run_dir, "hypotheses.md") or "",
+        topic=str(config.research.topic or ""),
+        workspace_path=str(workspace),
+        workspace_tree=_workspace_tree(workspace),
+        readme=_first_existing_text(workspace, ("README.md", "README.rst", "README.txt")),
+        dependencies=_dependency_text(workspace),
+        human_guidance=_collect_human_guidance(run_dir),
+        hardware_profile=_read_prior_artifact(run_dir, "hardware_profile.json") or "",
+    )
 
 
-def _protocol_from_llm(
-    config: RCConfig,
-    hypotheses_md: str,
-    hint: tuple[str, str],
-    llm: LLMClient | None,
-) -> ExperimentProtocol | None:
-    if llm is None:
-        return None
-    parsed_hypotheses = [item.to_dict() for item in parse_hypotheses_md(hypotheses_md)]
-    schema = {
-        "schema_version": "researchclaw.experiment_protocol.v1",
-        "objective": "string",
-        "hypotheses": [
-            {
-                "id": "H1",
-                "statement": "string",
-                "prediction": "string",
-                "falsification": "string",
-                "rationale": "string",
-                "baselines": ["baseline"],
-            }
-        ],
-        "metrics": [
-            {
-                "name": "designed_metric_name",
-                "direction": "maximize|minimize",
-                "unit": "string",
-                "description": "string",
-                "hypothesis_ids": ["H1"],
-                "is_primary": True,
-            }
-        ],
-        "comparisons": [
-            {
-                "id": "C1",
-                "kind": "baseline_vs_treatment|conditions|ablation",
-                "baseline": "string",
-                "treatment": "string",
-                "conditions": ["control", "treatment"],
-                "metric": "designed_metric_name",
-                "hypothesis_ids": ["H1"],
-            }
-        ],
-        "decision_rules": [
-            {
-                "hypothesis_id": "H1",
-                "metric": "designed_metric_name",
-                "comparator": "gt|gte|lt|lte|delta_gt|delta_lt|abs_delta_lt|within_pct",
-                "threshold": 0.0,
-                "baseline_metric": "",
-                "supported_if": "pass",
-                "description": "string",
-            }
-        ],
-    }
+def _generate_plan_md(llm: LLMClient, context: PlanningContext) -> str:
     prompt = (
-        "Design a ResearchClaw experiment protocol as JSON only.\n"
-        "The protocol must translate the hypotheses into executable metrics, "
-        "comparisons, and decision rules. Design the metric from the hypothesis; "
-        "the domain metric hint is only a starting point and may be overridden "
-        "if a more scientific metric is needed.\n\n"
-        f"Topic: {config.research.topic}\n"
-        f"Domain metric hint: {hint[0]} ({hint[1]})\n"
-        "Parsed hypotheses JSON:\n"
-        f"{json.dumps(parsed_hypotheses, indent=2, sort_keys=True)}\n\n"
-        "Return a JSON object matching this schema:\n"
-        f"{json.dumps(schema, indent=2, sort_keys=True)}"
+        "You are a read-only experiment planning agent. Inspect the supplied "
+        "workspace context and research context, then write only plan.md content. "
+        "Do not write code. Do not propose editing files yourself.\n\n"
+        "The plan must include sections for Hypotheses, Baselines, Ablations, "
+        "Metrics, Decision Criteria, and Expected Outputs. Be specific enough "
+        "for a later code agent to implement the experiment without inventing "
+        "a new design.\n\n"
+        f"Topic:\n{context.topic}\n\n"
+        f"Hypotheses:\n{context.hypotheses_md}\n\n"
+        f"Human guidance:\n{context.human_guidance}\n\n"
+        f"Hardware profile:\n{context.hardware_profile}\n\n"
+        f"Workspace path:\n{context.workspace_path}\n\n"
+        f"Workspace tree:\n{context.workspace_tree}\n\n"
+        f"README:\n{context.readme}\n\n"
+        f"Dependencies:\n{context.dependencies}\n"
     )
+    response = _chat_with_prompt(
+        llm,
+        "You write concise, actionable experiment plans in Markdown.",
+        prompt,
+        json_mode=False,
+        max_tokens=4000,
+    )
+    return str(getattr(response, "content", "") or "").strip()
+
+
+def _generate_expected_outputs(
+    llm: LLMClient,
+    context: PlanningContext,
+    plan_md: str,
+) -> dict[str, Any]:
+    prompt = (
+        "Based on the experiment plan below, return JSON only. The JSON must "
+        "have schema_version 'researchclaw.expected_outputs.v1' and an outputs "
+        "array listing relative workspace paths that the later experiment run "
+        "must produce. Do not include metric schemas.\n\n"
+        f"Workspace path: {context.workspace_path}\n\n"
+        f"Plan:\n{plan_md}\n"
+    )
+    response = _chat_with_prompt(
+        llm,
+        "You output only valid JSON for expected experiment output paths.",
+        prompt,
+        json_mode=True,
+        max_tokens=1000,
+    )
+    payload = _safe_json_loads(str(getattr(response, "content", "") or ""), None)
+    if not isinstance(payload, dict):
+        raise ValueError("planning agent did not return a JSON object")
+    return payload
+
+
+def _section_body(source: str, headings: list[re.Match[str]], match: re.Match[str]) -> str:
+    index = headings.index(match)
+    start = match.end()
+    end = headings[index + 1].start() if index + 1 < len(headings) else len(source)
+    return source[start:end].strip()
+
+
+def _validate_output_path(path: str, index: int) -> list[str]:
+    errors: list[str] = []
+    pure = PurePosixPath(path.replace("\\", "/"))
+    if pure.is_absolute() or Path(path).is_absolute():
+        errors.append(f"outputs[{index}] must be a relative path, not absolute")
+    if ".." in pure.parts:
+        errors.append(f"outputs[{index}] must not contain ..")
+    if pure.parts and pure.parts[0] in {".git", ".researchclaw", "__pycache__"}:
+        errors.append(f"outputs[{index}] must not target {pure.parts[0]}")
+    if ".git" in pure.parts:
+        errors.append(f"outputs[{index}] must not target .git")
+    return errors
+
+
+def _workspace_tree(workspace: Path, *, max_entries: int = 200) -> str:
+    if not workspace.is_dir():
+        return "(workspace not found)"
+    entries: list[str] = []
+    for path in sorted(workspace.rglob("*")):
+        rel = path.relative_to(workspace)
+        if any(part in {".git", ".researchclaw", "__pycache__"} for part in rel.parts):
+            continue
+        entries.append(rel.as_posix() + ("/" if path.is_dir() else ""))
+        if len(entries) >= max_entries:
+            entries.append("(truncated)")
+            break
+    return "\n".join(entries) if entries else "(empty workspace)"
+
+
+def _first_existing_text(workspace: Path, names: tuple[str, ...]) -> str:
+    for name in names:
+        path = workspace / name
+        if path.is_file():
+            return _read_text_limited(path)
+    return ""
+
+
+def _dependency_text(workspace: Path) -> str:
+    parts: list[str] = []
+    for name in ("pyproject.toml", "requirements.txt", "setup.py", "environment.yml"):
+        path = workspace / name
+        if path.is_file():
+            parts.append(f"## {name}\n{_read_text_limited(path)}")
+    return "\n\n".join(parts)
+
+
+def _collect_human_guidance(run_dir: Path) -> str:
+    parts: list[str] = []
+    for path in sorted(run_dir.glob("stage-*/hitl_guidance.md")):
+        parts.append(f"## {path.parent.name}\n{_read_text_limited(path)}")
+    return "\n\n".join(parts)
+
+
+def _read_text_limited(path: Path, limit: int = 4000) -> str:
     try:
-        response = _chat_with_prompt(
-            llm,
-            "You output only valid JSON for an experiment protocol.",
-            prompt,
-            json_mode=True,
-            max_tokens=2048,
-        )
-        payload = _safe_json_loads(response.content, None)
-        if not isinstance(payload, dict):
-            return None
-        protocol = ExperimentProtocol.from_dict(payload)
-        warnings = protocol.validate()
-        for warning in warnings:
-            logger.warning("Stage 09 protocol validation warning: %s", warning)
-        return protocol
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Stage 09: failed to parse LLM protocol: %s", exc)
-        return None
+        return path.read_text(encoding="utf-8")[:limit]
+    except OSError:
+        return ""
 
 
-def _template_protocol(
-    config: RCConfig,
-    hypotheses_md: str,
-    hint: tuple[str, str],
-) -> ExperimentProtocol:
-    hypotheses = parse_hypotheses_md(hypotheses_md)
-    metric = MetricSpec(
-        name=hint[0],
-        direction=hint[1],
-        description="Primary metric selected from the detected domain profile.",
-        hypothesis_ids=tuple(item.id for item in hypotheses),
-        is_primary=True,
+def _failed(error: str) -> StageResult:
+    return StageResult(
+        stage=Stage.EXPERIMENT_TASK_SPEC,
+        status=StageStatus.FAILED,
+        artifacts=(),
+        error=error,
     )
-    comparison = ComparisonSpec(
-        id="C1",
-        baseline="baseline",
-        treatment="proposed",
-        conditions=("baseline", "proposed"),
-        metric=metric.name,
-        hypothesis_ids=tuple(item.id for item in hypotheses),
-    )
-    comparator = "gt" if metric.direction == "maximize" else "lt"
-    return ExperimentProtocol(
-        objective=f"Design and execute an experiment for topic: {config.research.topic}",
-        hypotheses=hypotheses,
-        metrics=(metric,),
-        comparisons=(comparison,),
-        decision_rules=tuple(
-            DecisionRule(
-                hypothesis_id=hypothesis.id,
-                metric=metric.name,
-                comparator=comparator,
-                threshold=0.0,
-                supported_if="pass",
-                description=(
-                    f"Support {hypothesis.id} when {metric.name} satisfies "
-                    f"{comparator} 0.0 under the planned comparison."
-                ),
-            )
-            for hypothesis in hypotheses
-        ),
-    )
-
-
-def _task_spec_from_protocol(
-    config: RCConfig,
-    protocol: ExperimentProtocol,
-    hypotheses_md: str,
-) -> TaskSpec:
-    primary = protocol.primary_metric()
-    objective = (
-        f"Implement and evaluate the Experiment Protocol for topic: {config.research.topic}."
-    )
-    if protocol.objective.strip():
-        objective += "\n\nProtocol objective:\n" + protocol.objective.strip()
-    if hypotheses_md.strip():
-        objective += "\n\nHypotheses:\n" + hypotheses_md.strip()
-    objective += "\n\nProtocol artifact: stage-09/experiment_protocol.json"
-    return TaskSpec(
-        workspace=_workspace_path(config),
-        objective=objective,
-        constraints=[
-            "Use the existing workspace; do not create a fresh project elsewhere.",
-            f"Respect the configured time budget: {config.experiment.time_budget_sec} seconds.",
-            "Write or update run_manifest.json, then make a final git commit "
-            "that includes every task change, including run_manifest.json.",
-            "Set run_manifest.json code_commit to final HEAD; amend the same "
-            "commit if needed, and finish with clean git status.",
-            f"Report the protocol primary metric `{primary.name}` with direction `{primary.direction}`.",
-        ],
-        primary_metric=primary.name,
-        metric_direction=primary.direction,
-        allowed_scope=["."],
-        forbidden_scope=[".git/", ".researchclaw/"],
-        expected_outputs=["outputs/metrics.json"],
-        execution_contract=default_contract(
-            primary_metric=primary.name,
-            metric_direction=primary.direction,
-            expected_outputs=["outputs/metrics.json"],
-        ),
-    )
-
-
-def _template_intent_md(
-    config: RCConfig,
-    hypotheses_md: str,
-    protocol: ExperimentProtocol,
-) -> str:
-    """Deterministic prose fallback for the human-review gate artifact."""
-    topic = str(getattr(config.research, "topic", "") or "").strip()
-    if not topic:
-        topic = "this research topic"
-    hypotheses = parse_hypotheses_md(hypotheses_md)
-    primary = protocol.primary_metric()
-    if hypotheses:
-        hypothesis_lines = "\n".join(
-            f"- {hypothesis.id}: {hypothesis.statement}"
-            for hypothesis in hypotheses
-            if hypothesis.statement
-        )
-    else:
-        hypothesis_lines = (
-            "- (no explicit hypotheses parsed; see experiment_protocol.json)"
-        )
-    return (
-        "# Experiment Design Intent\n\n"
-        "> Advisory human-review artifact. Not consumed by Stage 10+. "
-        "Edits here do not alter experiment_protocol.json or task_spec.yaml.\n\n"
-        "## What This Experiment Does\n"
-        f"This experiment investigates **{topic}**. It aims to test the following "
-        "hypotheses:\n"
-        f"{hypothesis_lines}\n\n"
-        "## How It Will Be Run\n"
-        "A code agent implements and evaluates the design in the configured "
-        "workspace, then reports the primary metric. The machine-readable plan "
-        "lives in `task_spec.yaml` and `experiment_protocol.json` (this note "
-        "does not replace them).\n\n"
-        "## Metrics And Success Criteria\n"
-        f"The primary metric is **{primary.name}** (direction: {primary.direction}). "
-        "The experiment is considered to support a hypothesis when the planned "
-        "comparison moves this metric in the intended direction per the "
-        "protocol's decision rules.\n\n"
-        "## Review Notes\n"
-        "- Confirm the primary metric genuinely reflects the hypotheses.\n"
-        "- Check the design is feasible within the configured time budget.\n"
-        "- This file is advisory only; approving the gate approves the machine "
-        "spec, not this prose.\n"
-    )
-
-
-def _intent_md_from_llm(
-    config: RCConfig,
-    hypotheses_md: str,
-    protocol: ExperimentProtocol,
-    llm: LLMClient | None,
-) -> str | None:
-    if llm is None:
-        return None
-    topic = str(getattr(config.research, "topic", "") or "").strip()
-    primary = protocol.primary_metric()
-    hypothesis_excerpt = hypotheses_md.strip()[:2000]
-    system = (
-        "You write a concise, human-facing experiment design intent note in "
-        "Markdown for a scientific reviewer. Use plain prose. No code blocks, "
-        "no JSON."
-    )
-    user = (
-        "Write a short Markdown note that helps a reviewer quickly approve or "
-        "reject an experiment design at a gate. Use EXACTLY these four sections "
-        "as H2 headers, in this order:\n"
-        "## What This Experiment Does\n"
-        "## How It Will Be Run\n"
-        "## Metrics And Success Criteria\n"
-        "## Review Notes\n\n"
-        "State clearly that the note is advisory and is not consumed by Stage 10+.\n\n"
-        f"Topic: {topic}\n"
-        f"Primary metric: {primary.name} (direction: {primary.direction})\n"
-        "Hypotheses (markdown excerpt):\n"
-        f"{hypothesis_excerpt}\n"
-    )
-    try:
-        response = _chat_with_prompt(
-            llm,
-            system,
-            user,
-            json_mode=False,
-            max_tokens=1200,
-        )
-        text = str(getattr(response, "content", "") or "").strip()
-        return text or None
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Stage 09: intent MD LLM generation failed: %s", exc)
-        return None
-
-
-def _build_intent_md(
-    config: RCConfig,
-    hypotheses_md: str,
-    protocol: ExperimentProtocol,
-    llm: LLMClient | None,
-) -> str:
-    """Return non-empty Markdown for human review without failing Stage 9."""
-    try:
-        text = _intent_md_from_llm(config, hypotheses_md, protocol, llm)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Stage 09: intent MD generation error: %s", exc)
-        text = None
-    if not text or not text.strip():
-        try:
-            text = _template_intent_md(config, hypotheses_md, protocol)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Stage 09: intent MD template failed: %s", exc)
-            text = None
-    if not text or not text.strip():
-        text = _MINIMAL_INTENT_MD
-    return text.strip() + "\n"
-
-
-def _workspace_path(config: RCConfig) -> str:
-    workspace_agent = getattr(config.experiment, "workspace_agent", None)
-    return str(getattr(workspace_agent, "workspace_path", "."))

@@ -51,6 +51,7 @@ class ACPConfig:
     timeout_sec: int = 1800  # per-prompt timeout
     base_url: str = ""
     api_key_env: str = ""
+    model_provider: str = ""
     model: str = ""
     max_retries: int = 3
     debate_max_rounds: int = 2
@@ -108,6 +109,7 @@ class ACPClient:
             timeout_sec=getattr(acp, "timeout_sec", 1800),
             base_url=getattr(acp, "base_url", ""),
             api_key_env=getattr(acp, "api_key_env", ""),
+            model_provider=getattr(acp, "model_provider", ""),
             model=getattr(rc_config.llm, "primary_model", ""),
             max_retries=getattr(acp, "max_retries", 3),
             debate_max_rounds=getattr(acp, "debate_max_rounds", 2),
@@ -301,12 +303,12 @@ class ACPClient:
         return "", ""
 
     def _codex_acp_config(self) -> str:
-        provider_name = "custom-gateway"
+        provider_name = self.config.model_provider or "custom-gateway"
         config: dict[str, Any] = {
             "model_provider": provider_name,
             "model_providers": {
                 provider_name: {
-                    "name": "Custom Gateway",
+                    "name": provider_name,
                     "base_url": self.config.base_url,
                     "env_key": self.config.api_key_env,
                     "requires_openai_auth": False,
@@ -332,7 +334,7 @@ class ACPClient:
             and self.config.base_url
             and self.config.api_key_env
         ):
-            env["MODEL_PROVIDER"] = "custom-gateway"
+            env["MODEL_PROVIDER"] = self.config.model_provider or "custom-gateway"
             env["CODEX_CONFIG"] = self._codex_acp_config()
         return env
 
@@ -692,12 +694,19 @@ class ACPClient:
     def _extract_response(raw_output: str | None) -> str:
         """Extract the agent's actual response from acpx output.
 
-        Strips acpx metadata lines ([client], [acpx], [tool], [done])
-        and their continuation lines (indented or sub-field lines like
-        ``input:``, ``output:``, ``files:``, ``kind:``).
+        acpx/Codex may return either plain text with acpx metadata markers or
+        JSONL event records replaying one or more session turns.  For JSONL,
+        return the final assistant/final-answer text from the current output
+        stream; otherwise strip acpx metadata lines ([client], [acpx], [tool],
+        [done]) and their continuation lines.
         """
         if not raw_output:
             return ""
+
+        structured = ACPClient._extract_structured_response(raw_output)
+        if structured is not None:
+            return structured
+
         lines: list[str] = []
         in_tool_block = False
         for line in raw_output.splitlines():
@@ -724,6 +733,93 @@ class ACPClient:
             lines.pop()
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _extract_structured_response(raw_output: str) -> str | None:
+        """Return the last assistant/final-answer text from JSONL output."""
+        assistant_messages: list[str] = []
+        task_complete_messages: list[str] = []
+
+        for raw_line in raw_output.splitlines():
+            line = raw_line.strip()
+            if not line or not line.startswith("{"):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+
+            text = ACPClient._assistant_text_from_event(event)
+            if text:
+                assistant_messages.append(text)
+                continue
+
+            complete_text = ACPClient._task_complete_text_from_event(event)
+            if complete_text:
+                task_complete_messages.append(complete_text)
+
+        if assistant_messages:
+            return assistant_messages[-1].strip()
+        if task_complete_messages:
+            return task_complete_messages[-1].strip()
+        return None
+
+    @staticmethod
+    def _assistant_text_from_event(event: dict[str, Any]) -> str | None:
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            return None
+
+        event_type = event.get("type")
+        payload_type = payload.get("type")
+        if event_type == "event_msg" and payload_type == "agent_message":
+            message = payload.get("message")
+            if isinstance(message, str) and message.strip():
+                return message
+
+        if (
+            event_type == "response_item"
+            and payload_type == "message"
+            and payload.get("role") == "assistant"
+        ):
+            text = ACPClient._text_from_content(payload.get("content"))
+            if text.strip():
+                return text
+
+        return None
+
+    @staticmethod
+    def _task_complete_text_from_event(event: dict[str, Any]) -> str | None:
+        payload = event.get("payload")
+        if (
+            event.get("type") == "event_msg"
+            and isinstance(payload, dict)
+            and payload.get("type") == "task_complete"
+        ):
+            message = payload.get("last_agent_message")
+            if isinstance(message, str) and message.strip():
+                return message
+        return None
+
+    @staticmethod
+    def _text_from_content(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, dict):
+            text = content.get("text")
+            return text if isinstance(text, str) else ""
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+            return "".join(parts)
+        return ""
 
     @staticmethod
     def _messages_to_prompt(

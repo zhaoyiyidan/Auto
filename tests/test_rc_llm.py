@@ -641,6 +641,126 @@ def test_acp_codex_env_sets_codex_acp_config_for_custom_provider(
     assert "secret-key" not in env["CODEX_CONFIG"]
 
 
+def test_acp_codex_env_uses_configured_model_provider(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from researchclaw.llm.acp_client import ACPClient, ACPConfig
+
+    monkeypatch.setenv("A_MINIMAX_API_KEY", "secret-key")
+
+    client = ACPClient(
+        ACPConfig(
+            agent="codex",
+            base_url="https://provider.example.com/v1",
+            api_key_env="A_MINIMAX_API_KEY",
+            model_provider="minimax",
+            model="gpt-5.5",
+        )
+    )
+
+    env = client._build_env()
+    codex_config = json.loads(env["CODEX_CONFIG"])
+
+    assert env["MODEL_PROVIDER"] == "minimax"
+    assert codex_config["model_provider"] == "minimax"
+    assert list(codex_config["model_providers"]) == ["minimax"]
+    assert codex_config["model_providers"]["minimax"]["env_key"] == "A_MINIMAX_API_KEY"
+    assert "secret-key" not in env["CODEX_CONFIG"]
+
+
+def test_acp_extract_response_uses_last_codex_jsonl_assistant_message():
+    from researchclaw.llm.acp_client import ACPClient
+
+    stale_plan = "# Hypotheses\n\nOld plan content that is not JSON."
+    expected_json = (
+        '{"schema_version":"researchclaw.expected_outputs.v1",'
+        '"outputs":["outputs/results_by_condition.csv",'
+        '"outputs/summary_by_condition.csv",'
+        '"outputs/decision_summary.json","outputs/run_manifest.json"]}'
+    )
+    raw_output = "\n".join(
+        [
+            "OK",
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "agent_message",
+                        "message": stale_plan,
+                        "phase": "final_answer",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": stale_plan}],
+                        "phase": "final_answer",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_started", "turn_id": "next-turn"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "agent_message",
+                        "message": expected_json,
+                        "phase": "final_answer",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": expected_json}],
+                        "phase": "final_answer",
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": expected_json,
+                    },
+                }
+            ),
+        ]
+    )
+
+    assert ACPClient._extract_response(raw_output) == expected_json
+
+
+def test_acp_extract_response_falls_back_to_plain_acpx_text():
+    from researchclaw.llm.acp_client import ACPClient
+
+    raw_output = "\n".join(
+        [
+            "[client] connected",
+            "[tool] shell",
+            "  input: ignored",
+            "  output: ignored",
+            "plain answer",
+            "[done]",
+        ]
+    )
+
+    assert ACPClient._extract_response(raw_output) == "plain answer"
+
+
 # ---------------------------------------------------------------------------
 # ACP error-surfacing + preflight round-trip (bug #1 & #2)
 # ---------------------------------------------------------------------------

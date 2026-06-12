@@ -10,7 +10,6 @@ import pytest
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
-from researchclaw.experiment.protocol import ExperimentProtocol, MetricSpec
 from researchclaw.pipeline import executor as rc_executor
 from researchclaw.pipeline import runner as rc_runner
 from researchclaw.pipeline.executor import StageResult
@@ -1939,16 +1938,24 @@ def _make_stage14_summary(run_dir: Path, suffix: str, pm_value: float) -> None:
 def _write_stage9_metric_protocol(run_dir: Path, *, direction: str) -> None:
     d = run_dir / "stage-09"
     d.mkdir(parents=True, exist_ok=True)
-    (d / "experiment_protocol.json").write_text(
-        ExperimentProtocol(
-            metrics=(
-                MetricSpec(
-                    name="primary_metric",
-                    direction=direction,
-                    is_primary=True,
-                ),
-            )
-        ).to_json(),
+    (d / "plan.md").write_text(
+        "# Experiment Plan\n\n"
+        "## Hypotheses\nH1 evaluates the candidate experiment.\n\n"
+        "## Baselines\nCompare against the baseline condition.\n\n"
+        "## Ablations\nRemove the candidate intervention.\n\n"
+        "## Metrics\nUse the experiment output values; direction: "
+        f"{direction}.\n\n"
+        "## Decision Criteria\nChoose the run that satisfies the plan.\n\n"
+        "## Expected Outputs\noutputs/results.json\n",
+        encoding="utf-8",
+    )
+    (d / "expected_outputs.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "researchclaw.expected_outputs.v1",
+                "outputs": ["outputs/results.json"],
+            }
+        ),
         encoding="utf-8",
     )
 

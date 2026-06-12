@@ -7,12 +7,6 @@ import pytest
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
-from researchclaw.experiment.protocol import (
-    DecisionRule,
-    ExperimentProtocol,
-    HypothesisSpec,
-    MetricSpec,
-)
 from researchclaw.pipeline.contracts import CONTRACTS
 from researchclaw.pipeline.stages import Stage
 
@@ -67,22 +61,26 @@ def _write_analysis(run_dir: Path) -> None:
     )
 
 
-def _write_protocol(run_dir: Path, *, comparator: str = "gt", threshold: float = 0.5) -> None:
+def _write_plan(run_dir: Path) -> None:
     stage9 = run_dir / "stage-09"
     stage9.mkdir(parents=True, exist_ok=True)
-    (stage9 / "experiment_protocol.json").write_text(
-        ExperimentProtocol(
-            hypotheses=(HypothesisSpec(id="H1", statement="Metric should pass."),),
-            metrics=(MetricSpec(name="score", direction="maximize", is_primary=True),),
-            decision_rules=(
-                DecisionRule(
-                    hypothesis_id="H1",
-                    metric="score",
-                    comparator=comparator,
-                    threshold=threshold,
-                ),
-            ),
-        ).to_json(),
+    (stage9 / "plan.md").write_text(
+        "# Experiment Plan\n\n"
+        "## Hypotheses\nMetric should pass.\n\n"
+        "## Baselines\nCompare against a baseline run.\n\n"
+        "## Ablations\nRemove the main treatment.\n\n"
+        "## Metrics\nUse score.\n\n"
+        "## Decision Criteria\nProceed when score clears the planned threshold.\n\n"
+        "## Expected Outputs\noutputs/results.json\n",
+        encoding="utf-8",
+    )
+    (stage9 / "expected_outputs.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "researchclaw.expected_outputs.v1",
+                "outputs": ["outputs/results.json"],
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -189,13 +187,13 @@ def test_standard_path_offline_writes_transparent_unavailable_review(
     assert "## Short Rationale\n" not in content
 
 
-def test_hypothesis_protocol_path_offline_writes_decision_review(
+def test_plan_path_offline_writes_decision_review(
     tmp_path: Path,
 ) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     _write_analysis(run_dir)
-    _write_protocol(run_dir)
+    _write_plan(run_dir)
 
     result = _run_decision(tmp_path, run_dir, llm=None)
 

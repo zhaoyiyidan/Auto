@@ -12,7 +12,7 @@ def _bundle() -> dict[str, object]:
         "stage_dir": "/tmp/run/stage-14",
         "workspace_path": "/tmp/workspace",
         "default_inputs": [
-            {"label": "task_spec", "path": "/tmp/run/stage-09/task_spec.yaml", "exists": True}
+            {"label": "experiment_plan", "path": "/tmp/run/stage-09/plan.md", "exists": True}
         ],
         "optional_inputs": [],
         "result_files": [

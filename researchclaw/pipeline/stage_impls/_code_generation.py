@@ -46,6 +46,31 @@ def _rendered_prompt_text(system: str, user: str) -> str:
     return f"{system}\n\n{user}" if system else user
 
 
+def _check_rl_compatibility(code: str) -> list[str]:
+    """Return obvious RL algorithm/environment compatibility warnings."""
+    source = str(code or "").lower()
+    if "dqn" not in source:
+        return []
+    continuous_envs = (
+        "pendulum",
+        "halfcheetah",
+        "hopper",
+        "walker2d",
+        "ant-",
+        "humanoid",
+        "bipedalwalker",
+        "mountaincarcontinuous",
+        "lunarlandercontinuous",
+    )
+    matched = next((env for env in continuous_envs if env in source), "")
+    if matched:
+        return [
+            "DQN is incompatible with continuous-action environments"
+            f" such as {matched}."
+        ]
+    return []
+
+
 def _workspace_codegen_prompt(
     *,
     topic: str,

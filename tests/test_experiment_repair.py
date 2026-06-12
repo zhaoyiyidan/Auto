@@ -218,17 +218,26 @@ class TestLoadExperimentCode:
         assert "stage-10/run_manifest.json" in code
         assert "python train.py" in code["stage-10/run_manifest.json"]
 
-    def test_loads_task_spec_when_manifest_missing(self, tmp_path):
+    def test_loads_plan_when_manifest_missing(self, tmp_path):
         stage_dir = tmp_path / "stage-09"
         stage_dir.mkdir(parents=True)
-        (stage_dir / "task_spec.yaml").write_text(
-            "objective: unlock files\n",
+        (stage_dir / "plan.md").write_text(
+            "# Experiment Plan\n\nunlock files\n",
+            encoding="utf-8",
+        )
+        (stage_dir / "expected_outputs.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "researchclaw.expected_outputs.v1",
+                    "outputs": ["outputs/results.json"],
+                }
+            ),
             encoding="utf-8",
         )
 
         code = _load_experiment_code(tmp_path)
-        assert "stage-09/task_spec.yaml" in code
-        assert "unlock files" in code["stage-09/task_spec.yaml"]
+        assert "stage-09/plan.md" in code
+        assert "unlock files" in code["stage-09/plan.md"]
 
     def test_empty_when_no_code(self, tmp_path):
         code = _load_experiment_code(tmp_path)

@@ -11,7 +11,6 @@ from researchclaw.experiment.workspace import (
     ExperimentRecord,
     LaunchCommand,
     ManifestValidation,
-    MetricsSpec,
     ResultArtifact,
     ResultArtifacts,
     ResourceSpec,
@@ -115,19 +114,16 @@ class TestRunManifest:
 
         assert loaded == manifest
 
-    def test_round_trips_schema_version_and_metrics(self) -> None:
+    def test_round_trips_schema_version(self) -> None:
         manifest = RunManifest(
             code_commit="abc123",
             launch=LaunchCommand(command="python train.py"),
             result_paths=["outputs/metrics.json"],
-            metrics=MetricsSpec(primary="accuracy", direction="maximize"),
         )
 
         loaded = RunManifest.from_json(manifest.to_json())
 
         assert loaded.schema_version == "researchclaw.run_manifest.v1"
-        assert loaded.metrics.primary == "accuracy"
-        assert loaded.metrics.direction == "maximize"
 
     def test_from_json_defaults_legacy_payload(self) -> None:
         legacy = (
@@ -138,16 +134,6 @@ class TestRunManifest:
         manifest = RunManifest.from_json(legacy)
 
         assert manifest.schema_version == "researchclaw.run_manifest.v1"
-        assert manifest.metrics.primary == "primary_metric"
-
-    def test_rejects_bad_metric_direction(self) -> None:
-        with pytest.raises((TypeError, ValueError)):
-            RunManifest(
-                code_commit="s",
-                launch=LaunchCommand(command="x"),
-                result_paths=[],
-                metrics=MetricsSpec(primary="a", direction="sideways"),
-            )
 
 
 class TestWorkspaceAgentResult:
@@ -327,7 +313,7 @@ class TestExecutionRecord:
             log_path="logs/run.log",
             result_paths=["outputs/metrics.json"],
             result_hashes={"outputs/metrics.json": "sha256"},
-            metrics={"accuracy": 0.91},
+            missing_expected_outputs=[],
             elapsed_sec=3.5,
             waited=True,
             recorded_at="2026-05-29T00:00:00Z",
@@ -336,7 +322,7 @@ class TestExecutionRecord:
         loaded = ExecutionRecord.from_dict(record.to_dict())
 
         assert loaded == record
-        assert loaded.metrics["accuracy"] == 0.91
+        assert loaded.missing_expected_outputs == []
 
 
 class TestResultArtifacts:

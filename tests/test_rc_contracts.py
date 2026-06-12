@@ -71,12 +71,12 @@ def test_workspace_native_stage_contracts_are_exact():
     expected = {
         Stage.EXPERIMENT_TASK_SPEC: (
             ("hypotheses.md",),
-            ("experiment_protocol.json", "task_spec.yaml", "experiment_design_intent.md"),
-            "E09_TASKSPEC_REJECT",
+            ("plan.md", "expected_outputs.json"),
+            "E09_PLAN_INVALID",
             0,
         ),
         Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR: (
-            ("task_spec.yaml",),
+            ("plan.md", "expected_outputs.json"),
             ("stage-10-workspace-agent-result.json", "run_manifest.json"),
             "E10_CODE_AGENT_FAIL",
             2,
@@ -114,22 +114,18 @@ def test_workspace_native_stage_contracts_are_exact():
         assert contract.max_retries == max_retries
 
 
-def test_stage9_intent_md_is_last_output_and_machine_files_unchanged():
+def test_stage9_outputs_plan_and_expected_outputs_only():
     contract = CONTRACTS[Stage.EXPERIMENT_TASK_SPEC]
-    # Markdown is the LAST output so the existing machine artifacts keep their
-    # identity, order, and downstream expectations.
-    assert contract.output_files[-1] == "experiment_design_intent.md"
-    assert contract.output_files[:2] == ("experiment_protocol.json", "task_spec.yaml")
+    assert contract.output_files == ("plan.md", "expected_outputs.json")
 
 
 def test_stage9_max_retries_still_zero():
     assert CONTRACTS[Stage.EXPERIMENT_TASK_SPEC].max_retries == 0
 
 
-def test_stage10_input_contract_unchanged_by_intent_md():
+def test_stage10_input_contract_uses_plan_artifacts():
     stage10 = CONTRACTS[Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR]
-    assert stage10.input_files == ("task_spec.yaml",)
-    assert "experiment_design_intent.md" not in stage10.input_files
+    assert stage10.input_files == ("plan.md", "expected_outputs.json")
 
 
 def test_stage_contract_has_no_collider_output_files_field():

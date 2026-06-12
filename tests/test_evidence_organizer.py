@@ -62,14 +62,14 @@ def _seed_bundle_inputs(tmp_path: Path) -> tuple[Path, Path, RCConfig]:
         json.dumps({"accuracy": 0.1}), encoding="utf-8"
     )
 
-    _write_stage_artifact(run_dir, 9, "task_spec.yaml", "objective: test\n")
+    _write_stage_artifact(run_dir, 9, "plan.md", "# Experiment Plan\n")
     _write_stage_artifact(
         run_dir,
         9,
-        "experiment_protocol.json",
+        "expected_outputs.json",
         {
-            "schema_version": "researchclaw.experiment_protocol.v1",
-            "metrics": [{"name": "accuracy", "direction": "maximize", "is_primary": True}],
+            "schema_version": "researchclaw.expected_outputs.v1",
+            "outputs": ["outputs/metrics.json"],
         },
     )
     _write_stage_artifact(
@@ -151,11 +151,11 @@ def test_build_evidence_bundle_lists_current_declared_result_paths_only(
     assert bundle["workspace_path"] == str(workspace.resolve())
 
     defaults = {entry["label"]: entry for entry in bundle["default_inputs"]}
-    assert defaults["task_spec"]["exists"] is True
+    assert defaults["experiment_plan"]["exists"] is True
+    assert defaults["expected_outputs"]["exists"] is True
     assert defaults["run_manifest"]["exists"] is True
     assert defaults["execution_record"]["exists"] is True
     assert defaults["result_artifacts"]["exists"] is True
-    assert defaults["contract_evidence"]["exists"] is True
     assert defaults["experiment_decision"]["exists"] is True
 
     result_paths = [entry["path"] for entry in bundle["result_files"]]
@@ -164,7 +164,6 @@ def test_build_evidence_bundle_lists_current_declared_result_paths_only(
     assert not any("old_smoke" in path for path in result_paths)
 
     optionals = {entry["label"]: entry for entry in bundle["optional_inputs"]}
-    assert optionals["experiment_protocol"]["exists"] is True
     assert optionals["stage_12_local_log"]["exists"] is False
     assert optionals["workspace_agent_result"]["exists"] is False
     assert optionals["manifest_validation"]["exists"] is False
@@ -178,16 +177,16 @@ def test_build_evidence_bundle_lists_current_declared_result_paths_only(
     assert not any("stage-15" in path for path in _all_bundle_paths(bundle))
 
 
-def test_bundle_includes_protocol_when_present(tmp_path: Path) -> None:
+def test_bundle_includes_expected_outputs_when_present(tmp_path: Path) -> None:
     run_dir, _workspace, config = _seed_bundle_inputs(tmp_path)
 
     bundle = build_evidence_bundle(run_dir, config)
-    optionals = {entry["label"]: entry for entry in bundle["optional_inputs"]}
+    defaults = {entry["label"]: entry for entry in bundle["default_inputs"]}
 
-    assert optionals["experiment_protocol"]["exists"] is True
-    assert optionals["experiment_protocol"]["filename"] == "experiment_protocol.json"
-    assert optionals["experiment_protocol"]["path"].endswith(
-        "stage-09/experiment_protocol.json"
+    assert defaults["expected_outputs"]["exists"] is True
+    assert defaults["expected_outputs"]["filename"] == "expected_outputs.json"
+    assert defaults["expected_outputs"]["path"].endswith(
+        "stage-09/expected_outputs.json"
     )
 
 
@@ -197,7 +196,7 @@ def test_build_organizer_prompt_contains_fixed_sections_and_boundaries() -> None
         "stage_dir": "/tmp/run/stage-14",
         "workspace_path": "/tmp/workspace",
         "default_inputs": [
-            {"label": "task_spec", "path": "/tmp/run/stage-09/task_spec.yaml", "exists": True}
+            {"label": "experiment_plan", "path": "/tmp/run/stage-09/plan.md", "exists": True}
         ],
         "optional_inputs": [],
         "result_files": [

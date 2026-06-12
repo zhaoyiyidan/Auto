@@ -238,8 +238,6 @@ def _reproducibility_fields(
         "launch_env": {},
         "resources": {},
         "result_paths": [],
-        "metric_primary": "",
-        "metric_direction": "",
         "job_id": execution_record.get("job_id", ""),
         "elapsed_sec": execution_record.get("elapsed_sec", ""),
         "submitter": execution_record.get("submitter", ""),
@@ -254,8 +252,6 @@ def _reproducibility_fields(
             "launch_env": dict(manifest.launch.env),
             "resources": asdict(manifest.launch.resources),
             "result_paths": list(manifest.result_paths),
-            "metric_primary": manifest.metrics.primary,
-            "metric_direction": manifest.metrics.direction,
         }
     )
     return fields

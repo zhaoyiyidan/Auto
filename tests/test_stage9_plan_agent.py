@@ -120,7 +120,7 @@ def test_stage9_fails_without_planning_agent_instead_of_fallback(tmp_path: Path)
     assert not (stage_dir / "task_spec.yaml").exists()
 
 
-def test_stage9_fails_if_plan_md_missing_sections(tmp_path: Path) -> None:
+def test_stage9_accepts_freeform_plan_md(tmp_path: Path) -> None:
     from researchclaw.pipeline.stage_impls._experiment_design import (
         _execute_experiment_design,
     )
@@ -131,7 +131,7 @@ def test_stage9_fails_if_plan_md_missing_sections(tmp_path: Path) -> None:
     stage_dir = run_dir / "stage-09"
     llm = QueueLLM(
         [
-            "# Plan\n## Hypotheses\nH1 only.\n",
+            "# Plan\nHypothesis: H1 only. Baseline and metric details are prose.\n",
             json.dumps(
                 {
                     "schema_version": "researchclaw.expected_outputs.v1",
@@ -149,8 +149,8 @@ def test_stage9_fails_if_plan_md_missing_sections(tmp_path: Path) -> None:
         llm=llm,
     )
 
-    assert result.status is StageStatus.FAILED
-    assert "baseline" in (result.error or "").lower()
+    assert result.status is StageStatus.DONE
+    assert "H1 only" in (stage_dir / "plan.md").read_text(encoding="utf-8")
 
 
 def test_stage9_fails_if_expected_outputs_invalid(tmp_path: Path) -> None:

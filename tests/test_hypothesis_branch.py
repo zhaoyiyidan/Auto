@@ -191,7 +191,7 @@ def test_validate_branch_runs_stage9_to_stage15_and_writes_attempt_result(
             StageResult(
                 stage=Stage.EXPERIMENT_TASK_SPEC,
                 status=StageStatus.DONE,
-                artifacts=("experiment_protocol.json",),
+                artifacts=("plan.md", "expected_outputs.json"),
             ),
             StageResult(
                 stage=Stage.RESEARCH_DECISION,

@@ -77,6 +77,7 @@ def _workspace_codegen_prompt(
     plan_md: str,
     expected_outputs: list[str],
     manifest_filename: str,
+    prompt_manager: PromptManager | None = None,
 ) -> str:
     expected_json = json.dumps(
         {
@@ -85,23 +86,20 @@ def _workspace_codegen_prompt(
         },
         indent=2,
     )
-    return (
-        "You are a workspace-native code agent working inside an existing git "
-        "repository. Implement the experiment described by Stage 9. Do not "
-        "redesign the experiment.\n\n"
-        f"TOPIC:\n{topic}\n\n"
-        f"STAGE 9 PLAN (plan.md):\n{plan_md}\n\n"
-        f"EXPECTED OUTPUTS (expected_outputs.json):\n{expected_json}\n\n"
-        "You MUST modify the workspace as needed to implement and run this "
-        "experiment. You MUST write or update "
-        f"{manifest_filename}. The manifest result_paths MUST include every "
-        "path listed in expected_outputs.json. Extra result paths are allowed.\n\n"
-        "Required run_manifest.json format example:\n"
-        f"{_run_manifest_schema_example(expected_outputs)}\n\n"
-        "Make a final git commit containing every task change, including the "
-        "manifest. Set code_commit to the final HEAD and finish with clean git "
-        "status."
+    pm = prompt_manager or PromptManager()
+    rendered = pm.sub_prompt(
+        "workspace_codegen",
+        topic=topic,
+        plan_md=plan_md,
+        expected_outputs_json=expected_json,
+        manifest_filename=manifest_filename,
+        manifest_schema_example=pm.block(
+            "manifest_schema_example",
+            manifest_example=_run_manifest_schema_example(expected_outputs),
+        ),
+        stage10_validation_boundary=pm.block("stage10_validation_boundary"),
     )
+    return _rendered_prompt_text(rendered.system, rendered.user)
 
 
 def _repair_or_refine_prompt(
@@ -116,6 +114,7 @@ def _repair_or_refine_prompt(
     execution_record: str = "",
     result_artifacts: str = "",
     diagnosis: str = "",
+    prompt_manager: PromptManager | None = None,
 ) -> str:
     summaries = "\n".join(run_summaries[:20]) if run_summaries else "(no prior runs)"
     request_section = ""
@@ -139,23 +138,24 @@ def _repair_or_refine_prompt(
         },
         indent=2,
     )
-    return (
-        "You are repairing or refining a workspace experiment implementation. "
-        "Do not redesign the Stage 9 experiment plan; fix the implementation "
-        "so it satisfies the plan and expected outputs.\n\n"
-        f"{request_section}"
-        f"TOPIC:\n{topic}\n\n"
-        f"STAGE 9 PLAN:\n{plan_md}\n\n"
-        f"EXPECTED OUTPUTS:\n{expected_json}\n\n"
-        f"PRIOR RUN SUMMARIES:\n{summaries}\n\n"
-        f"PROJECT FILES:\n{json.dumps(project_files[:20], indent=2)}"
-        f"{results_section}\n\n"
-        f"Write or update {manifest_filename}; result_paths must include every "
-        "expected output path. Required run_manifest.json format example:\n"
-        f"{_run_manifest_schema_example(expected_outputs)}\n\n"
-        "Make a final git commit containing every task change and finish with "
-        "clean git status."
+    pm = prompt_manager or PromptManager()
+    rendered = pm.sub_prompt(
+        "workspace_repair",
+        request_section=request_section,
+        topic=topic,
+        plan_md=plan_md,
+        expected_outputs_json=expected_json,
+        run_summaries=summaries,
+        project_files=json.dumps(project_files[:20], indent=2),
+        results_section=results_section,
+        manifest_filename=manifest_filename,
+        manifest_schema_example=pm.block(
+            "manifest_schema_example",
+            manifest_example=_run_manifest_schema_example(expected_outputs),
+        ),
+        stage10_validation_boundary=pm.block("stage10_validation_boundary"),
     )
+    return _rendered_prompt_text(rendered.system, rendered.user)
 
 
 def _execute_code_agent_implement_or_repair(
@@ -217,6 +217,7 @@ def _execute_code_agent_implement_or_repair(
             execution_record=_read_prior_artifact(run_dir, "execution_record.json") or "",
             result_artifacts=_read_prior_artifact(run_dir, "result_artifacts.json") or "",
             diagnosis=diagnosis,
+            prompt_manager=prompts,
         )
     else:
         prompt = _workspace_codegen_prompt(
@@ -224,6 +225,7 @@ def _execute_code_agent_implement_or_repair(
             plan_md=plan_md,
             expected_outputs=expected_outputs,
             manifest_filename=manifest_filename,
+            prompt_manager=prompts,
         )
     agent = workspace_agent_factory.create_workspace_agent(
         config,

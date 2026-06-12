@@ -1010,14 +1010,14 @@ def test_experiment_loop_route_rerun_rejumps_to_12(
     assert (run_dir / "stage-12_v1").is_dir()
 
 
-def test_experiment_loop_revise_task_spec_recurses_from_stage9(
+def test_experiment_loop_unknown_route_stops_without_stage9_reentry(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,
     rc_config: RCConfig,
     adapters: AdapterBundle,
 ) -> None:
     seen: list[Stage] = []
-    routes = iter(["revise_task_spec", "continue"])
+    routes = iter(["unknown_legacy_route", "continue"])
 
     def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
         _ = kwargs
@@ -1030,11 +1030,13 @@ def test_experiment_loop_revise_task_spec_recurses_from_stage9(
     monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
     rc_runner.execute_pipeline(
         run_dir=run_dir,
-        run_id="run-revise-task",
+        run_id="run-unknown-route",
         config=rc_config,
         adapters=adapters,
     )
-    assert seen.count(Stage.EXPERIMENT_TASK_SPEC) >= 2
+    assert seen.count(Stage.EXPERIMENT_TASK_SPEC) == 1
+    assert seen.count(Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR) == 1
+    assert seen.count(Stage.EXPERIMENT_ROUTE_DECISION) == 1
 
 
 def test_experiment_loop_max_iterations_forces_continue(

@@ -363,8 +363,8 @@ def test_max_experiment_iterations_is_three():
 def test_experiment_route_map_targets():
     from researchclaw.pipeline.stages import EXPERIMENT_ROUTE_TARGETS
 
+    assert set(EXPERIMENT_ROUTE_TARGETS) == {"fix_code", "rerun"}
     assert EXPERIMENT_ROUTE_TARGETS["fix_code"] is Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR
-    assert EXPERIMENT_ROUTE_TARGETS["revise_task_spec"] is Stage.EXPERIMENT_TASK_SPEC
     assert EXPERIMENT_ROUTE_TARGETS["rerun"] is Stage.HARNESS_SUBMIT_AND_COLLECT
 
 

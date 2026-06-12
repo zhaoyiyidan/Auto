@@ -87,7 +87,7 @@ def _execute_manifest_validate_and_prepare(
         )
 
     (stage_dir / "run_manifest.json").write_text(
-        json.dumps(manifest_payload, indent=2, sort_keys=True),
+        manifest.to_json() + "\n",
         encoding="utf-8",
     )
     return StageResult(

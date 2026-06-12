@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
+import json
+
 from researchclaw.prompts import PromptManager
 
 
-def _workspace_prompt_kwargs() -> dict[str, str]:
+def _workspace_prompt_kwargs() -> dict[str, object]:
     return {
         "topic": "topic",
-        "exp_plan": "plan",
-        "metric": "accuracy",
-        "pkg_hint": "numpy",
-        "compute_budget": "1 hour",
-        "extra_guidance": "guidance",
+        "plan_md": "plan",
+        "expected_outputs": ["outputs/metrics.json"],
         "manifest_filename": "run_manifest.json",
     }
 
@@ -20,14 +19,22 @@ def _workspace_prompt_kwargs() -> dict[str, str]:
 def _repair_prompt_kwargs() -> dict[str, object]:
     return {
         "topic": "topic",
-        "metric_key": "accuracy",
-        "metric_direction": "maximize",
-        "exp_plan": "plan",
+        "plan_md": "plan",
+        "expected_outputs": ["outputs/metrics.json"],
         "project_files": ["train.py"],
         "run_summaries": ["previous run"],
         "manifest_filename": "run_manifest.json",
         "repair_request": {"reason": "code_defect", "errors": ["accuracy stuck at 0"]},
     }
+
+
+def _extract_run_manifest_example(prompt: str) -> dict[str, object]:
+    marker = "Required run_manifest.json format example"
+    start = prompt.index("{", prompt.index(marker))
+    end = prompt.index("\n\nStage 10 validation boundary", start)
+    payload = json.loads(prompt[start:end])
+    assert isinstance(payload, dict)
+    return payload
 
 
 def test_codegen_catalog_entries_exist() -> None:
@@ -50,6 +57,12 @@ def test_workspace_codegen_prompt_preserves_constraints() -> None:
     assert "MUST NOT run the formal experiment" in prompt
     assert "Required run_manifest.json format example" in prompt
     assert "manifest.code_commit to the final HEAD commit" in prompt
+    assert "schema_version, code_commit, launch.command, launch.cwd" in prompt
+    manifest_example = _extract_run_manifest_example(prompt)
+    assert manifest_example["result_paths"] == ["outputs/metrics.json"]
+    assert "metrics" not in manifest_example
+    assert "primary_metric" not in manifest_example
+    assert "metric_direction" not in manifest_example
 
 
 def test_repair_prompt_preserves_constraints() -> None:
@@ -65,6 +78,10 @@ def test_repair_prompt_preserves_constraints() -> None:
     assert "Stage 10 validation boundary" in prompt
     assert "MUST NOT run the formal experiment" in prompt
     assert "Required run_manifest.json format example" in prompt
+    assert "schema_version, code_commit, launch.command, launch.cwd" in prompt
+    manifest_example = _extract_run_manifest_example(prompt)
+    assert manifest_example["result_paths"] == ["outputs/metrics.json"]
+    assert "metrics" not in manifest_example
 
 
 def test_workspace_codegen_helper_sources_from_catalog(monkeypatch) -> None:

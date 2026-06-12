@@ -39,6 +39,48 @@ class FakeLLMClientWithConfig(FakeLLMClient):
         )
 
 
+VALID_STAGE9_PLAN = """
+# Experiment Plan
+
+## Hypotheses
+H1 predicts that corrected accumulation semantics improve convergence while
+preserving true large-batch update behavior.
+
+## Baselines
+Compare fixed accumulation, true large-batch training, and a no-accumulation
+control using the same optimizer and dataset split.
+
+## Ablations
+Disable corrected clipping, disable corrected scheduler stepping, and disable
+adaptive accumulation so each mechanism is isolated.
+
+## Metrics
+Report time-to-target loss, final validation loss, update cosine similarity, and
+wall-clock runtime for every condition.
+
+## Decision Criteria
+Support H1 only if corrected accumulation improves time-to-target loss by at
+least 10 percent over the best baseline without worse validation loss.
+
+## Expected Outputs
+Write outputs/metrics.json and outputs/summary.md.
+"""
+
+
+class QueueLLMClient:
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = list(responses)
+        self.calls: list[list[dict[str, str]]] = []
+
+    def chat(self, messages: list[dict[str, str]], **kwargs: object):
+        _ = kwargs
+        self.calls.append(messages)
+        from researchclaw.llm.client import LLMResponse
+
+        content = self.responses.pop(0) if self.responses else ""
+        return LLMResponse(content=content, model="queue-model")
+
+
 @pytest.fixture()
 def rc_config(tmp_path: Path) -> RCConfig:
     data = {
@@ -239,14 +281,48 @@ def _extract_run_manifest_example(prompt: str) -> dict[str, Any]:
 
 
 class TestWorkspaceAgentStageWiring:
-    def test_stage9_emits_task_spec_template(
+    def test_stage9_emits_plan_and_expected_outputs(
         self,
         tmp_path: Path,
         run_dir: Path,
         adapters: AdapterBundle,
     ) -> None:
-        from researchclaw.experiment.workspace import TaskSpec
+        cfg = _workspace_agent_rc_config(tmp_path)
+        _write_prior_artifact(run_dir, 8, "hypotheses.md", "# Hypothesis\nImprove X")
+        stage_dir = run_dir / "stage-09"
+        stage_dir.mkdir()
+        expected_outputs = {
+            "schema_version": "researchclaw.expected_outputs.v1",
+            "outputs": ["outputs/metrics.json"],
+        }
+        llm = QueueLLMClient([VALID_STAGE9_PLAN, json.dumps(expected_outputs)])
 
+        result = rc_executor._execute_experiment_design(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=llm,
+        )
+
+        assert result.status is StageStatus.DONE
+        assert result.artifacts == ("plan.md", "expected_outputs.json")
+        assert "corrected accumulation" in (stage_dir / "plan.md").read_text(
+            encoding="utf-8"
+        )
+        assert json.loads(
+            (stage_dir / "expected_outputs.json").read_text(encoding="utf-8")
+        ) == expected_outputs
+        assert not (stage_dir / "task_spec.yaml").exists()
+        assert not (stage_dir / "experiment_protocol.json").exists()
+        assert not (stage_dir / "experiment_design_intent.md").exists()
+
+    def test_stage9_fails_without_planning_agent(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
         cfg = _workspace_agent_rc_config(tmp_path)
         _write_prior_artifact(run_dir, 8, "hypotheses.md", "# Hypothesis\nImprove X")
         stage_dir = run_dir / "stage-09"
@@ -260,55 +336,12 @@ class TestWorkspaceAgentStageWiring:
             llm=None,
         )
 
-        assert result.status is StageStatus.DONE
-        assert result.artifacts == (
-            "experiment_protocol.json",
-            "task_spec.yaml",
-            "experiment_design_intent.md",
-        )
-        spec = TaskSpec.from_path(stage_dir / "task_spec.yaml")
-        assert spec.workspace == cfg.experiment.workspace_agent.workspace_path
-        assert spec.primary_metric == "primary_metric"
-        assert spec.metric_direction == "maximize"
-        assert spec.objective
-        assert spec.expected_outputs
-        assert (stage_dir / "experiment_protocol.json").is_file()
-        intent_md = stage_dir / "experiment_design_intent.md"
-        assert intent_md.is_file()
-        assert intent_md.read_text(encoding="utf-8").strip()
+        assert result.status is StageStatus.FAILED
+        assert "planning agent unavailable" in (result.error or "")
+        assert not (stage_dir / "plan.md").exists()
+        assert not (stage_dir / "expected_outputs.json").exists()
 
-    def test_stage9_intent_md_nonempty_when_llm_none(
-        self,
-        tmp_path: Path,
-        run_dir: Path,
-        adapters: AdapterBundle,
-    ) -> None:
-        cfg = _workspace_agent_rc_config(tmp_path)
-        _write_prior_artifact(run_dir, 8, "hypotheses.md", "# Hypothesis\nImprove X")
-        stage_dir = run_dir / "stage-09"
-        stage_dir.mkdir()
-
-        result = rc_executor._execute_experiment_design(
-            stage_dir,
-            run_dir,
-            cfg,
-            adapters,
-            llm=None,
-        )
-
-        assert result.status is StageStatus.DONE
-        text = (stage_dir / "experiment_design_intent.md").read_text(encoding="utf-8")
-        assert text.strip()
-        for header in (
-            "## What This Experiment Does",
-            "## How It Will Be Run",
-            "## Metrics And Success Criteria",
-            "## Review Notes",
-        ):
-            assert header in text
-        assert "Advisory" in text or "advisory" in text
-
-    def test_stage9_intent_md_is_not_protocol_serialization(
+    def test_stage9_plan_md_is_not_json_serialization(
         self,
         tmp_path: Path,
         run_dir: Path,
@@ -320,25 +353,32 @@ class TestWorkspaceAgentStageWiring:
         _write_prior_artifact(run_dir, 8, "hypotheses.md", "# Hypothesis\nImprove X")
         stage_dir = run_dir / "stage-09"
         stage_dir.mkdir()
+        llm = QueueLLMClient(
+            [
+                VALID_STAGE9_PLAN,
+                json.dumps(
+                    {
+                        "schema_version": "researchclaw.expected_outputs.v1",
+                        "outputs": ["outputs/metrics.json"],
+                    }
+                ),
+            ]
+        )
 
         rc_executor._execute_experiment_design(
             stage_dir,
             run_dir,
             cfg,
             adapters,
-            llm=None,
+            llm=llm,
         )
 
-        md = (stage_dir / "experiment_design_intent.md").read_text(encoding="utf-8")
-        protocol_json = (stage_dir / "experiment_protocol.json").read_text(
-            encoding="utf-8"
-        )
+        md = (stage_dir / "plan.md").read_text(encoding="utf-8")
         assert "schema_version" not in md
-        assert md.strip() != protocol_json.strip()
         with pytest.raises(_json.JSONDecodeError):
             _json.loads(md)
 
-    def test_stage9_intent_md_uses_llm_when_available(
+    def test_stage9_plan_md_uses_llm_when_available(
         self,
         tmp_path: Path,
         run_dir: Path,
@@ -348,13 +388,18 @@ class TestWorkspaceAgentStageWiring:
         _write_prior_artifact(run_dir, 8, "hypotheses.md", "# Hypothesis\nImprove X")
         stage_dir = run_dir / "stage-09"
         stage_dir.mkdir()
-        marker = "INTENT_PROSE_FROM_LLM_MARKER"
-        llm = FakeLLMClient(
-            "## What This Experiment Does\n"
-            f"{marker}\n"
-            "## How It Will Be Run\nrun it\n"
-            "## Metrics And Success Criteria\nf1\n"
-            "## Review Notes\ncheck things\n"
+        marker = "PLAN_PROSE_FROM_LLM_MARKER"
+        plan = VALID_STAGE9_PLAN + f"\n{marker}\n"
+        llm = QueueLLMClient(
+            [
+                plan,
+                json.dumps(
+                    {
+                        "schema_version": "researchclaw.expected_outputs.v1",
+                        "outputs": ["outputs/metrics.json"],
+                    }
+                ),
+            ]
         )
 
         result = rc_executor._execute_experiment_design(
@@ -366,17 +411,15 @@ class TestWorkspaceAgentStageWiring:
         )
 
         assert result.status is StageStatus.DONE
-        md = (stage_dir / "experiment_design_intent.md").read_text(encoding="utf-8")
+        md = (stage_dir / "plan.md").read_text(encoding="utf-8")
         assert marker in md
 
-    def test_stage9_intent_md_never_fails_stage_on_llm_error(
+    def test_stage9_fails_cleanly_on_llm_error(
         self,
         tmp_path: Path,
         run_dir: Path,
         adapters: AdapterBundle,
     ) -> None:
-        from researchclaw.experiment.workspace import TaskSpec
-
         class RaisingLLMClient:
             def chat(self, messages, **kwargs):
                 _ = messages, kwargs
@@ -395,12 +438,10 @@ class TestWorkspaceAgentStageWiring:
             llm=RaisingLLMClient(),
         )
 
-        assert result.status is StageStatus.DONE
-        intent = stage_dir / "experiment_design_intent.md"
-        assert intent.is_file() and intent.read_text(encoding="utf-8").strip()
-        assert (stage_dir / "experiment_protocol.json").is_file()
-        spec = TaskSpec.from_path(stage_dir / "task_spec.yaml")
-        assert spec.objective
+        assert result.status is StageStatus.FAILED
+        assert "planning agent failed" in (result.error or "")
+        assert not (stage_dir / "plan.md").exists()
+        assert not (stage_dir / "expected_outputs.json").exists()
 
     def test_stage9_outputs_satisfy_executor_enforcement(
         self,
@@ -416,62 +457,54 @@ class TestWorkspaceAgentStageWiring:
         _write_prior_artifact(run_dir, 8, "hypotheses.md", "# Hypothesis\nImprove X")
         stage_dir = run_dir / "stage-09"
         stage_dir.mkdir()
+        llm = QueueLLMClient(
+            [
+                VALID_STAGE9_PLAN,
+                json.dumps(
+                    {
+                        "schema_version": "researchclaw.expected_outputs.v1",
+                        "outputs": ["outputs/metrics.json"],
+                    }
+                ),
+            ]
+        )
 
         rc_executor._execute_experiment_design(
             stage_dir,
             run_dir,
             cfg,
             adapters,
-            llm=None,
+            llm=llm,
         )
 
         outputs = _select_output_files(CONTRACTS[Stage.EXPERIMENT_TASK_SPEC], cfg)
-        assert "experiment_design_intent.md" in outputs
+        assert outputs == ("plan.md", "expected_outputs.json")
         for name in outputs:
             path = stage_dir / name
             assert path.exists() and path.stat().st_size > 0
 
-    def test_stage9_uses_llm_task_spec_fields(
+    def test_stage9_uses_llm_plan_and_expected_outputs(
         self,
         tmp_path: Path,
         run_dir: Path,
         adapters: AdapterBundle,
     ) -> None:
-        from researchclaw.experiment.workspace import TaskSpec
-
         cfg = _workspace_agent_rc_config(tmp_path)
         _write_prior_artifact(run_dir, 8, "hypotheses.md", "# Hypothesis\nImprove X")
         stage_dir = run_dir / "stage-09"
         stage_dir.mkdir()
-        llm = FakeLLMClient(
-            json.dumps(
-                {
-                    "objective": "model-designed protocol",
-                    "hypotheses": [
-                        {"id": "H1", "statement": "Improve classification."}
-                    ],
-                    "metrics": [
-                        {
-                            "name": "f1",
-                            "direction": "maximize",
-                            "hypothesis_ids": ["H1"],
-                            "is_primary": True,
-                        }
-                    ],
-                    "comparisons": [
-                        {
-                            "id": "C1",
-                            "baseline": "baseline",
-                            "treatment": "model",
-                            "metric": "f1",
-                            "hypothesis_ids": ["H1"],
-                        }
-                    ],
-                    "decision_rules": [
-                        {"hypothesis_id": "H1", "metric": "f1", "comparator": "gt"}
-                    ],
-                }
-            )
+        plan = VALID_STAGE9_PLAN.replace(
+            "corrected accumulation", "model-designed protocol"
+        )
+        expected_outputs = {
+            "schema_version": "researchclaw.expected_outputs.v1",
+            "outputs": ["outputs/custom_metrics.json"],
+        }
+        llm = QueueLLMClient(
+            [
+                plan,
+                json.dumps(expected_outputs),
+            ]
         )
 
         result = rc_executor._execute_experiment_design(
@@ -483,50 +516,33 @@ class TestWorkspaceAgentStageWiring:
         )
 
         assert result.status is StageStatus.DONE
-        spec = TaskSpec.from_path(stage_dir / "task_spec.yaml")
-        assert spec.workspace == cfg.experiment.workspace_agent.workspace_path
-        assert "model-designed protocol" in spec.objective
-        assert spec.primary_metric == "f1"
-        assert spec.expected_outputs == ["outputs/metrics.json"]
-
-    def test_stage9_template_includes_execution_contract(
-        self,
-        tmp_path: Path,
-        run_dir: Path,
-        adapters: AdapterBundle,
-    ) -> None:
-        from researchclaw.experiment.workspace import TaskSpec
-
-        cfg = _workspace_agent_rc_config(tmp_path)
-        stage_dir = run_dir / "stage-09"
-        stage_dir.mkdir()
-
-        result = rc_executor._execute_experiment_design(
-            stage_dir,
-            run_dir,
-            cfg,
-            adapters,
-            llm=None,
+        assert "model-designed protocol" in (stage_dir / "plan.md").read_text(
+            encoding="utf-8"
         )
+        assert json.loads(
+            (stage_dir / "expected_outputs.json").read_text(encoding="utf-8")
+        ) == expected_outputs
 
-        assert result.status is StageStatus.DONE
-        spec = TaskSpec.from_path(stage_dir / "task_spec.yaml")
-        assert spec.execution_contract is not None
-        assert spec.execution_contract.metrics.primary.name == "primary_metric"
-        assert spec.execution_contract.metrics.primary.direction == "maximize"
-
-    def test_stage9_llm_without_contract_gets_default(
+    def test_stage9_does_not_emit_execution_contract_artifacts(
         self,
         tmp_path: Path,
         run_dir: Path,
         adapters: AdapterBundle,
     ) -> None:
-        from researchclaw.experiment.workspace import TaskSpec
-
         cfg = _workspace_agent_rc_config(tmp_path)
         stage_dir = run_dir / "stage-09"
         stage_dir.mkdir()
-        llm = FakeLLMClient("not json")
+        llm = QueueLLMClient(
+            [
+                VALID_STAGE9_PLAN,
+                json.dumps(
+                    {
+                        "schema_version": "researchclaw.expected_outputs.v1",
+                        "outputs": ["outputs/metrics.json"],
+                    }
+                ),
+            ]
+        )
 
         result = rc_executor._execute_experiment_design(
             stage_dir,
@@ -537,10 +553,40 @@ class TestWorkspaceAgentStageWiring:
         )
 
         assert result.status is StageStatus.DONE
-        spec = TaskSpec.from_path(stage_dir / "task_spec.yaml")
-        assert spec.execution_contract is not None
-        assert spec.execution_contract.metrics.primary.name == "primary_metric"
-        assert spec.execution_contract.metrics.primary.direction == "maximize"
+        assert not (stage_dir / "task_spec.yaml").exists()
+        assert not (stage_dir / "experiment_protocol.json").exists()
+
+    def test_stage9_fails_if_expected_outputs_invalid(
+        self,
+        tmp_path: Path,
+        run_dir: Path,
+        adapters: AdapterBundle,
+    ) -> None:
+        cfg = _workspace_agent_rc_config(tmp_path)
+        stage_dir = run_dir / "stage-09"
+        stage_dir.mkdir()
+        llm = QueueLLMClient(
+            [
+                VALID_STAGE9_PLAN,
+                json.dumps(
+                    {
+                        "schema_version": "researchclaw.expected_outputs.v1",
+                        "outputs": ["/tmp/metrics.json"],
+                    }
+                ),
+            ]
+        )
+
+        result = rc_executor._execute_experiment_design(
+            stage_dir,
+            run_dir,
+            cfg,
+            adapters,
+            llm=llm,
+        )
+
+        assert result.status is StageStatus.FAILED
+        assert "absolute" in (result.error or "").lower()
 
     def test_workspace_codegen_prompt_has_agent_contract(self) -> None:
         from researchclaw.pipeline.stage_impls._code_generation import (
@@ -549,11 +595,8 @@ class TestWorkspaceAgentStageWiring:
 
         prompt = _workspace_codegen_prompt(
             topic="topic",
-            exp_plan="plan",
-            metric="accuracy",
-            pkg_hint="numpy",
-            compute_budget="1 hour",
-            extra_guidance="guidance",
+            plan_md="plan",
+            expected_outputs=["outputs/metrics.json"],
             manifest_filename="run_manifest.json",
         )
 
@@ -576,10 +619,7 @@ class TestWorkspaceAgentStageWiring:
             "schema_version": "researchclaw.run_manifest.v1",
             "code_commit": "ACTUAL_GIT_COMMIT_SHA",
             "launch": {
-                "command": (
-                    "python scripts/run_experiment.py "
-                    "--metrics-path outputs/metrics.json"
-                ),
+                "command": "python scripts/run_experiment.py",
                 "cwd": "/absolute/path/to/workspace",
                 "env": {
                     "PYTHONPATH": "/absolute/path/to/workspace:${PYTHONPATH:-}",
@@ -592,8 +632,10 @@ class TestWorkspaceAgentStageWiring:
                 },
             },
             "result_paths": ["outputs/metrics.json"],
-            "metrics": {"primary": "accuracy", "direction": "maximize"},
         }
+        assert "metrics" not in manifest_example
+        assert "primary_metric" not in manifest_example
+        assert "metric_direction" not in manifest_example
         assert "run_manifest.json" in prompt
         assert "main.py" not in prompt
 
@@ -604,9 +646,8 @@ class TestWorkspaceAgentStageWiring:
 
         prompt = _repair_or_refine_prompt(
             topic="topic",
-            metric_key="accuracy",
-            metric_direction="maximize",
-            exp_plan="plan",
+            plan_md="plan",
+            expected_outputs=["outputs/metrics.json"],
             project_files=["train.py"],
             run_summaries=["previous run"],
             manifest_filename="run_manifest.json",
@@ -634,23 +675,30 @@ class TestWorkspaceAgentStageWiring:
             "python scripts/run_experiment.py"
         )
         assert manifest_example["result_paths"] == ["outputs/metrics.json"]
-        assert manifest_example["metrics"] == {
-            "primary": "accuracy",
-            "direction": "maximize",
-        }
+        assert "metrics" not in manifest_example
+        assert "primary_metric" not in manifest_example
+        assert "metric_direction" not in manifest_example
         assert "run_manifest.json" in prompt
         assert "REPAIR REQUEST" in prompt
         assert "accuracy stuck at 0" in prompt
 
-    def _write_stage10_task_spec(self, run_dir: Path) -> None:
+    def _write_stage10_plan(self, run_dir: Path) -> None:
         _write_prior_artifact(
             run_dir,
             9,
-            "task_spec.yaml",
-            "workspace: .\nobjective: improve\nconstraints: []\n"
-            "primary_metric: accuracy\nmetric_direction: maximize\n"
-            "allowed_scope: ['.']\nforbidden_scope: []\n"
-            "expected_outputs: ['outputs/metrics.json']\n",
+            "plan.md",
+            VALID_STAGE9_PLAN,
+        )
+        _write_prior_artifact(
+            run_dir,
+            9,
+            "expected_outputs.json",
+            json.dumps(
+                {
+                    "schema_version": "researchclaw.expected_outputs.v1",
+                    "outputs": ["outputs/metrics.json"],
+                }
+            ),
         )
 
     def _install_stage10_success_agent(
@@ -742,15 +790,7 @@ class TestWorkspaceAgentStageWiring:
             "researchclaw.pipeline.workspace_orchestrator.run_workspace_agent_implement",
             fake_implement,
         )
-        _write_prior_artifact(
-            run_dir,
-            9,
-            "task_spec.yaml",
-            "workspace: .\nobjective: improve\nconstraints: []\n"
-            "primary_metric: accuracy\nmetric_direction: maximize\n"
-            "allowed_scope: ['.']\nforbidden_scope: []\n"
-            "expected_outputs: ['outputs/metrics.json']\n",
-        )
+        self._write_stage10_plan(run_dir)
         stage_dir = run_dir / "stage-10"
         stage_dir.mkdir()
 
@@ -780,7 +820,7 @@ class TestWorkspaceAgentStageWiring:
         cfg = _workspace_agent_rc_config(tmp_path)
         calls: list[dict[str, Any]] = []
         self._install_stage10_success_agent(cfg, monkeypatch, calls)
-        self._write_stage10_task_spec(run_dir)
+        self._write_stage10_plan(run_dir)
         stage_dir = run_dir / "stage-10"
         stage_dir.mkdir()
 
@@ -805,7 +845,7 @@ class TestWorkspaceAgentStageWiring:
         cfg = _workspace_agent_rc_config(tmp_path)
         calls: list[dict[str, Any]] = []
         self._install_stage10_success_agent(cfg, monkeypatch, calls)
-        self._write_stage10_task_spec(run_dir)
+        self._write_stage10_plan(run_dir)
         (run_dir / "repair_request.json").write_text(
             json.dumps(
                 {
@@ -843,7 +883,7 @@ class TestWorkspaceAgentStageWiring:
         cfg = _workspace_agent_rc_config(tmp_path)
         calls: list[dict[str, Any]] = []
         self._install_stage10_success_agent(cfg, monkeypatch, calls)
-        self._write_stage10_task_spec(run_dir)
+        self._write_stage10_plan(run_dir)
         repair_request = run_dir / "repair_request.json"
         repair_request.write_text(
             json.dumps(
@@ -905,15 +945,7 @@ class TestWorkspaceAgentStageWiring:
             "researchclaw.pipeline.workspace_orchestrator.run_workspace_agent_implement",
             fake_implement,
         )
-        _write_prior_artifact(
-            run_dir,
-            9,
-            "task_spec.yaml",
-            "workspace: .\nobjective: improve\nconstraints: []\n"
-            "primary_metric: accuracy\nmetric_direction: maximize\n"
-            "allowed_scope: ['.']\nforbidden_scope: []\n"
-            "expected_outputs: ['outputs/metrics.json']\n",
-        )
+        self._write_stage10_plan(run_dir)
         stage_dir = run_dir / "stage-10"
         stage_dir.mkdir()
 
@@ -1033,19 +1065,13 @@ class TestWorkspaceAgentStageWiring:
         )
         assert validation["ok"] is False
 
-    def test_stage11_contract_mismatch_emits_repair_request(
+    def test_stage11_expected_outputs_mismatch_emits_repair_request(
         self,
         tmp_path: Path,
         run_dir: Path,
         adapters: AdapterBundle,
     ) -> None:
-        from researchclaw.experiment.execution_contract import (
-            ArtifactCheck,
-            ExecutionContract,
-            MetricsContract,
-            PrimaryMetric,
-        )
-        from researchclaw.experiment.workspace import LaunchCommand, RunManifest, TaskSpec
+        from researchclaw.experiment.workspace import LaunchCommand, RunManifest
 
         cfg = _workspace_agent_rc_config(tmp_path)
         workspace = Path(cfg.experiment.workspace_agent.workspace_path)
@@ -1055,23 +1081,17 @@ class TestWorkspaceAgentStageWiring:
             launch=LaunchCommand(command="python train.py"),
             result_paths=["outputs/metrics.json"],
         )
-        spec = TaskSpec(
-            workspace=str(workspace),
-            objective="improve",
-            constraints=[],
-            primary_metric="f1",
-            metric_direction="maximize",
-            allowed_scope=["."],
-            forbidden_scope=[],
-            expected_outputs=["outputs/required.json"],
-            execution_contract=ExecutionContract(
-                result_artifacts=(
-                    ArtifactCheck("outputs/required.json", required=True),
-                ),
-                metrics=MetricsContract(primary=PrimaryMetric("f1", "maximize")),
+        _write_prior_artifact(
+            run_dir,
+            9,
+            "expected_outputs.json",
+            json.dumps(
+                {
+                    "schema_version": "researchclaw.expected_outputs.v1",
+                    "outputs": ["outputs/required.json"],
+                }
             ),
         )
-        _write_prior_artifact(run_dir, 9, "task_spec.yaml", spec.to_yaml())
         _write_prior_artifact(run_dir, 10, "run_manifest.json", manifest.to_json())
         stage_dir = run_dir / "stage-11"
         stage_dir.mkdir()
@@ -1088,11 +1108,10 @@ class TestWorkspaceAgentStageWiring:
         assert result.decision == "fix_code"
         repair = json.loads((run_dir / "repair_request.json").read_text(encoding="utf-8"))
         assert repair["origin_stage"] == 11
-        assert repair["reason"] == "contract_mismatch"
+        assert repair["reason"] == "manifest_invalid"
         assert any("outputs/required.json" in error for error in repair["errors"])
-        assert any("metric" in error for error in repair["errors"])
 
-    def test_stage11_no_contract_skips_check(
+    def test_stage11_without_expected_outputs_skips_coverage_check(
         self,
         tmp_path: Path,
         run_dir: Path,
@@ -1122,23 +1141,13 @@ class TestWorkspaceAgentStageWiring:
 
         assert result.status is StageStatus.DONE
 
-    def test_stage11_contract_consistent_passes(
+    def test_stage11_expected_outputs_covered_passes(
         self,
         tmp_path: Path,
         run_dir: Path,
         adapters: AdapterBundle,
     ) -> None:
-        from researchclaw.experiment.execution_contract import (
-            ArtifactCheck,
-            ExecutionContract,
-            MetricsContract,
-            PrimaryMetric,
-        )
-        from researchclaw.experiment.workspace import (
-            LaunchCommand,
-            RunManifest,
-            TaskSpec,
-        )
+        from researchclaw.experiment.workspace import LaunchCommand, RunManifest
 
         cfg = _workspace_agent_rc_config(tmp_path)
         workspace = Path(cfg.experiment.workspace_agent.workspace_path)
@@ -1148,32 +1157,18 @@ class TestWorkspaceAgentStageWiring:
             launch=LaunchCommand(command="python train.py"),
             result_paths=["outputs/metrics.json"],
         )
-        manifest_payload = json.loads(manifest.to_json())
-        manifest_payload["metrics"] = {
-            "primary": {"name": "accuracy", "direction": "maximize"}
-        }
-        spec = TaskSpec(
-            workspace=str(workspace),
-            objective="improve",
-            constraints=[],
-            primary_metric="accuracy",
-            metric_direction="maximize",
-            allowed_scope=["."],
-            forbidden_scope=[],
-            expected_outputs=["outputs/metrics.json"],
-            execution_contract=ExecutionContract(
-                result_artifacts=(
-                    ArtifactCheck("outputs/metrics.json", required=True),
-                ),
-                metrics=MetricsContract(
-                    primary=PrimaryMetric("accuracy", "maximize")
-                ),
+        _write_prior_artifact(
+            run_dir,
+            9,
+            "expected_outputs.json",
+            json.dumps(
+                {
+                    "schema_version": "researchclaw.expected_outputs.v1",
+                    "outputs": ["outputs/metrics.json"],
+                }
             ),
         )
-        _write_prior_artifact(run_dir, 9, "task_spec.yaml", spec.to_yaml())
-        _write_prior_artifact(
-            run_dir, 10, "run_manifest.json", json.dumps(manifest_payload)
-        )
+        _write_prior_artifact(run_dir, 10, "run_manifest.json", manifest.to_json())
         stage_dir = run_dir / "stage-11"
         stage_dir.mkdir()
 
@@ -1188,19 +1183,12 @@ class TestWorkspaceAgentStageWiring:
         assert result.status is StageStatus.DONE
         assert (stage_dir / "run_manifest.json").is_file()
 
-    def test_stage11_accepts_manifest_nested_primary_metric(
+    def test_stage11_canonicalizes_manifest_extra_fields(
         self,
         tmp_path: Path,
         run_dir: Path,
         adapters: AdapterBundle,
     ) -> None:
-        from researchclaw.experiment.execution_contract import (
-            ExecutionContract,
-            MetricsContract,
-            PrimaryMetric,
-        )
-        from researchclaw.experiment.workspace import TaskSpec
-
         cfg = _workspace_agent_rc_config(tmp_path)
         workspace = Path(cfg.experiment.workspace_agent.workspace_path)
         head = _init_workspace_git(workspace)
@@ -1212,23 +1200,20 @@ class TestWorkspaceAgentStageWiring:
             "metrics": {
                 "primary": {"name": "accuracy", "direction": "maximize"},
             },
+            "primary_metric": "accuracy",
+            "metric_direction": "maximize",
         }
-        spec = TaskSpec(
-            workspace=str(workspace),
-            objective="improve",
-            constraints=[],
-            primary_metric="accuracy",
-            metric_direction="maximize",
-            allowed_scope=["."],
-            forbidden_scope=[],
-            expected_outputs=["outputs/metrics.json"],
-            execution_contract=ExecutionContract(
-                metrics=MetricsContract(
-                    primary=PrimaryMetric("accuracy", "maximize")
-                ),
+        _write_prior_artifact(
+            run_dir,
+            9,
+            "expected_outputs.json",
+            json.dumps(
+                {
+                    "schema_version": "researchclaw.expected_outputs.v1",
+                    "outputs": ["outputs/metrics.json"],
+                }
             ),
         )
-        _write_prior_artifact(run_dir, 9, "task_spec.yaml", spec.to_yaml())
         _write_prior_artifact(
             run_dir,
             10,
@@ -1250,9 +1235,21 @@ class TestWorkspaceAgentStageWiring:
         written = json.loads(
             (stage_dir / "run_manifest.json").read_text(encoding="utf-8")
         )
-        assert written["metrics"]["primary"] == {
-            "name": "accuracy",
-            "direction": "maximize",
+        assert written == {
+            "schema_version": "researchclaw.run_manifest.v1",
+            "code_commit": head,
+            "launch": {
+                "command": "python train.py",
+                "cwd": ".",
+                "env": {},
+                "resources": {
+                    "gpus": 0,
+                    "mem_gb": 16,
+                    "partition": "",
+                    "time": "01:00:00",
+                },
+            },
+            "result_paths": ["outputs/metrics.json"],
         }
 
     def test_stage12_submits_waits_collects_hashed_results(
@@ -1460,7 +1457,7 @@ class TestWorkspaceAgentStageWiring:
         )
         assert artifacts["artifacts"][0]["exists"] is False
 
-    def test_stage12_writes_contract_evidence_json(
+    def test_stage12_writes_execution_outputs_without_contract_evidence(
         self,
         tmp_path: Path,
         run_dir: Path,
@@ -1517,34 +1514,23 @@ class TestWorkspaceAgentStageWiring:
 
         assert result.status is StageStatus.DONE
         assert "contract_evidence.json" not in result.artifacts
-        evidence = json.loads(
-            (stage_dir / "contract_evidence.json").read_text(encoding="utf-8")
-        )
-        assert evidence["schema_version"] == "researchclaw.contract_evidence.v1"
-        assert evidence["completion_status"] == "complete"
-        assert evidence["ok"] is True
+        assert not (stage_dir / "contract_evidence.json").exists()
+        assert (stage_dir / "execution_record.json").is_file()
+        assert (stage_dir / "result_artifacts.json").is_file()
 
-    def test_stage12_contract_evidence_records_violation_without_failing(
+    def test_stage12_collects_declared_artifact_without_metric_contract_check(
         self,
         tmp_path: Path,
         run_dir: Path,
         adapters: AdapterBundle,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from researchclaw.experiment.execution_contract import (
-            ExecutionContract,
-            MetricCheck,
-            MetricsContract,
-            PrimaryMetric,
-        )
         from researchclaw.experiment.workspace import (
             LaunchCommand,
             ManifestValidation,
-            MetricsSpec,
             RunManifest,
             SubmitRequest,
             SubmitResult,
-            TaskSpec,
         )
 
         cfg = _workspace_agent_rc_config(tmp_path)
@@ -1554,25 +1540,7 @@ class TestWorkspaceAgentStageWiring:
             code_commit=head,
             launch=LaunchCommand(command="python train.py"),
             result_paths=["outputs/metrics.json"],
-            metrics=MetricsSpec(primary="accuracy", direction="maximize"),
         )
-        spec = TaskSpec(
-            workspace=str(workspace),
-            objective="improve",
-            constraints=[],
-            primary_metric="accuracy",
-            metric_direction="maximize",
-            allowed_scope=["."],
-            forbidden_scope=[],
-            expected_outputs=["outputs/metrics.json"],
-            execution_contract=ExecutionContract(
-                metrics=MetricsContract(
-                    primary=PrimaryMetric("accuracy", "maximize"),
-                    required=(MetricCheck("accuracy", "number"),),
-                )
-            ),
-        )
-        _write_prior_artifact(run_dir, 9, "task_spec.yaml", spec.to_yaml())
         _write_prior_artifact(run_dir, 11, "run_manifest.json", manifest.to_json())
         _write_prior_artifact(
             run_dir,
@@ -1621,11 +1589,12 @@ class TestWorkspaceAgentStageWiring:
         )
 
         assert result.status is StageStatus.DONE
-        evidence = json.loads(
-            (stage_dir / "contract_evidence.json").read_text(encoding="utf-8")
+        artifacts = json.loads(
+            (stage_dir / "result_artifacts.json").read_text(encoding="utf-8")
         )
-        assert evidence["ok"] is False
-        assert "metric:accuracy:wrong_type" in evidence["violations"]
+        assert artifacts["artifacts"][0]["path"] == "outputs/metrics.json"
+        assert artifacts["artifacts"][0]["exists"] is True
+        assert not (stage_dir / "contract_evidence.json").exists()
 
     def _write_stage12_execution(
         self,
@@ -1644,6 +1613,7 @@ class TestWorkspaceAgentStageWiring:
             "log_path": "logs/run.log",
             "result_paths": ["outputs/metrics.json"],
             "result_hashes": {"outputs/metrics.json": "sha"},
+            "missing_expected_outputs": [],
             "metrics": metrics if metrics is not None else {"accuracy": 0.91},
             "elapsed_sec": 1.2,
             "waited": True,
@@ -1657,19 +1627,7 @@ class TestWorkspaceAgentStageWiring:
         run_dir: Path,
         adapters: AdapterBundle,
     ) -> None:
-        from researchclaw.experiment.protocol import ExperimentProtocol, MetricSpec
-
         cfg = _workspace_agent_rc_config(tmp_path)
-        s9 = run_dir / "stage-09"
-        s9.mkdir(parents=True, exist_ok=True)
-        (s9 / "experiment_protocol.json").write_text(
-            ExperimentProtocol(
-                metrics=(
-                    MetricSpec(name="accuracy", direction="maximize", is_primary=True),
-                )
-            ).to_json(),
-            encoding="utf-8",
-        )
         self._write_stage12_execution(run_dir, metrics={"accuracy": 0.91})
         stage_dir = run_dir / "stage-13"
         stage_dir.mkdir()
@@ -1748,7 +1706,7 @@ class TestWorkspaceAgentStageWiring:
         assert decision["route"] == "hitl"
         assert decision["reason"] == "execution_timeout"
 
-    def test_stage13_route_revise_task_spec_writes_refine_request(
+    def test_stage13_route_fix_code_for_diagnosis_mismatch(
         self,
         tmp_path: Path,
         run_dir: Path,
@@ -1763,13 +1721,13 @@ class TestWorkspaceAgentStageWiring:
                         "mode": "technical_report",
                         "sufficient": False,
                         "repair_possible": False,
-                        "deficiency_types": ["task_spec_objective_mismatch"],
+                        "deficiency_types": ["plan_objective_mismatch"],
                     },
                     "diagnosis": {
                         "deficiencies": [
                             {
-                                "type": "task_spec_objective_mismatch",
-                                "description": "objective does not match results",
+                                "type": "plan_objective_mismatch",
+                                "description": "plan objective does not match results",
                             }
                         ]
                     },
@@ -1789,13 +1747,14 @@ class TestWorkspaceAgentStageWiring:
         )
 
         assert result.status is StageStatus.DONE
-        assert result.decision == "revise_task_spec"
-        refine_request = run_dir / "refine_request.json"
-        assert refine_request.is_file()
-        payload = json.loads(refine_request.read_text(encoding="utf-8"))
-        assert payload["schema_version"] == "researchclaw.refine_request.v1"
+        assert result.decision == "fix_code"
+        repair_request = run_dir / "repair_request.json"
+        assert repair_request.is_file()
+        payload = json.loads(repair_request.read_text(encoding="utf-8"))
+        assert payload["schema_version"] == "researchclaw.repair_request.v1"
         assert payload["origin_stage"] == 13
-        assert payload["suggested_changes"]
+        assert payload["reason"] == "diagnosis_insufficient"
+        assert payload["errors"]
 
     def test_stage13_route_does_not_fix_code_on_phantom_empty_conditions(
         self,
@@ -1876,14 +1835,14 @@ class TestWorkspaceAgentStageWiring:
         assert result.status is StageStatus.DONE
         assert result.decision == "fix_code"
 
-    def test_stage13_route_fix_code_when_phantom_and_no_numeric_metric(
+    def test_stage13_route_continues_on_phantom_even_without_numeric_metric(
         self,
         tmp_path: Path,
         run_dir: Path,
         adapters: AdapterBundle,
     ) -> None:
-        """FIX#3 guard: a 'successful' run whose metrics carry no numeric value
-        (only the no_conditions phantom) must still route to fix_code."""
+        """A successful run whose only deficiency is the no_conditions phantom
+        can continue even when result metrics are non-numeric."""
         cfg = _workspace_agent_rc_config(tmp_path)
         self._write_stage12_execution(run_dir, metrics={"status": "ok"})
         (run_dir / "experiment_diagnosis.json").write_text(
@@ -1914,7 +1873,7 @@ class TestWorkspaceAgentStageWiring:
             stage_dir, run_dir, cfg, adapters, llm=None
         )
         assert result.status is StageStatus.DONE
-        assert result.decision == "fix_code"
+        assert result.decision == "continue"
 
     def test_stage13_route_never_invokes_workspace_agent(
         self,
@@ -1943,39 +1902,21 @@ class TestWorkspaceAgentStageWiring:
 
         assert called == []
 
-    def test_stage13_uses_task_spec_contract_when_present(
+    def test_stage13_routes_fix_code_for_missing_expected_outputs(
         self,
         tmp_path: Path,
         run_dir: Path,
         adapters: AdapterBundle,
     ) -> None:
-        from researchclaw.experiment.execution_contract import (
-            ExecutionContract,
-            MetricCheck,
-            MetricsContract,
-            PrimaryMetric,
-        )
-        from researchclaw.experiment.workspace import TaskSpec
-
         cfg = _workspace_agent_rc_config(tmp_path)
-        spec = TaskSpec(
-            workspace=str(tmp_path / "workspace"),
-            objective="improve",
-            constraints=[],
-            primary_metric="f1",
-            metric_direction="maximize",
-            allowed_scope=["."],
-            forbidden_scope=[],
-            expected_outputs=["outputs/metrics.json"],
-            execution_contract=ExecutionContract(
-                metrics=MetricsContract(
-                    primary=PrimaryMetric("f1", "maximize"),
-                    required=(MetricCheck("f1", "number"),),
-                )
-            ),
-        )
-        _write_prior_artifact(run_dir, 9, "task_spec.yaml", spec.to_yaml())
         self._write_stage12_execution(run_dir, metrics={"accuracy": 0.91})
+        record_path = run_dir / "stage-12" / "execution_record.json"
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        record["missing_expected_outputs"] = ["outputs/summary.md"]
+        record_path.write_text(
+            json.dumps(record, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
         stage_dir = run_dir / "stage-13"
         stage_dir.mkdir()
 
@@ -1990,10 +1931,10 @@ class TestWorkspaceAgentStageWiring:
         assert result.status is StageStatus.DONE
         assert result.decision == "fix_code"
         repair = json.loads((run_dir / "repair_request.json").read_text(encoding="utf-8"))
-        assert repair["reason"] == "metrics_missing"
-        assert "metric:f1:missing" in repair["errors"]
+        assert repair["reason"] == "missing_expected_outputs"
+        assert repair["errors"] == ["outputs/summary.md"]
 
-    def test_stage13_falls_back_to_default_contract_without_task_spec(
+    def test_stage13_continues_without_legacy_contract(
         self,
         tmp_path: Path,
         run_dir: Path,
@@ -2025,7 +1966,6 @@ class TestWorkspaceAgentStageWiring:
         run_dir: Path,
         adapters: AdapterBundle,
     ) -> None:
-        from researchclaw.experiment.protocol import ExperimentProtocol, MetricSpec
         from researchclaw.experiment.workspace import (
             ExecutionRecord,
             ExperimentRecord,
@@ -2034,16 +1974,7 @@ class TestWorkspaceAgentStageWiring:
         )
 
         cfg = _workspace_agent_rc_config(tmp_path)
-        s9 = run_dir / "stage-09"
-        s9.mkdir(parents=True, exist_ok=True)
-        (s9 / "experiment_protocol.json").write_text(
-            ExperimentProtocol(
-                metrics=(
-                    MetricSpec(name="accuracy", direction="maximize", is_primary=True),
-                )
-            ).to_json(),
-            encoding="utf-8",
-        )
+        self._write_stage10_plan(run_dir)
         execution = ExecutionRecord(
             stage=12,
             code_commit="commit-1",
@@ -2054,7 +1985,7 @@ class TestWorkspaceAgentStageWiring:
             log_path="logs/run.log",
             result_paths=["outputs/metrics.json"],
             result_hashes={"outputs/metrics.json": "sha"},
-            metrics={"accuracy": 0.91},
+            missing_expected_outputs=[],
             elapsed_sec=1.2,
             waited=True,
             recorded_at="2026-05-29T00:00:00Z",
@@ -2116,11 +2047,12 @@ class TestWorkspaceAgentStageWiring:
         summary = json.loads(
             (stage_dir / "experiment_summary.json").read_text(encoding="utf-8")
         )
-        assert summary["primary_metric"] == "accuracy"
-        assert summary["metric_direction"] == "maximize"
-        assert summary["best_metric"] == 0.91
-        assert summary["best_commit"] == "commit-1"
+        assert "corrected accumulation" in summary["plan"]
+        assert summary["expected_outputs"] == ["outputs/metrics.json"]
+        assert summary["observed_result_paths"] == ["outputs/metrics.json"]
         assert summary["n_runs"] == 1
+        assert summary["n_completed_runs"] == 1
+        assert summary["latest_run"]["code_commit"] == "commit-1"
         provenance = json.loads(
             (stage_dir / "provenance.json").read_text(encoding="utf-8")
         )
@@ -2134,19 +2066,8 @@ class TestWorkspaceAgentStageWiring:
         run_dir: Path,
         adapters: AdapterBundle,
     ) -> None:
-        from researchclaw.experiment.protocol import ExperimentProtocol, MetricSpec
-
         cfg = _workspace_agent_rc_config(tmp_path)
-        s9 = run_dir / "stage-09"
-        s9.mkdir(parents=True, exist_ok=True)
-        (s9 / "experiment_protocol.json").write_text(
-            ExperimentProtocol(
-                metrics=(
-                    MetricSpec(name="accuracy", direction="maximize", is_primary=True),
-                )
-            ).to_json(),
-            encoding="utf-8",
-        )
+        self._write_stage10_plan(run_dir)
         self._write_stage12_execution(run_dir, metrics={"accuracy": 0.91})
         _write_prior_artifact(
             run_dir,
@@ -2176,7 +2097,7 @@ class TestWorkspaceAgentStageWiring:
         summary = json.loads(
             (stage_dir / "experiment_summary.json").read_text(encoding="utf-8")
         )
-        assert summary["best_metric"] == 0.91
+        assert summary["latest_run"]["metrics"]["accuracy"] == 0.91
 
     def test_stage14_condition_summaries_from_aggregates(
         self,
@@ -4087,16 +4008,19 @@ PIVOT
         )
 
     def _seed_result_analysis_inputs(self, run_dir: Path, workspace: Path) -> None:
-        from researchclaw.experiment.protocol import ExperimentProtocol, MetricSpec
-
         stage9 = run_dir / "stage-09"
         stage9.mkdir(parents=True, exist_ok=True)
-        (stage9 / "experiment_protocol.json").write_text(
-            ExperimentProtocol(
-                metrics=(
-                    MetricSpec(name="accuracy", direction="maximize", is_primary=True),
-                )
-            ).to_json(),
+        (stage9 / "plan.md").write_text(
+            VALID_STAGE9_PLAN,
+            encoding="utf-8",
+        )
+        (stage9 / "expected_outputs.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "researchclaw.expected_outputs.v1",
+                    "outputs": ["outputs/metrics.json", "outputs/run_summary.json"],
+                }
+            ),
             encoding="utf-8",
         )
         (workspace / "outputs").mkdir(parents=True, exist_ok=True)
@@ -4117,7 +4041,6 @@ PIVOT
             json.dumps({"training_run_count": 6, "run_count": 6}),
             encoding="utf-8",
         )
-        _write_prior_artifact(run_dir, 9, "task_spec.yaml", "objective: improve accuracy\n")
         _write_prior_artifact(
             run_dir,
             10,
@@ -4141,7 +4064,6 @@ PIVOT
                         "outputs/metrics.json",
                         "outputs/run_summary.json",
                     ],
-                    "metrics": {"primary": "accuracy", "direction": "maximize"},
                 }
             ),
         )
@@ -4183,12 +4105,6 @@ PIVOT
             12,
             "result_artifacts.json",
             json.dumps({"artifacts": ["outputs/metrics.json"]}),
-        )
-        _write_prior_artifact(
-            run_dir,
-            12,
-            "contract_evidence.json",
-            json.dumps({"ok": True, "violations": []}),
         )
         _write_prior_artifact(
             run_dir,
@@ -4611,16 +4527,26 @@ class TestCollectExperimentEvidence:
         run_dir.mkdir()
         assert rc_executor._collect_experiment_evidence(run_dir) == ""
 
-    def test_includes_task_spec(self, run_dir: Path) -> None:
-        task_dir = run_dir / "stage-09"
-        task_dir.mkdir(parents=True, exist_ok=True)
-        (task_dir / "task_spec.yaml").write_text(
-            "objective: improve file unlock\nprimary_metric: success_rate\n",
+    def test_includes_plan_and_expected_outputs(self, run_dir: Path) -> None:
+        stage9 = run_dir / "stage-09"
+        stage9.mkdir(parents=True, exist_ok=True)
+        (stage9 / "plan.md").write_text(
+            VALID_STAGE9_PLAN,
+            encoding="utf-8",
+        )
+        (stage9 / "expected_outputs.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "researchclaw.expected_outputs.v1",
+                    "outputs": ["outputs/metrics.json"],
+                }
+            ),
             encoding="utf-8",
         )
         result = rc_executor._collect_experiment_evidence(run_dir)
-        assert "Experiment Task Spec" in result
-        assert "success_rate" in result
+        assert "Experiment Plan" in result
+        assert "Expected Outputs" in result
+        assert "outputs/metrics.json" in result
 
     def test_includes_run_manifest(self, run_dir: Path) -> None:
         manifest_dir = run_dir / "stage-11"

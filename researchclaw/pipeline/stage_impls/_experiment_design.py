@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -24,15 +23,6 @@ from researchclaw.prompts import PromptManager
 logger = logging.getLogger(__name__)
 
 EXPECTED_OUTPUTS_SCHEMA_VERSION = "researchclaw.expected_outputs.v1"
-_PLAN_REQUIRED_SECTIONS = (
-    ("hypothes", "Hypotheses"),
-    ("baseline", "Baselines"),
-    ("ablation", "Ablations"),
-    ("metric", "Metrics"),
-    ("decision", "Decision Criteria"),
-    ("expected output", "Expected Outputs"),
-)
-_HEADING_RE = re.compile(r"^(#{2,3})\s+(?P<title>.+?)\s*$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -45,33 +35,6 @@ class PlanningContext:
     dependencies: str
     human_guidance: str
     hardware_profile: str
-
-
-def validate_plan_md(text: str) -> list[str]:
-    source = str(text or "")
-    errors: list[str] = []
-    headings = list(_HEADING_RE.finditer(source))
-    lower_titles = [match.group("title").strip().lower() for match in headings]
-    for needle, label in _PLAN_REQUIRED_SECTIONS:
-        if not any(needle in title for title in lower_titles):
-            errors.append(f"missing required section: {label}")
-            continue
-        match = next(
-            item
-            for item in headings
-            if needle in item.group("title").strip().lower()
-        )
-        body = _section_body(source, headings, match)
-        if not body.strip():
-            errors.append(f"required section is empty: {label}")
-    body_text = "\n".join(
-        line
-        for line in source.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    )
-    if len(body_text.strip()) <= 200:
-        errors.append("plan.md is too short to be an actionable experiment plan")
-    return errors
 
 
 def validate_expected_outputs(data: dict[str, Any]) -> list[str]:
@@ -118,11 +81,9 @@ def _execute_experiment_design(
         logger.warning("Stage 09 planning agent failed: %s", exc)
         return _failed(f"E09_PLAN_INVALID: planning agent failed: {exc}")
 
-    plan_errors = validate_plan_md(plan_md)
     output_errors = validate_expected_outputs(expected_outputs)
-    errors = plan_errors + output_errors
-    if errors:
-        return _failed("E09_PLAN_INVALID: " + "; ".join(errors))
+    if output_errors:
+        return _failed("E09_PLAN_INVALID: " + "; ".join(output_errors))
 
     stage_dir.mkdir(parents=True, exist_ok=True)
     (stage_dir / "plan.md").write_text(plan_md.strip() + "\n", encoding="utf-8")
@@ -158,7 +119,8 @@ def _generate_plan_md(llm: LLMClient, context: PlanningContext) -> str:
         "workspace context and research context, then write only plan.md content. "
         "Do not write code. Do not propose editing files yourself.\n\n"
         "The plan must include sections for Hypotheses, Baselines, Ablations, "
-        "Metrics, Decision Criteria, and Expected Outputs. Be specific enough "
+        "Metrics, Decision Criteria, The details plans (more specifical, more better) to  Validate the Hypothesis, and "
+        "Expected Outputs. Be specific enough "
         "for a later code agent to implement the experiment without inventing "
         "a new design.\n\n"
         f"Topic:\n{context.topic}\n\n"
@@ -204,13 +166,6 @@ def _generate_expected_outputs(
     if not isinstance(payload, dict):
         raise ValueError("planning agent did not return a JSON object")
     return payload
-
-
-def _section_body(source: str, headings: list[re.Match[str]], match: re.Match[str]) -> str:
-    index = headings.index(match)
-    start = match.end()
-    end = headings[index + 1].start() if index + 1 < len(headings) else len(source)
-    return source[start:end].strip()
 
 
 def _validate_output_path(path: str, index: int) -> list[str]:

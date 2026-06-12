@@ -94,7 +94,6 @@ def _seed_bundle_inputs(tmp_path: Path) -> tuple[Path, Path, RCConfig]:
                 "outputs/metrics.json",
                 "outputs/run_summary.json",
             ],
-            "metrics": {"primary": "accuracy", "direction": "maximize"},
         },
     )
     _write_stage_artifact(
@@ -113,12 +112,6 @@ def _seed_bundle_inputs(tmp_path: Path) -> tuple[Path, Path, RCConfig]:
         12,
         "result_artifacts.json",
         {"artifacts": ["outputs/metrics.json"]},
-    )
-    _write_stage_artifact(
-        run_dir,
-        12,
-        "contract_evidence.json",
-        {"ok": True, "violations": []},
     )
     _write_stage_artifact(
         run_dir,

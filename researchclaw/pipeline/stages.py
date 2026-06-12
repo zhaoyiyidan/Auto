@@ -137,7 +137,6 @@ MAX_EXPERIMENT_ITERATIONS: int = 3  # Bound Stage 10-13 repair loop
 
 EXPERIMENT_ROUTE_TARGETS: dict[str, Stage] = {
     "fix_code": Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
-    "revise_task_spec": Stage.EXPERIMENT_TASK_SPEC,
     "rerun": Stage.HARNESS_SUBMIT_AND_COLLECT,
 }
 

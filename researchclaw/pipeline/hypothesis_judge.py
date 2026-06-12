@@ -1,4 +1,4 @@
-"""Deterministic hypothesis judgment from experiment protocols."""
+"""Deterministic hypothesis judgment helpers for legacy rule objects."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 import math
 from typing import Any
 
-from researchclaw.experiment.protocol import DecisionRule, ExperimentProtocol
+from researchclaw.experiment.protocol import DecisionRule
 from researchclaw.llm.client import LLMClient
 from researchclaw.pipeline._helpers import _safe_json_loads
 from researchclaw.prompts import PromptManager
@@ -40,20 +40,22 @@ def evaluate_decision_rule(
 
 
 def judge_hypotheses(
-    protocol: ExperimentProtocol,
+    protocol: Any,
     summary: dict[str, Any],
     *,
     llm: LLMClient | None = None,
 ) -> dict[str, Any]:
     """Judge every hypothesis with deterministic rules and optional LLM fallback."""
 
-    hypothesis_ids = [hypothesis.id for hypothesis in protocol.hypotheses]
-    for rule in protocol.decision_rules:
+    hypotheses = list(getattr(protocol, "hypotheses", []) or [])
+    decision_rules = list(getattr(protocol, "decision_rules", []) or [])
+    hypothesis_ids = [hypothesis.id for hypothesis in hypotheses]
+    for rule in decision_rules:
         if rule.hypothesis_id not in hypothesis_ids:
             hypothesis_ids.append(rule.hypothesis_id)
 
     by_hypothesis: dict[str, list[DecisionRule]] = {item: [] for item in hypothesis_ids}
-    for rule in protocol.decision_rules:
+    for rule in decision_rules:
         by_hypothesis.setdefault(rule.hypothesis_id, []).append(rule)
 
     per_hypothesis: dict[str, dict[str, Any]] = {}
@@ -73,7 +75,7 @@ def judge_hypotheses(
         statement = next(
             (
                 hypothesis.statement
-                for hypothesis in protocol.hypotheses
+                for hypothesis in hypotheses
                 if hypothesis.id == hypothesis_id
             ),
             "",

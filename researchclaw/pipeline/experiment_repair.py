@@ -198,11 +198,15 @@ def _load_experiment_code(run_dir: Path) -> dict[str, str]:
         if code:
             return code
 
-    for task_spec in sorted(run_dir.glob("stage-09*/task_spec.yaml"), reverse=True):
-        try:
-            code[str(task_spec.relative_to(run_dir))] = task_spec.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            pass
+    for stage9 in sorted(run_dir.glob("stage-09*"), reverse=True):
+        for name in ("plan.md", "expected_outputs.json"):
+            path = stage9 / name
+            if not path.is_file():
+                continue
+            try:
+                code[str(path.relative_to(run_dir))] = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                pass
         if code:
             return code
 
@@ -210,13 +214,20 @@ def _load_experiment_code(run_dir: Path) -> dict[str, str]:
 
 
 def _load_experiment_plan(run_dir: Path) -> dict | None:
-    """Load experiment task spec from stage-09."""
-    for candidate in sorted(run_dir.glob("stage-09*/task_spec.yaml"), reverse=True):
+    """Load the experiment plan from stage-09."""
+    for candidate in sorted(run_dir.glob("stage-09*/plan.md"), reverse=True):
         try:
-            import yaml as _yaml_repair
-
-            data = _yaml_repair.safe_load(candidate.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else None
+            expected_path = candidate.parent / "expected_outputs.json"
+            expected_outputs = {}
+            if expected_path.is_file():
+                try:
+                    expected_outputs = json.loads(expected_path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    expected_outputs = {}
+            return {
+                "plan_md": candidate.read_text(encoding="utf-8"),
+                "expected_outputs": expected_outputs,
+            }
         except (OSError, UnicodeDecodeError):
             continue
     return None

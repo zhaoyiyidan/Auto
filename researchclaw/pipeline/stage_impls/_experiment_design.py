@@ -138,25 +138,6 @@ def _execute_experiment_design(
     )
 
 
-def _execute_experiment_task_spec(
-    stage_dir: Path,
-    run_dir: Path,
-    config: RCConfig,
-    adapters: AdapterBundle,
-    *,
-    llm: LLMClient | None = None,
-    prompts: PromptManager | None = None,
-) -> StageResult:
-    return _execute_experiment_design(
-        stage_dir,
-        run_dir,
-        config,
-        adapters,
-        llm=llm,
-        prompts=prompts,
-    )
-
-
 def _collect_planning_context(config: RCConfig, run_dir: Path) -> PlanningContext:
     workspace = Path(config.experiment.workspace_agent.workspace_path)
     return PlanningContext(

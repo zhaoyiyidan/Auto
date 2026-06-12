@@ -146,20 +146,17 @@ def _dynamic_stage_analysis(stage_num: int, run_dir: Path) -> list[str]:
                 assessment = data.get("assessment", "N/A")
                 lines.append(f"Novelty score: {score} ({assessment})")
 
-        # Stage 9: Experiment task spec analysis
+        # Stage 9: Experiment plan analysis
         elif stage_num == 9:
-            import yaml as _yaml_sum
-            task_spec_file = stage_dir / "task_spec.yaml"
-            if task_spec_file.exists():
-                spec = _yaml_sum.safe_load(task_spec_file.read_text(encoding="utf-8"))
-                if isinstance(spec, dict):
-                    expected_outputs = spec.get("expected_outputs", [])
-                    constraints = spec.get("constraints", [])
-                    lines.append(f"\nExpected outputs: {len(expected_outputs)}")
-                    lines.append(f"Constraints: {len(constraints)}")
-                    metric = spec.get("primary_metric")
-                    if metric:
-                        lines.append(f"Primary metric: {metric}")
+            plan_file = stage_dir / "plan.md"
+            if plan_file.exists():
+                plan_text = plan_file.read_text(encoding="utf-8")
+                lines.append(f"\nPlan length: {len(plan_text.split())} words")
+            expected_file = stage_dir / "expected_outputs.json"
+            if expected_file.exists():
+                data = json.loads(expected_file.read_text(encoding="utf-8"))
+                outputs = data.get("outputs", []) if isinstance(data, dict) else []
+                lines.append(f"Expected outputs: {len(outputs)}")
 
         # Stage 14: Result analysis
         elif stage_num == 14:

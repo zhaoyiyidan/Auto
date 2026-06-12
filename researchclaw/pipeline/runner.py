@@ -259,12 +259,21 @@ def _run_experiment_diagnosis(run_dir: Path, config: RCConfig, run_id: str) -> N
                 except (json.JSONDecodeError, OSError):
                     continue
 
-        # Load experiment task spec from stage-09
+        # Load experiment plan from stage-09
         plan = None
-        for candidate in sorted(run_dir.glob("stage-09*/task_spec.yaml")):
+        for candidate in sorted(run_dir.glob("stage-09*/plan.md")):
             try:
-                import yaml as _yaml_diag
-                plan = _yaml_diag.safe_load(candidate.read_text(encoding="utf-8"))
+                expected_path = candidate.parent / "expected_outputs.json"
+                expected_outputs = {}
+                if expected_path.is_file():
+                    try:
+                        expected_outputs = json.loads(expected_path.read_text(encoding="utf-8"))
+                    except (json.JSONDecodeError, OSError):
+                        expected_outputs = {}
+                plan = {
+                    "plan_md": candidate.read_text(encoding="utf-8"),
+                    "expected_outputs": expected_outputs,
+                }
             except Exception:
                 pass
 
@@ -496,13 +505,6 @@ def _run_experiment_loop(
             jump=f"13->{route}",
             target=target,
         )
-        if route == "revise_task_spec":
-            _version_rollback_stages(
-                run_dir,
-                Stage.EXPERIMENT_TASK_SPEC,
-                attempt,
-            )
-            return results, "revise_task_spec"
         _version_rollback_stages(run_dir, target, attempt, incremental=True)
         start_at = target
 
@@ -620,22 +622,6 @@ def execute_pipeline(
             experiment_loop_handled = True
             if outcome == "continue":
                 continue
-            if outcome == "revise_task_spec":
-                revised_results = execute_pipeline(
-                    run_dir=run_dir,
-                    run_id=run_id,
-                    config=config,
-                    adapters=adapters,
-                    from_stage=Stage.EXPERIMENT_TASK_SPEC,
-                    auto_approve_gates=auto_approve_gates,
-                    stop_on_gate=stop_on_gate,
-                    skip_noncritical=skip_noncritical,
-                    kb_root=kb_root,
-                    cancel_event=cancel_event,
-                    initialize_run_globals=initialize_run_globals,
-                )
-                results.extend(revised_results)
-                break
             if (
                 outcome == "stop"
                 and loop_results
@@ -1952,7 +1938,7 @@ def _metaclaw_post_pipeline(
             stage_name = {
                 1: "topic_init", 2: "problem_decompose", 3: "search_strategy",
                 4: "literature_collect", 5: "literature_screen", 6: "knowledge_extract",
-                7: "synthesis", 8: "hypothesis_gen", 9: "experiment_task_spec",
+                7: "synthesis", 8: "hypothesis_gen", 9: "experiment_plan",
                 10: "code_agent_implement_or_repair",
                 11: "manifest_validate_and_prepare",
                 12: "harness_submit_and_collect",

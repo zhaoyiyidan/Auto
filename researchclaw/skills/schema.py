@@ -17,7 +17,7 @@ STAGE_NAME_TO_NUMBER: dict[str, int] = {
     "knowledge_extract": 6,
     "synthesis": 7,
     "hypothesis_gen": 8,
-    "experiment_task_spec": 9,
+    "experiment_plan": 9,
     "code_agent_implement_or_repair": 10,
     "manifest_validate_and_prepare": 11,
     "harness_submit_and_collect": 12,

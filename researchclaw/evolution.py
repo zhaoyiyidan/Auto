@@ -161,7 +161,7 @@ def _classify_error(stage_name: str, error_text: str) -> str:
 _STAGE_NAMES: dict[int, str] = {
     1: "topic_init", 2: "problem_decompose", 3: "search_strategy",
     4: "literature_collect", 5: "literature_screen", 6: "knowledge_extract",
-    7: "synthesis", 8: "hypothesis_gen", 9: "experiment_task_spec",
+    7: "synthesis", 8: "hypothesis_gen", 9: "experiment_plan",
     10: "code_agent_implement_or_repair",
     11: "manifest_validate_and_prepare",
     12: "harness_submit_and_collect",

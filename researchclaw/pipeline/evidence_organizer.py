@@ -22,16 +22,15 @@ class PostCheckResult:
 
 
 _DEFAULT_INPUTS: tuple[tuple[str, str], ...] = (
-    ("task_spec", "task_spec.yaml"),
+    ("experiment_plan", "plan.md"),
+    ("expected_outputs", "expected_outputs.json"),
     ("run_manifest", "run_manifest.json"),
     ("execution_record", "execution_record.json"),
     ("result_artifacts", "result_artifacts.json"),
-    ("contract_evidence", "contract_evidence.json"),
     ("experiment_decision", "experiment_decision.json"),
 )
 
 _OPTIONAL_INPUTS: tuple[tuple[str, str], ...] = (
-    ("experiment_protocol", "experiment_protocol.json"),
     ("stage_12_local_log", "stage-12-local.log"),
     ("workspace_agent_result", "stage-10-workspace-agent-result.json"),
     ("manifest_validation", "manifest_validation.json"),

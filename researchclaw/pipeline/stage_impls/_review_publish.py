@@ -66,9 +66,13 @@ def _collect_experiment_evidence(run_dir: Path) -> str:
     """Collect actual experiment parameters and results for peer review."""
     evidence_parts: list[str] = []
 
-    task_spec = _read_prior_artifact(run_dir, "task_spec.yaml")
-    if task_spec:
-        evidence_parts.append(f"### Experiment Task Spec\n```yaml\n{task_spec[:3000]}\n```")
+    plan = _read_prior_artifact(run_dir, "plan.md")
+    if plan:
+        evidence_parts.append(f"### Experiment Plan\n```markdown\n{plan[:3000]}\n```")
+
+    expected_outputs = _read_prior_artifact(run_dir, "expected_outputs.json")
+    if expected_outputs:
+        evidence_parts.append(f"### Expected Outputs\n```json\n{expected_outputs[:2000]}\n```")
 
     manifest = _read_prior_artifact(run_dir, "run_manifest.json")
     if manifest:
@@ -2347,7 +2351,8 @@ def _execute_export_publish(
 
     # --- Execution protocol package ---
     package_files = {
-        "task_spec.yaml": _read_prior_artifact(run_dir, "task_spec.yaml"),
+        "plan.md": _read_prior_artifact(run_dir, "plan.md"),
+        "expected_outputs.json": _read_prior_artifact(run_dir, "expected_outputs.json"),
         "run_manifest.json": _read_prior_artifact(run_dir, "run_manifest.json"),
         "execution_record.json": _read_prior_artifact(run_dir, "execution_record.json"),
         "result_artifacts.json": _read_prior_artifact(run_dir, "result_artifacts.json"),

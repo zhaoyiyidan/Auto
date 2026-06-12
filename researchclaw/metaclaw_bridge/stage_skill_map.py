@@ -51,7 +51,7 @@ STAGE_SKILL_MAP: dict[str, dict[str, Any]] = {
         "skills": ["hypothesis-formulation"],
         "top_k": 6,
     },
-    "experiment_task_spec": {
+    "experiment_plan": {
         "task_type": "research",
         "skills": ["experiment-design-rigor"],
         "top_k": 6,

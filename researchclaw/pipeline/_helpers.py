@@ -941,7 +941,7 @@ def _build_context_preamble(
     include_goal: bool = False,
     include_hypotheses: bool = False,
     include_synthesis: bool = False,
-    include_task_spec: bool = False,
+    include_experiment_plan: bool = False,
     include_analysis: bool = False,
     include_decision: bool = False,
     include_experiment_data: bool = False,
@@ -963,10 +963,13 @@ def _build_context_preamble(
         synthesis = _read_prior_artifact(run_dir, "synthesis.md")
         if synthesis:
             parts.append(f"\n### Synthesis\n{synthesis[:2200]}")
-    if include_task_spec:
-        task_spec = _read_prior_artifact(run_dir, "task_spec.yaml")
-        if task_spec:
-            parts.append(f"\n### Experiment Task Spec\n{task_spec[:2000]}")
+    if include_experiment_plan:
+        plan = _read_prior_artifact(run_dir, "plan.md")
+        if plan:
+            parts.append(f"\n### Experiment Plan\n{plan[:2400]}")
+        expected_outputs = _read_prior_artifact(run_dir, "expected_outputs.json")
+        if expected_outputs:
+            parts.append(f"\n### Expected Outputs\n{expected_outputs[:1200]}")
     if include_analysis:
         analysis = _read_best_analysis(run_dir)
         if analysis:

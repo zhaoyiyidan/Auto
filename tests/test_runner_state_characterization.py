@@ -114,25 +114,7 @@ def _run_mocked_legacy_pipeline(
             return _done(stage, decision="proceed")
         return _done(stage)
 
-    def fake_experiment_loop(**kwargs: Any) -> tuple[list[StageResult], str]:
-        _ = kwargs
-        loop_results = [
-            _done(Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR),
-            _done(Stage.MANIFEST_VALIDATE_AND_PREPARE),
-            _done(Stage.HARNESS_SUBMIT_AND_COLLECT),
-            _done(Stage.EXPERIMENT_ROUTE_DECISION),
-        ]
-        for result in loop_results:
-            stage_dir = run_dir / f"stage-{int(result.stage):02d}"
-            stage_dir.mkdir(parents=True, exist_ok=True)
-            (stage_dir / f"stage-{int(result.stage):02d}.txt").write_text(
-                result.stage.name,
-                encoding="utf-8",
-            )
-        return loop_results, "continue"
-
     monkeypatch.setattr(rc_runner, "execute_stage", fake_execute_stage)
-    monkeypatch.setattr(rc_runner, "_run_experiment_loop", fake_experiment_loop)
 
     results = rc_runner.execute_pipeline(
         run_dir=run_dir,

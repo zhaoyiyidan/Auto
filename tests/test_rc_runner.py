@@ -901,6 +901,43 @@ def test_pivot_decision_triggers_rollback_to_hypothesis_gen(
     assert history[0]["decision"] == "pivot"
 
 
+def test_pivot_recursion_forwards_to_stage_and_callback(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    rc_config = _with_hypothesis_validation(rc_config, enabled=False)
+    seen: list[Stage] = []
+    notified: list[Stage] = []
+    pivot_count = 0
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        seen.append(stage)
+        _touch_stage_dir(run_dir, stage)
+        nonlocal pivot_count
+        if stage == Stage.RESEARCH_DECISION and pivot_count == 0:
+            pivot_count += 1
+            return _pivot_result(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-pivot-forward-kwargs",
+        config=rc_config,
+        adapters=adapters,
+        from_stage=Stage.HYPOTHESIS_GEN,
+        to_stage=Stage.PAPER_OUTLINE,
+        on_stage_complete=notified.append,
+    )
+
+    assert max(int(stage) for stage in seen) == int(Stage.PAPER_OUTLINE)
+    assert seen.count(Stage.HYPOTHESIS_GEN) == 2
+    assert notified.count(Stage.HYPOTHESIS_GEN) == 2
+
+
 def test_default_hypothesis_validation_skips_legacy_decision_recursion(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,

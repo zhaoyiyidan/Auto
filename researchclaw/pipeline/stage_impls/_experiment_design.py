@@ -23,6 +23,7 @@ from researchclaw.prompts import PromptManager
 logger = logging.getLogger(__name__)
 
 EXPECTED_OUTPUTS_SCHEMA_VERSION = "researchclaw.expected_outputs.v1"
+EXPECTED_OUTPUTS_MAX_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -146,7 +147,58 @@ def _generate_expected_outputs(
     llm: LLMClient,
     context: PlanningContext,
     plan_md: str,
+    *,
+    max_attempts: int = EXPECTED_OUTPUTS_MAX_ATTEMPTS,
 ) -> dict[str, Any]:
+    attempts = max(1, int(max_attempts or 1))
+    attempt_errors: list[str] = []
+    previous_error = ""
+    previous_response = ""
+    for attempt in range(1, attempts + 1):
+        prompt = _expected_outputs_prompt(
+            context,
+            plan_md,
+            previous_error=previous_error,
+            previous_response=previous_response,
+        )
+        response = _chat_with_prompt(
+            llm,
+            "You output only valid JSON for expected experiment output paths.",
+            prompt,
+            json_mode=True,
+            max_tokens=1000,
+        )
+        raw = str(getattr(response, "content", "") or "")
+        payload = _safe_json_loads(raw, None)
+        if not isinstance(payload, dict):
+            previous_error = "planning agent did not return a JSON object"
+        else:
+            output_errors = validate_expected_outputs(payload)
+            if not output_errors:
+                return payload
+            previous_error = "; ".join(output_errors)
+        previous_response = raw
+        attempt_errors.append(f"attempt {attempt}: {previous_error}")
+        if attempt < attempts:
+            logger.warning(
+                "Stage 09 expected_outputs generation failed (%d/%d): %s; retrying",
+                attempt,
+                attempts,
+                previous_error,
+            )
+    raise ValueError(
+        "planning agent did not return valid expected_outputs.json after "
+        f"{attempts} attempts: {' | '.join(attempt_errors)}"
+    )
+
+
+def _expected_outputs_prompt(
+    context: PlanningContext,
+    plan_md: str,
+    *,
+    previous_error: str = "",
+    previous_response: str = "",
+) -> str:
     prompt = (
         "Based on the experiment plan below, return JSON only. The JSON must "
         "have schema_version 'researchclaw.expected_outputs.v1' and an outputs "
@@ -155,17 +207,16 @@ def _generate_expected_outputs(
         f"Workspace path: {context.workspace_path}\n\n"
         f"Plan:\n{plan_md}\n"
     )
-    response = _chat_with_prompt(
-        llm,
-        "You output only valid JSON for expected experiment output paths.",
-        prompt,
-        json_mode=True,
-        max_tokens=1000,
-    )
-    payload = _safe_json_loads(str(getattr(response, "content", "") or ""), None)
-    if not isinstance(payload, dict):
-        raise ValueError("planning agent did not return a JSON object")
-    return payload
+    if previous_error:
+        response_excerpt = previous_response.strip()[:1200] or "(empty response)"
+        prompt += (
+            "\n\nYour previous expected_outputs.json response was invalid.\n"
+            f"Validation error: {previous_error}\n"
+            f"Previous response excerpt:\n{response_excerpt}\n\n"
+            "Return a corrected JSON object only. Do not include markdown fences, "
+            "commentary, arrays at the top level, or prose."
+        )
+    return prompt
 
 
 def _validate_output_path(path: str, index: int) -> list[str]:

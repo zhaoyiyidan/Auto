@@ -153,6 +153,88 @@ def test_stage9_accepts_freeform_plan_md(tmp_path: Path) -> None:
     assert "H1 only" in (stage_dir / "plan.md").read_text(encoding="utf-8")
 
 
+def test_stage9_retries_expected_outputs_until_json_object(tmp_path: Path) -> None:
+    from researchclaw.pipeline.stage_impls._experiment_design import (
+        _execute_experiment_design,
+    )
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_hypotheses(run_dir)
+    stage_dir = run_dir / "stage-09"
+    expected = {
+        "schema_version": "researchclaw.expected_outputs.v1",
+        "outputs": ["outputs/results.json"],
+    }
+    llm = QueueLLM(
+        [
+            VALID_PLAN_MD,
+            "I will write the output file at outputs/results.json.",
+            json.dumps(expected),
+        ]
+    )
+
+    result = _execute_experiment_design(
+        stage_dir,
+        run_dir,
+        _config(tmp_path),
+        AdapterBundle(),
+        llm=llm,
+    )
+
+    assert result.status is StageStatus.DONE
+    assert len(llm.calls) == 3
+    retry_prompt = llm.calls[-1][0]["content"]
+    assert "previous expected_outputs.json response was invalid" in retry_prompt
+    assert "planning agent did not return a JSON object" in retry_prompt
+    assert json.loads(
+        (stage_dir / "expected_outputs.json").read_text(encoding="utf-8")
+    ) == expected
+
+
+def test_stage9_retries_expected_outputs_validation_errors(tmp_path: Path) -> None:
+    from researchclaw.pipeline.stage_impls._experiment_design import (
+        _execute_experiment_design,
+    )
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_hypotheses(run_dir)
+    stage_dir = run_dir / "stage-09"
+    expected = {
+        "schema_version": "researchclaw.expected_outputs.v1",
+        "outputs": ["outputs/results.json"],
+    }
+    llm = QueueLLM(
+        [
+            VALID_PLAN_MD,
+            json.dumps(
+                {
+                    "schema_version": "researchclaw.expected_outputs.v1",
+                    "outputs": ["/tmp/results.json"],
+                }
+            ),
+            json.dumps(expected),
+        ]
+    )
+
+    result = _execute_experiment_design(
+        stage_dir,
+        run_dir,
+        _config(tmp_path),
+        AdapterBundle(),
+        llm=llm,
+    )
+
+    assert result.status is StageStatus.DONE
+    assert len(llm.calls) == 3
+    retry_prompt = llm.calls[-1][0]["content"]
+    assert "outputs[0] must be a relative path" in retry_prompt
+    assert json.loads(
+        (stage_dir / "expected_outputs.json").read_text(encoding="utf-8")
+    ) == expected
+
+
 def test_stage9_fails_if_expected_outputs_invalid(tmp_path: Path) -> None:
     from researchclaw.pipeline.stage_impls._experiment_design import (
         _execute_experiment_design,

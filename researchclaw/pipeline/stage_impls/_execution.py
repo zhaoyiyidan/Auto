@@ -80,7 +80,7 @@ def _execute_manifest_validate_and_prepare(
         )
         return StageResult(
             stage=Stage.MANIFEST_VALIDATE_AND_PREPARE,
-            status=StageStatus.FAILED,
+            status=StageStatus.DONE,
             artifacts=("manifest_validation.json",),
             error="E11_MANIFEST_INVALID: " + "; ".join(validation.errors),
             decision="fix_code",

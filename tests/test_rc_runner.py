@@ -1387,7 +1387,7 @@ def test_experiment_loop_unknown_route_stops_without_stage9_reentry(
     assert seen.count(Stage.EXPERIMENT_ROUTE_DECISION) == 1
 
 
-def test_experiment_loop_max_iterations_forces_continue(
+def test_experiment_budget_exhausted_pauses_for_hitl(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,
     rc_config: RCConfig,
@@ -1412,11 +1412,16 @@ def test_experiment_loop_max_iterations_forces_continue(
         config=rc_config,
         adapters=adapters,
     )
-    assert seen.count(Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR) == MAX_EXPERIMENT_ITERATIONS + 1
-    assert Stage.RESULT_ANALYSIS in seen
+    assert seen.count(Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR) == (
+        MAX_EXPERIMENT_ITERATIONS + 1
+    )
+    assert Stage.RESULT_ANALYSIS not in seen
+    assert (run_dir / "experiment_hitl_required.json").is_file()
+    summary = json.loads((run_dir / "pipeline_summary.json").read_text())
+    assert summary["final_status"] == "paused"
 
 
-def test_experiment_loop_max_iterations_uses_configured_repair_cycles(
+def test_experiment_budget_exhaustion_uses_configured_repair_cycles(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,
     rc_config: RCConfig,
@@ -1450,7 +1455,10 @@ def test_experiment_loop_max_iterations_uses_configured_repair_cycles(
     assert seen.count(Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR) == 2
     history = json.loads((run_dir / "experiment_loop_history.json").read_text())
     assert len(history["iterations"]) == 1
-    assert Stage.RESULT_ANALYSIS in seen
+    assert Stage.RESULT_ANALYSIS not in seen
+    assert (run_dir / "experiment_hitl_required.json").is_file()
+    summary = json.loads((run_dir / "pipeline_summary.json").read_text())
+    assert summary["final_status"] == "paused"
 
 
 def test_experiment_loop_abort_stops(

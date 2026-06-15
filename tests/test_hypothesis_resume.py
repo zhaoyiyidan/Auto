@@ -12,6 +12,7 @@ from researchclaw.pipeline import runner as rc_runner
 from researchclaw.pipeline import hypothesis_branch
 from researchclaw.pipeline.branch_checkpoint import (
     read_branch_state,
+    resolve_branch_resume_stage,
     write_branch_stage_done,
 )
 from researchclaw.pipeline.executor import StageResult
@@ -198,6 +199,55 @@ def test_branch_stage13_abort_keeps_branch_state_at_stage12(
     state = read_branch_state(branch_run_dir)
     assert state is not None
     assert state["last_completed_stage"] == int(Stage.HARNESS_SUBMIT_AND_COLLECT)
+
+
+def test_branch_stage13_fix_code_keeps_branch_state_at_stage12(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch_run_dir = _branch_dir(tmp_path)
+    attempt = _attempt(branch_run_dir)
+    write_branch_stage_done(
+        branch_run_dir,
+        Stage.HARNESS_SUBMIT_AND_COLLECT,
+        attempt_id=attempt.attempt_id,
+        node_id=attempt.node_id,
+        workspace_path=attempt.workspace_path or branch_run_dir,
+    )
+
+    def fake_execute_stage(stage: Stage, **kwargs: Any) -> StageResult:
+        _ = kwargs
+        stage_dir = branch_run_dir / f"stage-{int(stage):02d}"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        if stage is Stage.EXPERIMENT_ROUTE_DECISION:
+            return StageResult(
+                stage=stage,
+                status=StageStatus.DONE,
+                artifacts=("experiment_decision.json",),
+                decision="fix_code",
+            )
+        return StageResult(stage=stage, status=StageStatus.DONE, artifacts=("out.md",))
+
+    def kill_before_repair_recursion(**kwargs: Any) -> list[StageResult]:
+        _ = kwargs
+        raise RuntimeError("killed before branch repair recursion")
+
+    monkeypatch.setattr(rc_runner, "execute_stage", fake_execute_stage)
+    monkeypatch.setattr(rc_runner, "_recurse_pipeline", kill_before_repair_recursion)
+
+    with pytest.raises(RuntimeError, match="killed before branch repair recursion"):
+        validate_branch(
+            branch_run_dir=branch_run_dir,
+            node=_node(),
+            attempt=attempt,
+            config=_config(tmp_path),
+            adapters=AdapterBundle(),
+        )
+
+    state = read_branch_state(branch_run_dir)
+    assert state is not None
+    assert state["last_completed_stage"] == int(Stage.HARNESS_SUBMIT_AND_COLLECT)
+    assert resolve_branch_resume_stage(branch_run_dir) is Stage.EXPERIMENT_ROUTE_DECISION
 
 
 def test_stage15_done_reconstructs_attempt_result_without_pipeline(

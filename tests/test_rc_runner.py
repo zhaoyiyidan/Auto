@@ -1399,6 +1399,61 @@ def test_stage13_abort_does_not_advance_checkpoint_or_callback(
     assert completed == [Stage.HARNESS_SUBMIT_AND_COLLECT]
 
 
+def test_resume_after_stage13_fix_code_reruns_stage13(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    seen: list[Stage] = []
+    route_calls = 0
+    original_recurse = rc_runner._recurse_pipeline
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        seen.append(stage)
+        _touch_stage_dir(run_dir, stage)
+        nonlocal route_calls
+        if stage == Stage.EXPERIMENT_ROUTE_DECISION:
+            route_calls += 1
+            route = "fix_code" if route_calls == 1 else "continue"
+            return _route_result(stage, route)
+        return _done(stage)
+
+    def kill_before_repair_recursion(**kwargs: Any) -> list[StageResult]:
+        _ = kwargs
+        raise RuntimeError("killed before repair recursion")
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    monkeypatch.setattr(rc_runner, "_recurse_pipeline", kill_before_repair_recursion)
+
+    with pytest.raises(RuntimeError, match="killed before repair recursion"):
+        rc_runner.execute_pipeline(
+            run_dir=run_dir,
+            run_id="run-stage13-fix-code-killed",
+            config=rc_config,
+            adapters=adapters,
+            from_stage=Stage.HARNESS_SUBMIT_AND_COLLECT,
+        )
+
+    checkpoint = json.loads((run_dir / "checkpoint.json").read_text())
+    assert checkpoint["last_completed_stage"] == int(Stage.HARNESS_SUBMIT_AND_COLLECT)
+    assert rc_runner.read_checkpoint(run_dir) is Stage.EXPERIMENT_ROUTE_DECISION
+
+    monkeypatch.setattr(rc_runner, "_recurse_pipeline", original_recurse)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-stage13-fix-code-resume",
+        config=rc_config,
+        adapters=adapters,
+        from_stage=rc_runner.read_checkpoint(run_dir),
+        to_stage=Stage.EXPERIMENT_ROUTE_DECISION,
+    )
+
+    assert route_calls == 2
+    assert seen.count(Stage.EXPERIMENT_ROUTE_DECISION) == 2
+
+
 def test_experiment_loop_route_rerun_rejumps_to_12(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,

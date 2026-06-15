@@ -394,6 +394,38 @@ def _route_to_stage(route: str) -> Stage | None:
     return EXPERIMENT_ROUTE_TARGETS.get(route)
 
 
+def _pause_for_experiment_hitl(
+    run_dir: Path,
+    run_id: str,
+    stage: Stage,
+    route: str,
+) -> StageResult:
+    iterations = _read_experiment_iterations(run_dir)
+    payload = {
+        "schema_version": "researchclaw.experiment_hitl_required.v1",
+        "run_id": run_id,
+        "stage": int(stage),
+        "stage_name": stage.name,
+        "route": route,
+        "iterations": len(iterations),
+        "timestamp": _utcnow_iso(),
+    }
+    (run_dir / "experiment_hitl_required.json").write_text(
+        json.dumps(payload, indent=2),
+        encoding="utf-8",
+    )
+    return StageResult(
+        stage=stage,
+        status=StageStatus.PAUSED,
+        artifacts=("experiment_hitl_required.json",),
+        error=(
+            f"Experiment repair budget exhausted while routing {route}; "
+            "human review required"
+        ),
+        decision="hitl",
+    )
+
+
 _BACKWARD_ROUTES: frozenset[str] = frozenset({"fix_code", "rerun", "hitl", "abort"})
 
 
@@ -733,7 +765,15 @@ def execute_pipeline(
             if target is None:
                 break
             if len(_read_experiment_iterations(run_dir)) >= _max_experiment_iterations(config):
-                continue
+                results.append(
+                    _pause_for_experiment_hitl(
+                        run_dir,
+                        run_id,
+                        stage,
+                        experiment_route,
+                    )
+                )
+                break
             attempt = _record_experiment_iteration(
                 run_dir,
                 route=experiment_route,

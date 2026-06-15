@@ -14,6 +14,11 @@ from researchclaw.pipeline.hypothesis_tree import (
     _atomic_write_json,
     _atomic_write_text,
 )
+from researchclaw.pipeline.branch_checkpoint import (
+    resolve_branch_resume_stage,
+    write_branch_stage_done,
+)
+from researchclaw.pipeline.executor import StageResult
 from researchclaw.pipeline.runner import _promote_best_stage14, execute_pipeline
 from researchclaw.pipeline.stage15_verdict import read_stage15_verdict
 from researchclaw.pipeline.stages import Stage, StageStatus
@@ -86,16 +91,51 @@ def validate_branch(
             session_name=session_name,
         )
     branch_run_adapters = branch_adapters(adapters)
+    resume_stage = resolve_branch_resume_stage(branch_run_dir)
+    if resume_stage is None:
+        return finalize_attempt_result(
+            branch_run_dir,
+            node,
+            attempt,
+            [
+                StageResult(
+                    stage=Stage.RESEARCH_DECISION,
+                    status=StageStatus.DONE,
+                    artifacts=(),
+                )
+            ],
+        )
+
+    def record_stage_done(stage: Stage) -> None:
+        write_branch_stage_done(
+            branch_run_dir,
+            stage,
+            attempt_id=str(getattr(attempt, "attempt_id", "")),
+            node_id=str(getattr(node, "id", "")),
+            workspace_path=workspace_path or branch_run_dir,
+        )
+
     results = execute_pipeline(
         run_dir=branch_run_dir,
         run_id=_branch_run_id(branch_run_dir, node, attempt),
         config=branch_run_config,
         adapters=branch_run_adapters,
-        from_stage=Stage.EXPERIMENT_TASK_SPEC,
+        from_stage=resume_stage,
         to_stage=Stage.RESEARCH_DECISION,
         auto_approve_gates=True,
         initialize_run_globals=False,
+        on_stage_complete=record_stage_done,
     )
+    return finalize_attempt_result(branch_run_dir, node, attempt, results)
+
+
+def finalize_attempt_result(
+    branch_run_dir: Path,
+    node: Any,
+    attempt: Any,
+    results: list[Any],
+) -> dict[str, Any]:
+    branch_run_dir = Path(branch_run_dir)
     final_result = next(
         (
             result

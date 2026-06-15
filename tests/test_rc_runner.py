@@ -100,6 +100,47 @@ def _with_hitl_required_stages(
     )
 
 
+def test_is_forward_progress_predicate() -> None:
+    from researchclaw.pipeline.runner import is_forward_progress
+
+    def result(stage: Stage, status: StageStatus, decision: str) -> StageResult:
+        return StageResult(
+            stage=stage,
+            status=status,
+            artifacts=(),
+            decision=decision,
+        )
+
+    assert not is_forward_progress(
+        result(Stage.HARNESS_SUBMIT_AND_COLLECT, StageStatus.FAILED, "retry")
+    )
+    for route in ("fix_code", "rerun", "hitl", "abort"):
+        assert not is_forward_progress(
+            result(Stage.EXPERIMENT_ROUTE_DECISION, StageStatus.DONE, route)
+        )
+    for route in ("continue", "proceed"):
+        assert is_forward_progress(
+            result(Stage.EXPERIMENT_ROUTE_DECISION, StageStatus.DONE, route)
+        )
+    assert not is_forward_progress(
+        result(
+            Stage.MANIFEST_VALIDATE_AND_PREPARE,
+            StageStatus.DONE,
+            "fix_code",
+        )
+    )
+    assert is_forward_progress(
+        result(
+            Stage.MANIFEST_VALIDATE_AND_PREPARE,
+            StageStatus.DONE,
+            "proceed",
+        )
+    )
+    assert is_forward_progress(
+        result(Stage.RESULT_ANALYSIS, StageStatus.DONE, "proceed")
+    )
+
+
 def test_run_experiment_diagnosis_is_read_only(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,

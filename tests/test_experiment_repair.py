@@ -100,8 +100,8 @@ class TestBuildRepairPrompt:
         prompt = build_repair_prompt(diag, original_code={"main.py": "pass"})
         assert "WORKSPACE AGENT INSTRUCTIONS" in prompt
         assert "run_manifest.json" in prompt
-        assert "final git commit after all task changes are ready" in prompt
-        assert "code_commit to final HEAD" in prompt
+        assert "experiment implementation after all code changes are ready" in prompt
+        assert "code_commit to the implementation commit" in prompt
         assert "git status --porcelain" in prompt
         assert "Do not submit" in prompt
 

@@ -1154,6 +1154,33 @@ def test_experiment_loop_continue_runs_10_11_12_13_then_14(
     ]
 
 
+def test_stage11_to_stage_stops_after_stage11(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    seen: list[Stage] = []
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        seen.append(stage)
+        _touch_stage_dir(run_dir, stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-stage11-only",
+        config=rc_config,
+        adapters=adapters,
+        from_stage=Stage.MANIFEST_VALIDATE_AND_PREPARE,
+        to_stage=Stage.MANIFEST_VALIDATE_AND_PREPARE,
+    )
+
+    assert seen == [Stage.MANIFEST_VALIDATE_AND_PREPARE]
+
+
 def test_experiment_loop_stage11_invalid_rejumps_to_10(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,
@@ -1172,7 +1199,7 @@ def test_experiment_loop_stage11_invalid_rejumps_to_10(
             invalid_once = False
             return StageResult(
                 stage=stage,
-                status=StageStatus.FAILED,
+                status=StageStatus.DONE,
                 artifacts=("manifest_validation.json",),
                 decision="fix_code",
                 error="invalid manifest",
@@ -1217,7 +1244,7 @@ def test_experiment_loop_recoverable_failure_does_not_notify(
             invalid_once = False
             return StageResult(
                 stage=stage,
-                status=StageStatus.FAILED,
+                status=StageStatus.DONE,
                 artifacts=("manifest_validation.json",),
                 decision="fix_code",
                 error="invalid manifest",
@@ -1268,6 +1295,37 @@ def test_experiment_loop_route_fix_code_rejumps_to_10(
         adapters=adapters,
     )
     assert seen.count(Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR) == 2
+    assert (run_dir / "stage-10_v1").is_dir()
+
+
+def test_stage13_fix_code_does_not_checkpoint_stage13(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    route_calls = 0
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        _touch_stage_dir(run_dir, stage)
+        nonlocal route_calls
+        if stage == Stage.EXPERIMENT_ROUTE_DECISION:
+            route_calls += 1
+            route = "fix_code" if route_calls == 1 else "continue"
+            return _route_result(stage, route)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-stage13-fix-code-checkpoint",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    checkpoint = json.loads((run_dir / "checkpoint.json").read_text())
+    assert checkpoint["last_completed_stage"] >= int(Stage.RESULT_ANALYSIS)
     assert (run_dir / "stage-10_v1").is_dir()
 
 

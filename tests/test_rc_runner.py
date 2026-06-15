@@ -494,6 +494,104 @@ def test_execute_pipeline_from_stage_skips_earlier_stages(
     assert len(results) == len(seen)
 
 
+def test_execute_pipeline_on_stage_complete_fires_for_done_normal_stages_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    completed: list[Stage] = []
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        if stage == Stage.SEARCH_STRATEGY:
+            return _failed(stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+
+    results = rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-stage-complete-callback-normal",
+        config=rc_config,
+        adapters=adapters,
+        to_stage=Stage.SEARCH_STRATEGY,
+        on_stage_complete=completed.append,
+    )
+
+    assert completed == [Stage.TOPIC_INIT, Stage.PROBLEM_DECOMPOSE]
+    assert results[-1].stage == Stage.SEARCH_STRATEGY
+    assert results[-1].status == StageStatus.FAILED
+
+
+def test_execute_pipeline_on_stage_complete_fires_for_experiment_loop_stages(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    completed: list[Stage] = []
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        _touch_stage_dir(run_dir, stage)
+        if stage == Stage.EXPERIMENT_ROUTE_DECISION:
+            return _route_result(stage, "continue")
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-stage-complete-callback-loop",
+        config=rc_config,
+        adapters=adapters,
+        from_stage=Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
+        to_stage=Stage.RESEARCH_DECISION,
+        on_stage_complete=completed.append,
+    )
+
+    assert completed == [
+        Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
+        Stage.MANIFEST_VALIDATE_AND_PREPARE,
+        Stage.HARNESS_SUBMIT_AND_COLLECT,
+        Stage.EXPERIMENT_ROUTE_DECISION,
+        Stage.RESULT_ANALYSIS,
+        Stage.RESEARCH_DECISION,
+    ]
+
+
+def test_execute_pipeline_on_stage_complete_error_does_not_abort_run(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        return _done(stage)
+
+    def failing_callback(stage: Stage) -> None:
+        _ = stage
+        raise RuntimeError("callback failed")
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+
+    results = rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-stage-complete-callback-fail",
+        config=rc_config,
+        adapters=adapters,
+        to_stage=Stage.PROBLEM_DECOMPOSE,
+        on_stage_complete=failing_callback,
+    )
+
+    assert [result.stage for result in results] == [
+        Stage.TOPIC_INIT,
+        Stage.PROBLEM_DECOMPOSE,
+    ]
+
+
 def test_execute_pipeline_writes_kb_entries_when_kb_root_provided(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,

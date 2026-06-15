@@ -6,6 +6,9 @@ from typing import Any
 
 import pytest
 
+from researchclaw.adapters import AdapterBundle
+from researchclaw.config import RCConfig
+from researchclaw.pipeline import runner as rc_runner
 from researchclaw.pipeline import hypothesis_branch
 from researchclaw.pipeline.branch_checkpoint import (
     read_branch_state,
@@ -37,6 +40,27 @@ def _attempt(branch_run_dir: Path, *, node_id: str = "h-001") -> ValidationAttem
         node_id=node_id,
         branch_run_dir=str(branch_run_dir),
         workspace_path=str(branch_run_dir.parents[2] / ".worktrees" / f"{node_id}-attempt-001"),
+    )
+
+
+def _config(tmp_path: Path) -> RCConfig:
+    return RCConfig.from_dict(
+        {
+            "project": {"name": "branch-resume-test", "mode": "docs-first"},
+            "research": {"topic": "branch resume"},
+            "runtime": {"timezone": "UTC"},
+            "notifications": {"channel": "local"},
+            "knowledge_base": {"backend": "markdown", "root": str(tmp_path / "kb")},
+            "openclaw_bridge": {},
+            "llm": {
+                "provider": "openai-compatible",
+                "base_url": "http://localhost:1234/v1",
+                "api_key_env": "RC_TEST_KEY",
+                "api_key": "inline-test-key",
+            },
+        },
+        project_root=tmp_path,
+        check_paths=False,
     )
 
 
@@ -132,6 +156,48 @@ def test_killed_during_stage10_reruns_stage10_on_resume(
         Stage.EXPERIMENT_TASK_SPEC,
         Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
     ]
+
+
+def test_branch_stage13_abort_keeps_branch_state_at_stage12(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch_run_dir = _branch_dir(tmp_path)
+    attempt = _attempt(branch_run_dir)
+    write_branch_stage_done(
+        branch_run_dir,
+        Stage.HARNESS_SUBMIT_AND_COLLECT,
+        attempt_id=attempt.attempt_id,
+        node_id=attempt.node_id,
+        workspace_path=attempt.workspace_path or branch_run_dir,
+    )
+
+    def fake_execute_stage(stage: Stage, **kwargs: Any) -> StageResult:
+        _ = kwargs
+        stage_dir = branch_run_dir / f"stage-{int(stage):02d}"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        if stage is Stage.EXPERIMENT_ROUTE_DECISION:
+            return StageResult(
+                stage=stage,
+                status=StageStatus.DONE,
+                artifacts=("experiment_decision.json",),
+                decision="abort",
+            )
+        return StageResult(stage=stage, status=StageStatus.DONE, artifacts=("out.md",))
+
+    monkeypatch.setattr(rc_runner, "execute_stage", fake_execute_stage)
+
+    validate_branch(
+        branch_run_dir=branch_run_dir,
+        node=_node(),
+        attempt=attempt,
+        config=_config(tmp_path),
+        adapters=AdapterBundle(),
+    )
+
+    state = read_branch_state(branch_run_dir)
+    assert state is not None
+    assert state["last_completed_stage"] == int(Stage.HARNESS_SUBMIT_AND_COLLECT)
 
 
 def test_stage15_done_reconstructs_attempt_result_without_pipeline(

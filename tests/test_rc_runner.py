@@ -1329,6 +1329,36 @@ def test_stage13_fix_code_does_not_checkpoint_stage13(
     assert (run_dir / "stage-10_v1").is_dir()
 
 
+def test_stage13_abort_does_not_advance_checkpoint_or_callback(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    completed: list[Stage] = []
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        _touch_stage_dir(run_dir, stage)
+        if stage == Stage.EXPERIMENT_ROUTE_DECISION:
+            return _route_result(stage, "abort")
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-stage13-abort-checkpoint",
+        config=rc_config,
+        adapters=adapters,
+        from_stage=Stage.HARNESS_SUBMIT_AND_COLLECT,
+        on_stage_complete=completed.append,
+    )
+
+    checkpoint = json.loads((run_dir / "checkpoint.json").read_text())
+    assert checkpoint["last_completed_stage"] == int(Stage.HARNESS_SUBMIT_AND_COLLECT)
+    assert completed == [Stage.HARNESS_SUBMIT_AND_COLLECT]
+
+
 def test_experiment_loop_route_rerun_rejumps_to_12(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,

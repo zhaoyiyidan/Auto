@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 import importlib
 import logging
@@ -209,6 +210,18 @@ def _collect_content_metrics(run_dir: Path | None) -> dict[str, object]:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _notify_stage_complete(
+    on_stage_complete: Callable[[Stage], None] | None,
+    stage: Stage,
+) -> None:
+    if on_stage_complete is None:
+        return
+    try:
+        on_stage_complete(stage)
+    except Exception:
+        logger.debug("Stage completion callback failed", exc_info=True)
 
 
 def _run_experiment_diagnosis(run_dir: Path, config: RCConfig, run_id: str) -> None:
@@ -566,6 +579,7 @@ def execute_pipeline(
     kb_root: Path | None = None,
     cancel_event: "threading.Event | None" = None,
     initialize_run_globals: bool = True,
+    on_stage_complete: Callable[[Stage], None] | None = None,
 ) -> list[StageResult]:
     """Execute pipeline stages sequentially from *from_stage* to *to_stage* (inclusive)."""
 
@@ -683,6 +697,7 @@ def execute_pipeline(
                         run_id,
                         adapters=adapters,
                     )
+                    _notify_stage_complete(on_stage_complete, loop_result.stage)
                     if kb_root is not None:
                         try:
                             loop_stage_dir = run_dir / f"stage-{int(loop_result.stage):02d}"
@@ -872,6 +887,7 @@ def execute_pipeline(
 
         if result.status == StageStatus.DONE:
             _write_checkpoint(run_dir, stage, run_id, adapters=adapters)
+            _notify_stage_complete(on_stage_complete, stage)
             if (
                 stage == Stage.HYPOTHESIS_GEN
                 and not per_hypothesis_validation_enabled(config)

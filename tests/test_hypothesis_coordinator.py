@@ -1298,6 +1298,98 @@ Falsification: Second falsification.
     assert sorted(provisioned) == sorted(released)
 
 
+def test_workspace_isolation_provision_failure_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from researchclaw.pipeline import hypothesis_branch
+    from researchclaw.pipeline.hypothesis_coordinator import WorkspaceIsolationError
+
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    node = coordinator.store.create_node(
+        statement="Treatment improves accuracy.",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    attempt = coordinator.store.add_attempt(
+        node_id=node.id,
+        branch_run_dir=str(tmp_path / "hypothesis_branches" / node.id / "attempt-001"),
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+
+    def fail_provision_workspace(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        raise RuntimeError("git worktree add failed")
+
+    monkeypatch.setattr(
+        hypothesis_branch,
+        "provision_workspace",
+        fail_provision_workspace,
+    )
+    config = SimpleNamespace(
+        hypothesis_validation=SimpleNamespace(workspace_isolation="worktree"),
+        experiment=SimpleNamespace(
+            workspace_agent=SimpleNamespace(workspace_path=str(tmp_path / "source"))
+        ),
+    )
+
+    with pytest.raises(WorkspaceIsolationError, match="git worktree add failed"):
+        coordinator._prepare_attempt_for_run(
+            node,
+            attempt,
+            config,
+            created_at="2026-01-01T00:02:00+00:00",
+            max_concurrent=1,
+        )
+
+
+def test_workspace_isolation_off_keeps_shared_workspace_on_provision_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from researchclaw.pipeline import hypothesis_branch
+
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    node = coordinator.store.create_node(
+        statement="Treatment improves accuracy.",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    attempt = coordinator.store.add_attempt(
+        node_id=node.id,
+        branch_run_dir=str(tmp_path / "hypothesis_branches" / node.id / "attempt-001"),
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+
+    def fail_provision_workspace(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        raise AssertionError("provision_workspace should not be called")
+
+    monkeypatch.setattr(
+        hypothesis_branch,
+        "provision_workspace",
+        fail_provision_workspace,
+    )
+    config = SimpleNamespace(
+        hypothesis_validation=SimpleNamespace(workspace_isolation="shared"),
+        experiment=SimpleNamespace(
+            workspace_agent=SimpleNamespace(workspace_path=str(tmp_path / "source"))
+        ),
+    )
+
+    prepared = coordinator._prepare_attempt_for_run(
+        node,
+        attempt,
+        config,
+        created_at="2026-01-01T00:02:00+00:00",
+        max_concurrent=1,
+    )
+
+    assert prepared.status == "running"
+    assert prepared.workspace_path is None
+    assert prepared.agent_session_name == f"{tmp_path.name}-{node.id}-attempt-001"
+
+
 def test_workspace_provisioning_is_limited_to_active_workers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

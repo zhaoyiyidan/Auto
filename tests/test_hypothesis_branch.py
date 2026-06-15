@@ -4,6 +4,7 @@ import json
 import os
 from dataclasses import replace
 from pathlib import Path
+import shutil
 import subprocess
 from typing import Any
 
@@ -628,6 +629,99 @@ def test_provision_workspace_creates_distinct_git_worktrees(
     assert _run_git(path_two, "rev-parse", "--is-inside-work-tree") == "true"
     assert (path_one / "README.md").read_text(encoding="utf-8") == "base workspace\n"
     assert (path_two / "README.md").read_text(encoding="utf-8") == "base workspace\n"
+
+
+def test_provision_workspace_rebinds_registered_missing_worktree(
+    tmp_path: Path,
+) -> None:
+    from researchclaw.pipeline.hypothesis_branch import provision_workspace
+    from researchclaw.pipeline.hypothesis_store import ValidationAttempt
+
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    workspace_root = tmp_path / "worktrees"
+    attempt = ValidationAttempt(
+        attempt_id="h-001/attempt-001",
+        node_id="h-001",
+        branch_run_dir=str(tmp_path / "run" / "h-001" / "attempt-001"),
+    )
+    provisioned = provision_workspace(
+        attempt,
+        source_workspace=repo,
+        workspace_root=workspace_root,
+    )
+    workspace_path = Path(provisioned.workspace_path or "")
+    shutil.rmtree(workspace_path)
+
+    rebound = provision_workspace(
+        provisioned,
+        source_workspace=repo,
+        workspace_root=workspace_root,
+    )
+
+    assert Path(rebound.workspace_path or "") == workspace_path
+    assert _run_git(workspace_path, "rev-parse", "--is-inside-work-tree") == "true"
+    assert (workspace_path / "README.md").read_text(encoding="utf-8") == (
+        "base workspace\n"
+    )
+
+
+def test_provision_workspace_rebinds_present_unregistered_worktree(
+    tmp_path: Path,
+) -> None:
+    from researchclaw.pipeline.hypothesis_branch import provision_workspace
+    from researchclaw.pipeline.hypothesis_store import ValidationAttempt
+
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    workspace_root = tmp_path / "worktrees"
+    target = workspace_root / "h-001-attempt-001"
+    target.mkdir(parents=True)
+    attempt = ValidationAttempt(
+        attempt_id="h-001/attempt-001",
+        node_id="h-001",
+        branch_run_dir=str(tmp_path / "run" / "h-001" / "attempt-001"),
+    )
+
+    provisioned = provision_workspace(
+        attempt,
+        source_workspace=repo,
+        workspace_root=workspace_root,
+    )
+
+    assert Path(provisioned.workspace_path or "") == target
+    assert _run_git(target, "rev-parse", "--is-inside-work-tree") == "true"
+    assert (target / "README.md").read_text(encoding="utf-8") == "base workspace\n"
+
+
+def test_provision_workspace_reuses_same_attempt_worktree_after_prune(
+    tmp_path: Path,
+) -> None:
+    from researchclaw.pipeline.hypothesis_branch import provision_workspace
+    from researchclaw.pipeline.hypothesis_store import ValidationAttempt
+
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    workspace_root = tmp_path / "worktrees"
+    attempt = ValidationAttempt(
+        attempt_id="h-001/attempt-001",
+        node_id="h-001",
+        branch_run_dir=str(tmp_path / "run" / "h-001" / "attempt-001"),
+    )
+    first = provision_workspace(
+        attempt,
+        source_workspace=repo,
+        workspace_root=workspace_root,
+    )
+    _run_git(repo, "worktree", "prune")
+
+    second = provision_workspace(
+        first,
+        source_workspace=repo,
+        workspace_root=workspace_root,
+    )
+
+    assert second.workspace_path == first.workspace_path
 
 
 def test_provision_workspace_resolves_relative_workspace_root(

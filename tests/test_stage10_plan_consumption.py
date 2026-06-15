@@ -246,7 +246,8 @@ def test_stage11_run_manifest_must_cover_expected_outputs(tmp_path: Path) -> Non
         AdapterBundle(),
     )
 
-    assert result.status is StageStatus.FAILED
+    assert result.status is StageStatus.DONE
+    assert result.decision == "fix_code"
     validation = json.loads((stage11 / "manifest_validation.json").read_text(encoding="utf-8"))
     assert validation["ok"] is False
     assert any("outputs/summary.md" in item for item in validation["errors"])

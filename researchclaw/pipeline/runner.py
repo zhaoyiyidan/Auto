@@ -743,6 +743,13 @@ def execute_pipeline(
             print(f"{prefix} {stage.name} -- PAUSED ({elapsed:.1f}s) -- {err}")
         results.append(result)
 
+        if (
+            stage == Stage.HARNESS_SUBMIT_AND_COLLECT
+            and result.status == StageStatus.DONE
+            and config.experiment.repair.enabled
+        ):
+            _run_experiment_diagnosis(run_dir, config, run_id)
+
         experiment_route: str | None = None
         if (
             stage == Stage.MANIFEST_VALIDATE_AND_PREPARE

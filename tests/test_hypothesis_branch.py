@@ -249,6 +249,192 @@ def test_validate_branch_runs_stage9_to_stage15_and_writes_attempt_result(
     }
 
 
+def test_validate_branch_resumes_from_branch_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from researchclaw.pipeline import hypothesis_branch
+    from researchclaw.pipeline.branch_checkpoint import write_branch_stage_done
+    from researchclaw.pipeline.executor import StageResult
+    from researchclaw.pipeline.hypothesis_branch import validate_branch
+    from researchclaw.pipeline.hypothesis_store import HypothesisNode, ValidationAttempt
+    from researchclaw.pipeline.stages import Stage, StageStatus
+
+    branch_run_dir = (
+        tmp_path / "run" / "hypothesis_branches" / "h-001" / "attempt-001"
+    )
+    workspace_path = tmp_path / "worktrees" / "h-001-attempt-001"
+    attempt = ValidationAttempt(
+        attempt_id="h-001/attempt-001",
+        node_id="h-001",
+        branch_run_dir=str(branch_run_dir),
+        workspace_path=str(workspace_path),
+    )
+    write_branch_stage_done(
+        branch_run_dir,
+        Stage.MANIFEST_VALIDATE_AND_PREPARE,
+        attempt_id=attempt.attempt_id,
+        node_id=attempt.node_id,
+        workspace_path=workspace_path,
+    )
+    recorded: dict[str, Any] = {}
+
+    def fake_execute_pipeline(**kwargs: Any) -> list[Any]:
+        recorded.update(kwargs)
+        return [
+            StageResult(
+                stage=Stage.RESEARCH_DECISION,
+                status=StageStatus.DONE,
+                artifacts=("decision.md",),
+                decision="proceed",
+            )
+        ]
+
+    monkeypatch.setattr(hypothesis_branch, "execute_pipeline", fake_execute_pipeline)
+
+    validate_branch(
+        branch_run_dir=branch_run_dir,
+        node=HypothesisNode(id="h-001", statement="Treatment improves accuracy."),
+        attempt=attempt,
+        config=_workspace_config(tmp_path),
+        adapters=object(),
+    )
+
+    assert recorded["from_stage"] is Stage.HARNESS_SUBMIT_AND_COLLECT
+
+
+def test_validate_branch_finalizes_stage15_done_without_rerunning_pipeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from researchclaw.pipeline import hypothesis_branch
+    from researchclaw.pipeline.branch_checkpoint import write_branch_stage_done
+    from researchclaw.pipeline.hypothesis_branch import validate_branch
+    from researchclaw.pipeline.hypothesis_store import HypothesisNode, ValidationAttempt
+    from researchclaw.pipeline.stages import Stage
+
+    branch_run_dir = (
+        tmp_path / "run" / "hypothesis_branches" / "h-001" / "attempt-001"
+    )
+    stage15 = branch_run_dir / "stage-15"
+    stage15.mkdir(parents=True)
+    (stage15 / "verdict.json").write_text(
+        json.dumps(
+            {
+                "decision": "proceed",
+                "confidence": 0.91,
+                "evidence_summary": "Stage 15 already completed.",
+                "key_metrics": {"score": 0.87},
+            }
+        ),
+        encoding="utf-8",
+    )
+    attempt = ValidationAttempt(
+        attempt_id="h-001/attempt-001",
+        node_id="h-001",
+        branch_run_dir=str(branch_run_dir),
+        workspace_path=str(tmp_path / "worktrees" / "h-001-attempt-001"),
+    )
+    write_branch_stage_done(
+        branch_run_dir,
+        Stage.RESEARCH_DECISION,
+        attempt_id=attempt.attempt_id,
+        node_id=attempt.node_id,
+        workspace_path=attempt.workspace_path or branch_run_dir,
+    )
+
+    def fake_execute_pipeline(**kwargs: Any) -> list[Any]:
+        _ = kwargs
+        raise AssertionError("completed branch must not rerun execute_pipeline")
+
+    monkeypatch.setattr(hypothesis_branch, "execute_pipeline", fake_execute_pipeline)
+
+    result = validate_branch(
+        branch_run_dir=branch_run_dir,
+        node=HypothesisNode(id="h-001", statement="Treatment improves accuracy."),
+        attempt=attempt,
+        config=_workspace_config(tmp_path),
+        adapters=object(),
+    )
+
+    assert result == {
+        "attempt_id": "h-001/attempt-001",
+        "node_id": "h-001",
+        "status": "succeeded",
+        "decision": "proceed",
+        "artifacts": ["verdict.json"],
+        "error": None,
+        "next_hypothesis": None,
+        "confidence": 0.91,
+        "evidence_summary": "Stage 15 already completed.",
+        "metrics": {"score": 0.87},
+    }
+    assert json.loads(
+        (branch_run_dir / "attempt_result.json").read_text(encoding="utf-8")
+    ) == result
+
+
+def test_validate_branch_stage_complete_callback_writes_branch_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from researchclaw.pipeline import hypothesis_branch
+    from researchclaw.pipeline.branch_checkpoint import read_branch_state
+    from researchclaw.pipeline.executor import StageResult
+    from researchclaw.pipeline.hypothesis_branch import validate_branch
+    from researchclaw.pipeline.hypothesis_store import HypothesisNode, ValidationAttempt
+    from researchclaw.pipeline.stages import Stage, StageStatus
+
+    branch_run_dir = (
+        tmp_path / "run" / "hypothesis_branches" / "h-001" / "attempt-001"
+    )
+    branch_run_dir.mkdir(parents=True)
+    workspace_path = tmp_path / "worktrees" / "h-001-attempt-001"
+    attempt = ValidationAttempt(
+        attempt_id="h-001/attempt-001",
+        node_id="h-001",
+        branch_run_dir=str(branch_run_dir),
+        workspace_path=str(workspace_path),
+    )
+
+    def fake_execute_pipeline(**kwargs: Any) -> list[Any]:
+        on_stage_complete = kwargs["on_stage_complete"]
+        on_stage_complete(Stage.EXPERIMENT_TASK_SPEC)
+        on_stage_complete(Stage.HARNESS_SUBMIT_AND_COLLECT)
+        on_stage_complete(Stage.RESEARCH_DECISION)
+        return [
+            StageResult(
+                stage=Stage.RESEARCH_DECISION,
+                status=StageStatus.DONE,
+                artifacts=("decision.md",),
+                decision="proceed",
+            )
+        ]
+
+    monkeypatch.setattr(hypothesis_branch, "execute_pipeline", fake_execute_pipeline)
+
+    validate_branch(
+        branch_run_dir=branch_run_dir,
+        node=HypothesisNode(id="h-001", statement="Treatment improves accuracy."),
+        attempt=attempt,
+        config=_workspace_config(tmp_path),
+        adapters=object(),
+    )
+
+    state = read_branch_state(branch_run_dir)
+
+    assert state is not None
+    assert state["attempt_id"] == "h-001/attempt-001"
+    assert state["node_id"] == "h-001"
+    assert state["last_completed_stage"] == int(Stage.RESEARCH_DECISION)
+    assert state["stage_status"] == {
+        str(int(Stage.EXPERIMENT_TASK_SPEC)): "done",
+        str(int(Stage.HARNESS_SUBMIT_AND_COLLECT)): "done",
+        str(int(Stage.RESEARCH_DECISION)): "done",
+    }
+    assert state["workspace_path"] == str(workspace_path)
+
+
 def test_promote_best_stage14_for_branch_is_scoped_to_attempt(
     tmp_path: Path,
 ) -> None:

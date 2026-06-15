@@ -394,6 +394,21 @@ def _route_to_stage(route: str) -> Stage | None:
     return EXPERIMENT_ROUTE_TARGETS.get(route)
 
 
+_BACKWARD_ROUTES: frozenset[str] = frozenset({"fix_code", "rerun", "hitl", "abort"})
+
+
+def is_forward_progress(result: StageResult) -> bool:
+    """Return True when a result advances the pipeline high-water mark."""
+    if result.status is not StageStatus.DONE:
+        return False
+    if result.stage in (
+        Stage.MANIFEST_VALIDATE_AND_PREPARE,
+        Stage.EXPERIMENT_ROUTE_DECISION,
+    ):
+        return result.decision not in _BACKWARD_ROUTES
+    return True
+
+
 def _run_experiment_loop(
     *,
     run_dir: Path,

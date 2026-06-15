@@ -33,6 +33,7 @@ def _config(tmp_path: Path) -> RCConfig:
                 "api_key": "inline-test-key",
             },
             "experiment": {},
+            "hypothesis_validation": {"enabled": False},
         },
         project_root=tmp_path,
         check_paths=False,

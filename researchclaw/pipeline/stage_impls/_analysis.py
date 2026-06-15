@@ -110,6 +110,60 @@ def _unique_commits(
     return commits
 
 
+def _numeric(value: Any) -> int | float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    return None
+
+
+def _condition_summaries_from_aggregates(
+    metrics: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    aggregates = metrics.get("aggregates")
+    if not isinstance(aggregates, dict):
+        return {}
+
+    primary_metric = str(metrics.get("primary_metric") or "primary_metric")
+    condition_summaries: dict[str, dict[str, Any]] = {}
+    for condition_name, raw_condition in aggregates.items():
+        if not isinstance(raw_condition, dict):
+            continue
+        flat_metrics: dict[str, int | float] = {}
+        n_values: list[int] = []
+        for metric_name, raw_stats in raw_condition.items():
+            metric_key = str(metric_name)
+            direct_value = _numeric(raw_stats)
+            if direct_value is not None:
+                flat_metrics[metric_key] = direct_value
+                continue
+            if not isinstance(raw_stats, dict):
+                continue
+            mean_value = _numeric(raw_stats.get("mean"))
+            if mean_value is not None:
+                flat_metrics[metric_key] = mean_value
+                flat_metrics[f"{metric_key}_mean"] = mean_value
+            for stat_name, stat_value in raw_stats.items():
+                numeric_value = _numeric(stat_value)
+                if numeric_value is None:
+                    continue
+                flat_metrics[f"{metric_key}_{stat_name}"] = numeric_value
+                if stat_name == "n":
+                    n_values.append(int(numeric_value))
+        if primary_metric in flat_metrics:
+            flat_metrics["primary_metric"] = flat_metrics[primary_metric]
+        n_runs = max(n_values) if n_values else 0
+        condition_summaries[str(condition_name)] = {
+            "status": "completed",
+            "metrics": flat_metrics,
+            "n_seeds": n_runs,
+            "n_runs": n_runs,
+            "aggregates": raw_condition,
+        }
+    return condition_summaries
+
+
 def _execute_result_analysis(
     stage_dir: Path,
     run_dir: Path,
@@ -269,6 +323,16 @@ def _build_experiment_summary(
         "latest_run": latest_execution,
         "runs": execution_records,
     }
+    latest_metrics = latest_execution.get("metrics")
+    if isinstance(latest_metrics, dict):
+        primary_metric = latest_metrics.get("primary_metric")
+        if isinstance(primary_metric, str) and primary_metric.strip():
+            summary["primary_metric"] = primary_metric
+        summary["condition_summaries"] = _condition_summaries_from_aggregates(
+            latest_metrics
+        )
+    else:
+        summary["condition_summaries"] = {}
     provenance = {
         "base_sha": str(registry_records[0].get("base_sha", "")) if registry_records else "",
         "commits": _unique_commits(execution_records, registry_records),

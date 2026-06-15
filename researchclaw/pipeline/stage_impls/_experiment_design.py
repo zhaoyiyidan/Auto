@@ -116,7 +116,7 @@ def _collect_planning_context(config: RCConfig, run_dir: Path) -> PlanningContex
 
 def _generate_plan_md(llm: LLMClient, context: PlanningContext) -> str:
     prompt = (
-        "You are a read-only experiment planning agent. Inspect the supplied "
+        "Act as a read-only experiment planning agent. Inspect the supplied "
         "workspace context and research context, then write only plan.md content. "
         "Do not write code. Do not propose editing files yourself.\n\n"
         "The plan must include sections for Hypotheses, Baselines, Ablations, "

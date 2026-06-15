@@ -48,6 +48,7 @@ researchclaw/
 │   ├── stages.py            # 23-stage IntEnum, transitions, gate logic, rollback rules
 │   ├── contracts.py         # StageContract for each stage (required_keys, produced_keys, gate flag)
 │   ├── executor.py          # 23 stage executor functions + dispatch table (_STAGE_EXECUTORS)
+│   ├── branch_checkpoint.py # Per-hypothesis branch_state.json resume contract
 │   └── runner.py            # execute_pipeline(), execute_iterative_pipeline()
 ├── llm/
 │   └── client.py            # LLMClient (OpenAI-compatible), from_rc_config() factory
@@ -144,6 +145,25 @@ python tests/e2e_real_llm.py
 # Validate config
 researchclaw validate --config config.yaml
 ```
+
+## Per-Hypothesis Branch Resume
+
+Per-hypothesis validation branches run Stages 9-15 in isolated branch run
+directories. Each branch now writes a dedicated `branch_state.json` via
+`researchclaw.pipeline.branch_checkpoint`, separate from the main run
+`checkpoint.json`.
+
+- `branch_state.json` records the attempt id, node id, last completed branch stage,
+  per-stage status, workspace path, and update timestamp.
+- `validate_branch()` resolves interrupted branches from `branch_state.json` first,
+  then falls back to the branch-local `checkpoint.json` for pre-existing runs.
+- If Stage 15 is complete but `attempt_result.json` is missing, the branch finalizer
+  reconstructs the attempt result from `stage-15/verdict.json` without rerunning the
+  Stage 9-15 pipeline.
+- The runner exposes a generic `on_stage_complete` callback so branch state can be
+  persisted after each DONE stage without coupling the main pipeline to branch logic.
+- Workspace isolation failures now raise `WorkspaceIsolationError` when isolation is
+  enabled; ResearchClaw no longer silently falls back to a shared workspace.
 
 ## Key APIs
 

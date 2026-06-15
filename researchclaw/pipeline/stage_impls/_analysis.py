@@ -32,6 +32,7 @@ from researchclaw.pipeline.evidence_organizer import (
     postcheck_analysis,
     run_evidence_organizer,
 )
+from researchclaw.pipeline.stage15_verdict import write_stage15_verdict
 from researchclaw.pipeline.stages import Stage, StageStatus
 from researchclaw.prompts import PromptManager
 
@@ -528,6 +529,23 @@ def _read_experiment_summary(run_dir: Path) -> dict[str, object]:
     return {}
 
 
+def _stage15_key_metrics(run_dir: Path) -> dict[str, Any]:
+    summary = _read_experiment_summary(run_dir)
+    metrics = summary.get("metrics_summary") if isinstance(summary, dict) else {}
+    if not isinstance(metrics, dict):
+        return {}
+    key_metrics: dict[str, Any] = {}
+    for name, value in metrics.items():
+        if isinstance(value, dict):
+            if "mean" in value:
+                key_metrics[str(name)] = value.get("mean")
+            elif value:
+                key_metrics[str(name)] = value
+        else:
+            key_metrics[str(name)] = value
+    return key_metrics
+
+
 def _read_agent_results_canonical(run_dir: Path) -> dict[str, object]:
     """Read canonical result payloads from stage-12 workspace artifacts.
 
@@ -735,6 +753,13 @@ def _hypothesis_protocol_decision(
         json.dumps(decision_payload, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+    write_stage15_verdict(
+        stage_dir,
+        decision=decision,
+        decision_md=decision_md,
+        key_metrics=_stage15_key_metrics(run_dir),
+        strict=False,
+    )
     from researchclaw.pipeline.hypothesis_mode import (
         per_hypothesis_validation_enabled,
     )
@@ -759,8 +784,13 @@ def _hypothesis_protocol_decision(
     return StageResult(
         stage=Stage.RESEARCH_DECISION,
         status=StageStatus.DONE,
-        artifacts=("decision.md", "decision_structured.json", "decision_review.md"),
-        evidence_refs=("stage-15/decision.md",),
+        artifacts=(
+            "decision.md",
+            "decision_structured.json",
+            "decision_review.md",
+            "verdict.json",
+        ),
+        evidence_refs=("stage-15/decision.md", "stage-15/verdict.json"),
         decision=decision,
     )
 
@@ -812,6 +842,15 @@ def _agent_requirements_decision(
     (stage_dir / "decision_structured.json").write_text(
         json.dumps(decision_payload, indent=2), encoding="utf-8"
     )
+    write_stage15_verdict(
+        stage_dir,
+        decision=decision,
+        decision_md=decision_md,
+        confidence=1.0 if not requirements_unmet else 0.5,
+        evidence_summary=str(verdict.get("delta_feedback") or "") or decision_md[:1000],
+        key_metrics=_stage15_key_metrics(run_dir),
+        strict=False,
+    )
     # Also persist the verdict for the runner / downstream stages to pick up
     (run_dir / "requirements_verdict.json").write_text(
         json.dumps(verdict, indent=2), encoding="utf-8"
@@ -846,8 +885,13 @@ def _agent_requirements_decision(
     return StageResult(
         stage=Stage.RESEARCH_DECISION,
         status=StageStatus.DONE,
-        artifacts=("decision.md", "decision_structured.json", "decision_review.md"),
-        evidence_refs=("stage-15/decision.md",),
+        artifacts=(
+            "decision.md",
+            "decision_structured.json",
+            "decision_review.md",
+            "verdict.json",
+        ),
+        evidence_refs=("stage-15/decision.md", "stage-15/verdict.json"),
         decision=decision,
     )
 
@@ -993,6 +1037,13 @@ Generated: {_utcnow_iso()}
     decision_payload = _write_decision_structured_json(
         stage_dir, decision_md, decision
     )
+    write_stage15_verdict(
+        stage_dir,
+        decision=decision,
+        decision_md=decision_md,
+        key_metrics=_stage15_key_metrics(run_dir),
+        strict=False,
+    )
     _quality_warnings = decision_payload["quality_warnings"]
     if _quality_warnings:
         logger.warning("T3.1: Decision quality warnings: %s", _quality_warnings)
@@ -1024,7 +1075,12 @@ Generated: {_utcnow_iso()}
     return StageResult(
         stage=Stage.RESEARCH_DECISION,
         status=StageStatus.DONE,
-        artifacts=("decision.md", "decision_structured.json", "decision_review.md"),
-        evidence_refs=("stage-15/decision.md",),
+        artifacts=(
+            "decision.md",
+            "decision_structured.json",
+            "decision_review.md",
+            "verdict.json",
+        ),
+        evidence_refs=("stage-15/decision.md", "stage-15/verdict.json"),
         decision=decision,
     )

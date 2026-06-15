@@ -21,6 +21,45 @@ class PostCheckResult:
     violations: tuple[str, ...] = ()
 
 
+class SmokeEvidenceOrganizerSession:
+    """Deterministic organizer used only when explicitly configured."""
+
+    def __init__(self, run_dir: Path) -> None:
+        self.run_dir = Path(run_dir)
+        self.session_name = "researchclaw-smoke-analysis"
+
+    def run_task(self, prompt: str) -> str:
+        stage_dir = _stage_dir_from_prompt(prompt) or self.run_dir / "stage-14"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        analysis = "\n".join(
+            [
+                "# Evidence Organization",
+                "",
+                "## Experiment Objective",
+                "Organize the collected workspace experiment artifacts for review.",
+                "",
+                "## Experiment Plan",
+                "See the Stage 9 plan and expected outputs referenced in the evidence bundle.",
+                "",
+                "## Executed Experiments",
+                "The configured submitter executed the manifest command and collected declared result paths.",
+                "",
+                "## Results Summary",
+                "Result quality: 5/10",
+                "This smoke organizer records artifact locations only; scientific interpretation remains in Stage 15.",
+                "",
+                "## Artifact Locations",
+                "See execution_record.json, result_artifacts.json, and run_manifest.json from the branch run.",
+                "",
+                "## Reproducibility",
+                "The manifest code_commit, launch command, and result paths are recorded in prior stage artifacts.",
+                "",
+            ]
+        )
+        (stage_dir / "analysis.md").write_text(analysis, encoding="utf-8")
+        return "smoke evidence organization complete"
+
+
 _DEFAULT_INPUTS: tuple[tuple[str, str], ...] = (
     ("experiment_plan", "plan.md"),
     ("expected_outputs", "expected_outputs.json"),
@@ -119,6 +158,8 @@ def create_evidence_organizer_agent(
 ) -> AcpWorkspaceSession | None:
     """Create the independent Stage 14 organizer ACP session."""
     agent_cfg = config.experiment.result_analysis_agent
+    if str(getattr(agent_cfg, "agent", "") or "").strip().lower() == "smoke":
+        return SmokeEvidenceOrganizerSession(run_dir)  # type: ignore[return-value]
     acp_cfg = getattr(config.llm, "acp", None)
     base_url = getattr(acp_cfg, "base_url", "") or getattr(config.llm, "base_url", "")
     api_key_env = (
@@ -143,6 +184,13 @@ def create_evidence_organizer_agent(
     if session._resolve_acpx() is None:
         return None
     return session
+
+
+def _stage_dir_from_prompt(prompt: str) -> Path | None:
+    match = re.search(r'"stage_dir"\s*:\s*"([^"]+)"', prompt)
+    if not match:
+        return None
+    return Path(match.group(1))
 
 
 def run_evidence_organizer(

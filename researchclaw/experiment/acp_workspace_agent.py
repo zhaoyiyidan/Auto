@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Protocol
 
 from researchclaw.experiment.acp_workspace_session import AcpWorkspaceSession
-from researchclaw.experiment.workspace import WorkspaceAgentResult
+from researchclaw.experiment.manifest_validation import validate_manifest
+from researchclaw.experiment.workspace import RunManifest, WorkspaceAgentResult
 
 
 class WorkspaceSession(Protocol):
@@ -66,11 +67,28 @@ class AcpWorkspaceAgent:
             if agent_commit_sha
             else _git(workspace, "diff", "--stat")
         )
+        workspace_dirty = bool(_git(workspace, "status", "--porcelain"))
         manifest_path = self._find_manifest(workspace)
+        if (
+            error is not None
+            and agent_commit_sha is not None
+            and manifest_path is not None
+            and _recoverable_session_error(error)
+            and _manifest_valid_after_error(workspace, manifest_path, base_sha, head_sha)
+        ):
+            raw_log = (
+                raw_log
+                + "\n[ResearchClaw] ACP session ended with a recoverable error, "
+                "but the workspace contains a clean committed update and valid "
+                "run_manifest.json."
+            )
+            error = None
         if agent_commit_sha is None and error is None:
             error = "Agent did not create a new git commit"
         if manifest_path is None and error is None:
             error = f"Agent manifest not found: {self.manifest_filename}"
+        if workspace_dirty and error is None:
+            error = "Agent left workspace dirty"
         return WorkspaceAgentResult(
             base_sha=base_sha,
             agent_commit_sha=agent_commit_sha,
@@ -95,6 +113,47 @@ class AcpWorkspaceAgent:
             if ".git" not in candidate.parts:
                 return candidate.relative_to(workspace).as_posix()
         return None
+
+
+def _recoverable_session_error(error: str) -> bool:
+    lower = str(error or "").lower()
+    return (
+        "timed out" in lower
+        or "timeout" in lower
+        or "stream disconnected" in lower
+        or "transient" in lower
+    )
+
+
+def _manifest_valid_after_error(
+    workspace: Path,
+    manifest_path: str,
+    base_sha: str,
+    head_sha: str,
+) -> bool:
+    try:
+        manifest = RunManifest.from_path(workspace / manifest_path)
+    except Exception:  # noqa: BLE001
+        return False
+    validation = validate_manifest(manifest, workspace, allow_dirty=False)
+    if not validation.ok or manifest.code_commit == base_sha:
+        return False
+    return _is_ancestor(workspace, base_sha, manifest.code_commit) and _is_ancestor(
+        workspace,
+        manifest.code_commit,
+        head_sha,
+    )
+
+
+def _is_ancestor(workspace: Path, ancestor: str, descendant: str) -> bool:
+    proc = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return proc.returncode == 0
 
 
 def _git(workspace: Path, *args: str) -> str:

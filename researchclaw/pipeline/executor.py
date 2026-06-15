@@ -182,6 +182,7 @@ from researchclaw.pipeline.stage_impls._analysis import (  # noqa: E402
     _write_decision_structured_json,
     _execute_research_decision,
 )
+from researchclaw.pipeline.stage15_verdict import write_stage15_verdict  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Stages 16-17 (extracted to stage_impls/_paper_writing.py)
@@ -704,6 +705,12 @@ def _finalize_research_decision_from_artifact(
             encoding="utf-8",
         )
     _write_decision_structured_json(stage_dir, decision_md, decision)
+    write_stage15_verdict(
+        stage_dir,
+        decision=decision,
+        decision_md=decision_md,
+        strict=False,
+    )
     _clear_gate_proposal_sentinel(stage_dir)
     from researchclaw.pipeline.hypothesis_mode import (
         per_hypothesis_validation_enabled,
@@ -725,8 +732,13 @@ def _finalize_research_decision_from_artifact(
     return StageResult(
         stage=Stage.RESEARCH_DECISION,
         status=StageStatus.DONE,
-        artifacts=("decision.md", "decision_structured.json", "decision_review.md"),
-        evidence_refs=("stage-15/decision.md",),
+        artifacts=(
+            "decision.md",
+            "decision_structured.json",
+            "decision_review.md",
+            "verdict.json",
+        ),
+        evidence_refs=("stage-15/decision.md", "stage-15/verdict.json"),
         decision=decision,
     )
 
@@ -830,6 +842,37 @@ def execute_stage(
                 artifacts=(),
                 error=str(exc),
                 decision="retry",
+            )
+
+    if (
+        stage is Stage.RESEARCH_DECISION
+        and result.status == StageStatus.DONE
+        and not (stage_dir / "verdict.json").exists()
+    ):
+        decision_md = ""
+        decision_path = stage_dir / "decision.md"
+        if decision_path.exists():
+            try:
+                decision_md = decision_path.read_text(encoding="utf-8")
+            except OSError:
+                decision_md = ""
+        write_stage15_verdict(
+            stage_dir,
+            decision=result.decision,
+            decision_md=decision_md,
+            strict=False,
+        )
+        if "verdict.json" not in result.artifacts:
+            result = StageResult(
+                stage=result.stage,
+                status=result.status,
+                artifacts=(*result.artifacts, "verdict.json"),
+                error=result.error,
+                decision=result.decision,
+                evidence_refs=(
+                    *result.evidence_refs,
+                    "stage-15/verdict.json",
+                ),
             )
 
     if result.status == StageStatus.DONE:

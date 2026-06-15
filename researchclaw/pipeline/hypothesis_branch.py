@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import logging
 import os
 from pathlib import Path
 import re
@@ -14,7 +15,10 @@ from researchclaw.pipeline.hypothesis_tree import (
     _atomic_write_text,
 )
 from researchclaw.pipeline.runner import _promote_best_stage14, execute_pipeline
+from researchclaw.pipeline.stage15_verdict import read_stage15_verdict
 from researchclaw.pipeline.stages import Stage, StageStatus
+
+logger = logging.getLogger(__name__)
 
 
 def _single_hypothesis_md(node: Any) -> str:
@@ -72,22 +76,24 @@ def validate_branch(
     adapters: Any,
 ) -> dict[str, Any]:
     branch_run_dir = Path(branch_run_dir)
-    branch_run_config = config
+    branch_run_config = branch_config(config)
     workspace_path = getattr(attempt, "workspace_path", None)
     session_name = getattr(attempt, "agent_session_name", None)
-    if workspace_path and session_name:
+    if workspace_path or session_name:
         branch_run_config = branch_config(
-            config,
+            branch_run_config,
             workspace_path=workspace_path,
             session_name=session_name,
         )
+    branch_run_adapters = branch_adapters(adapters)
     results = execute_pipeline(
         run_dir=branch_run_dir,
         run_id=_branch_run_id(branch_run_dir, node, attempt),
         config=branch_run_config,
-        adapters=adapters,
+        adapters=branch_run_adapters,
         from_stage=Stage.EXPERIMENT_TASK_SPEC,
         to_stage=Stage.RESEARCH_DECISION,
+        auto_approve_gates=True,
         initialize_run_globals=False,
     )
     final_result = next(
@@ -103,18 +109,50 @@ def validate_branch(
         and final_result.stage == Stage.RESEARCH_DECISION
         and final_result.status == StageStatus.DONE
     )
+    verdict_path = branch_run_dir / "stage-15" / "verdict.json"
+    verdict: dict[str, Any] | None = None
+    if verdict_path.exists():
+        verdict = read_stage15_verdict(verdict_path)
+
+    decision = (
+        verdict.get("decision")
+        if verdict is not None
+        else getattr(final_result, "decision", None) if final_result else None
+    )
+    artifacts = list(getattr(final_result, "artifacts", ()) or ()) if final_result else []
+    if verdict is not None and "verdict.json" not in artifacts:
+        artifacts.append("verdict.json")
+
     payload = {
         "attempt_id": getattr(attempt, "attempt_id", ""),
         "node_id": getattr(node, "id", ""),
         "status": "succeeded" if succeeded else "failed",
-        "decision": getattr(final_result, "decision", None) if final_result else None,
-        "artifacts": list(getattr(final_result, "artifacts", ()) or ())
-        if final_result
-        else [],
+        "decision": decision,
+        "artifacts": artifacts,
         "error": getattr(final_result, "error", None) if final_result else "no results",
     }
+    if verdict is not None:
+        payload.update(
+            {
+                "next_hypothesis": verdict.get("next_hypothesis"),
+                "confidence": verdict.get("confidence"),
+                "evidence_summary": verdict.get("evidence_summary"),
+                "metrics": verdict.get("key_metrics") or {},
+            }
+        )
     _atomic_write_json(branch_run_dir / "attempt_result.json", payload)
     return payload
+
+
+def branch_adapters(adapters: Any) -> Any:
+    """Return adapters for branch execution with HITL disabled."""
+    if getattr(adapters, "hitl", None) is None:
+        return adapters
+    try:
+        return replace(adapters, hitl=None)
+    except Exception:  # noqa: BLE001
+        logger.debug("Branch adapters could not disable HITL", exc_info=True)
+        return adapters
 
 
 def promote_best_stage14_for_branch(branch_run_dir: Path, config: Any) -> None:
@@ -133,12 +171,12 @@ def provision_workspace(
     source_workspace: Path,
     workspace_root: Path | None = None,
 ) -> Any:
-    source_workspace = Path(source_workspace)
+    source_workspace = Path(source_workspace).resolve()
     workspace_root = (
         Path(workspace_root)
         if workspace_root
         else source_workspace.parent / ".worktrees"
-    )
+    ).resolve()
     workspace_root.mkdir(parents=True, exist_ok=True)
     target = workspace_root / _attempt_workspace_name(attempt)
     if not target.exists():
@@ -158,7 +196,7 @@ def provision_workspace(
             stderr=subprocess.PIPE,
             text=True,
         )
-    return replace(attempt, workspace_path=str(target))
+    return replace(attempt, workspace_path=str(target.resolve()))
 
 
 def release_workspace(
@@ -196,14 +234,57 @@ def release_workspace(
 def branch_config(
     config: Any,
     *,
-    workspace_path: str | Path,
-    session_name: str,
+    workspace_path: str | Path | None = None,
+    session_name: str | None = None,
 ) -> Any:
-    """Return a config copy with branch-local workspace agent settings."""
-    workspace_agent = replace(
-        config.experiment.workspace_agent,
-        workspace_path=str(workspace_path),
-        session_name=session_name,
-    )
-    experiment = replace(config.experiment, workspace_agent=workspace_agent)
-    return replace(config, experiment=experiment)
+    """Return a config copy with branch-local workspace and gate settings."""
+    branch = config
+    try:
+        branch = replace(
+            branch,
+            security=replace(branch.security, hitl_required_stages=()),
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("Branch config could not override HITL gates", exc_info=True)
+
+    try:
+        if session_name is not None:
+            llm = branch.llm
+            branch = replace(
+                branch,
+                llm=replace(
+                    llm,
+                    acp=replace(llm.acp, session_name=str(session_name)),
+                ),
+            )
+    except Exception:  # noqa: BLE001
+        if session_name is not None:
+            logger.debug("Branch config could not override LLM session", exc_info=True)
+
+    try:
+        workspace_agent = branch.experiment.workspace_agent
+        result_analysis_agent = branch.experiment.result_analysis_agent
+        if workspace_path is not None:
+            workspace_agent = replace(
+                workspace_agent,
+                workspace_path=str(workspace_path),
+            )
+        if session_name is not None:
+            workspace_agent = replace(
+                workspace_agent,
+                session_name=str(session_name),
+            )
+            result_analysis_agent = replace(
+                result_analysis_agent,
+                session_name=f"{session_name}-analysis",
+            )
+        experiment = replace(
+            branch.experiment,
+            workspace_agent=workspace_agent,
+            result_analysis_agent=result_analysis_agent,
+        )
+        branch = replace(branch, experiment=experiment)
+    except Exception:  # noqa: BLE001
+        if workspace_path is not None or session_name is not None:
+            logger.debug("Branch config could not override workspace", exc_info=True)
+    return branch

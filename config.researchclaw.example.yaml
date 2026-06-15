@@ -353,6 +353,15 @@ hypothesis_validation:
   # optional, default: 1. Maximum validation attempts per hypothesis node.
   max_attempts_per_node: 1
 
+  # optional, default: 3. Maximum EXTEND/PIVOT tree depth.
+  max_tree_depth: 3
+
+  # optional, default: 100. Safety cap across queued validation attempts.
+  max_total_attempts: 100
+
+  # optional, default: false. Write coordinator_gate.json after aggregation.
+  require_coordinator_gate: false
+
   # optional, default: "shared". Future values include "worktree".
   workspace_isolation: "shared"
 

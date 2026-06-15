@@ -509,6 +509,49 @@ def _run_experiment_loop(
         start_at = target
 
 
+def _run_per_hypothesis_coordinator(
+    *,
+    run_dir: Path,
+    config: RCConfig,
+    adapters: AdapterBundle,
+    split_from_stage8: bool,
+) -> bool:
+    if not per_hypothesis_validation_enabled(config):
+        return False
+    from researchclaw.pipeline.hypothesis_coordinator import (
+        HypothesisValidationCoordinator,
+    )
+
+    coordinator = HypothesisValidationCoordinator(run_dir)
+    if split_from_stage8:
+        hypotheses_md = _read_stage_artifact(
+            run_dir,
+            Stage.HYPOTHESIS_GEN,
+            "hypotheses.md",
+        )
+        if not hypotheses_md.strip():
+            return False
+        queue_path = run_dir / "hypothesis_tree" / "work_queue.jsonl"
+        if not queue_path.exists():
+            coordinator.split_and_queue(hypotheses_md)
+    elif not (run_dir / "hypothesis_tree").exists():
+        return False
+
+    validation = getattr(config, "hypothesis_validation", None)
+    coordinator.run_until_queue_empty(
+        config=config,
+        adapters=adapters,
+        max_concurrent=int(getattr(validation, "max_concurrent_branches", 1) or 1),
+        max_attempts_per_node=int(
+            getattr(validation, "max_attempts_per_node", 1) or 1
+        ),
+        require_coordinator_gate=bool(
+            getattr(validation, "require_coordinator_gate", False)
+        ),
+    )
+    return True
+
+
 def execute_pipeline(
     *,
     run_dir: Path,
@@ -529,6 +572,8 @@ def execute_pipeline(
     results: list[StageResult] = []
     started = False
     total_stages = len(STAGE_SEQUENCE)
+    per_hypothesis_validation_ran = False
+    skip_per_hypothesis_validation_stages = False
 
     # Force the domain detector to honor a deployed profile (if any) so
     # every stage picks the same adapter.  Safe no-op when empty.
@@ -563,6 +608,17 @@ def execute_pipeline(
         except Exception:
             logger.debug("Experiment memory initialisation skipped")
 
+    if (
+        int(from_stage) > int(Stage.RESEARCH_DECISION)
+        and _run_per_hypothesis_coordinator(
+            run_dir=run_dir,
+            config=config,
+            adapters=adapters,
+            split_from_stage8=False,
+        )
+    ):
+        per_hypothesis_validation_ran = True
+
     experiment_loop_stages = {
         Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
         Stage.MANIFEST_VALIDATE_AND_PREPARE,
@@ -574,6 +630,29 @@ def execute_pipeline(
     for stage in STAGE_SEQUENCE:
         started = _should_start(stage, from_stage, started)
         if not started:
+            continue
+
+        if (
+            skip_per_hypothesis_validation_stages
+            and Stage.EXPERIMENT_TASK_SPEC <= stage <= Stage.RESEARCH_DECISION
+        ):
+            continue
+
+        if (
+            not per_hypothesis_validation_ran
+            and Stage.EXPERIMENT_TASK_SPEC <= stage <= Stage.RESEARCH_DECISION
+            and (run_dir / "hypothesis_tree").exists()
+            and _run_per_hypothesis_coordinator(
+                run_dir=run_dir,
+                config=config,
+                adapters=adapters,
+                split_from_stage8=False,
+            )
+        ):
+            per_hypothesis_validation_ran = True
+            skip_per_hypothesis_validation_stages = True
+            if to_stage is not None and int(to_stage) <= int(Stage.RESEARCH_DECISION):
+                break
             continue
 
         # ── Check for cancellation before each stage ──
@@ -793,7 +872,10 @@ def execute_pipeline(
 
         if result.status == StageStatus.DONE:
             _write_checkpoint(run_dir, stage, run_id, adapters=adapters)
-            if stage == Stage.HYPOTHESIS_GEN:
+            if (
+                stage == Stage.HYPOTHESIS_GEN
+                and not per_hypothesis_validation_enabled(config)
+            ):
                 try:
                     from researchclaw.pipeline.hypothesis_tree import (
                         finalize_after_stage8,
@@ -829,6 +911,21 @@ def execute_pipeline(
             logger.info("[%s] Reached --to-stage %s, stopping.", run_id, stage.name)
             print(f"[{run_id}] Reached --to-stage {stage.name}, stopping pipeline.")
             break
+
+        if (
+            stage == Stage.HYPOTHESIS_GEN
+            and result.status == StageStatus.DONE
+            and _run_per_hypothesis_coordinator(
+                run_dir=run_dir,
+                config=config,
+                adapters=adapters,
+                split_from_stage8=True,
+            )
+        ):
+            per_hypothesis_validation_ran = True
+            skip_per_hypothesis_validation_stages = True
+            if to_stage is not None and int(to_stage) <= int(Stage.RESEARCH_DECISION):
+                break
 
         # --- Heartbeat for sentinel watchdog ---
         if result.status == StageStatus.DONE:

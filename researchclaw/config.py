@@ -359,6 +359,9 @@ class HypothesisValidationConfig:
     enabled: bool = True
     max_concurrent_branches: int = 1
     max_attempts_per_node: int = 1
+    max_tree_depth: int = 3
+    max_total_attempts: int = 100
+    require_coordinator_gate: bool = False
     workspace_isolation: str = "shared"
 
 
@@ -990,6 +993,9 @@ def _parse_hypothesis_validation_config(
         enabled=bool(data.get("enabled", True)),
         max_concurrent_branches=_safe_int(data.get("max_concurrent_branches"), 1),
         max_attempts_per_node=_safe_int(data.get("max_attempts_per_node"), 1),
+        max_tree_depth=_safe_int(data.get("max_tree_depth"), 3),
+        max_total_attempts=_safe_int(data.get("max_total_attempts"), 100),
+        require_coordinator_gate=bool(data.get("require_coordinator_gate", False)),
         workspace_isolation=str(data.get("workspace_isolation", "shared")),
     )
 

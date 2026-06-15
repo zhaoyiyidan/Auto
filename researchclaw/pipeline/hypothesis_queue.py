@@ -65,18 +65,46 @@ class DurableWorkQueue:
                 fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
                 fh.write("\n")
 
-    def read_items(self) -> list[WorkItem]:
+    def complete_item(
+        self,
+        attempt_id: str,
+        *,
+        created_at: str | None = None,
+    ) -> None:
+        payload = {
+            "event_type": "work_item_completed",
+            "attempt_id": str(attempt_id or "").strip(),
+            "timestamp": created_at or _utcnow_iso(),
+        }
+        if not payload["attempt_id"]:
+            return
+        with _file_lock(self.lock_path):
+            self.tree_dir.mkdir(parents=True, exist_ok=True)
+            with self.queue_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+                fh.write("\n")
+
+    def read_items(self, *, include_done: bool = False) -> list[WorkItem]:
         if not self.queue_path.exists():
             return []
-        items: list[WorkItem] = []
+        queued: list[WorkItem] = []
         seen_attempts: set[str] = set()
+        completed: set[str] = set()
         for line in self.queue_path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             payload = json.loads(line)
+            event_type = payload.get("event_type")
+            if event_type == "work_item_completed":
+                attempt_id = str(payload.get("attempt_id") or "").strip()
+                if attempt_id:
+                    completed.add(attempt_id)
+                continue
             item = WorkItem.from_dict(payload.get("item"))
             if not item.attempt_id or item.attempt_id in seen_attempts:
                 continue
             seen_attempts.add(item.attempt_id)
-            items.append(item)
-        return items
+            queued.append(item)
+        if include_done:
+            return queued
+        return [item for item in queued if item.attempt_id not in completed]

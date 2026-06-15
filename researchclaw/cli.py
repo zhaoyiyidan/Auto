@@ -220,6 +220,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     auto_approve = cast(bool, args.auto_approve)
     skip_preflight = cast(bool, args.skip_preflight)
     resume = cast(bool, args.resume)
+    per_hypothesis = cast(bool, getattr(args, "per_hypothesis", False))
+    max_concurrent = cast(int | None, getattr(args, "max_concurrent", None))
     skip_noncritical = cast(bool, args.skip_noncritical_stage)
     no_graceful_degradation = cast(bool, args.no_graceful_degradation)
     hitl_mode = cast(str | None, getattr(args, "mode", None))
@@ -264,6 +266,20 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         new_research = dataclasses.replace(config.research, topic=topic)
         config = dataclasses.replace(config, research=new_research)
+
+    if per_hypothesis or max_concurrent is not None:
+        import dataclasses
+
+        validation = dataclasses.replace(
+            config.hypothesis_validation,
+            enabled=True,
+            max_concurrent_branches=(
+                max(1, int(max_concurrent))
+                if max_concurrent is not None
+                else config.hypothesis_validation.max_concurrent_branches
+            ),
+        )
+        config = dataclasses.replace(config, hypothesis_validation=validation)
 
     # --- LLM Preflight ---
     if not skip_preflight:
@@ -1222,6 +1238,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _ = run_p.add_argument(
         "--resume", action="store_true", help="Resume from last checkpoint"
+    )
+    _ = run_p.add_argument(
+        "--per-hypothesis",
+        action="store_true",
+        help="Validate Stage 8 hypotheses through branch-local Stage 9-15 attempts",
+    )
+    _ = run_p.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=None,
+        help="Maximum concurrent per-hypothesis validation branches",
     )
     _ = run_p.add_argument(
         "--skip-noncritical-stage", action="store_true",

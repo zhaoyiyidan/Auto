@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import shutil
 from dataclasses import asdict
@@ -227,6 +228,7 @@ def _execute_code_agent_implement_or_repair(
             manifest_filename=manifest_filename,
             prompt_manager=prompts,
         )
+    result_snapshot_before = _snapshot_result_paths(workspace, expected_outputs)
     agent = workspace_agent_factory.create_workspace_agent(
         config,
         llm=llm,
@@ -242,6 +244,20 @@ def _execute_code_agent_implement_or_repair(
         close_policy="keep",
     )
     _write_agent_result(stage_dir, result)
+    touched_result_paths = _changed_result_paths(
+        result_snapshot_before,
+        _snapshot_result_paths(workspace, expected_outputs),
+    )
+    if touched_result_paths:
+        return StageResult(
+            stage=Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
+            status=StageStatus.FAILED,
+            artifacts=("stage-10-workspace-agent-result.json",),
+            error=(
+                "E10_CODE_AGENT_FAIL: Stage 10 created or modified final "
+                "result artifacts: " + ", ".join(touched_result_paths)
+            ),
+        )
     if (
         not result.ok
         or result.agent_commit_sha is None
@@ -345,6 +361,70 @@ def _manifest_filename(config: RCConfig) -> str:
         )
         or "run_manifest.json"
     )
+
+
+def _snapshot_result_paths(
+    workspace: Path,
+    result_paths: list[str],
+) -> dict[str, dict[str, object]]:
+    snapshot: dict[str, dict[str, object]] = {}
+    root = workspace.resolve()
+    for rel in result_paths:
+        rel_path = str(rel).strip()
+        if not rel_path:
+            continue
+        path = (root / rel_path).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError:
+            snapshot[rel_path] = {"exists": False, "outside_workspace": True}
+            continue
+        snapshot[rel_path] = _snapshot_one_path(path)
+    return snapshot
+
+
+def _snapshot_one_path(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {"exists": False}
+    if path.is_file():
+        stat = path.stat()
+        return {
+            "exists": True,
+            "type": "file",
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+            "sha256": _sha256_file(path),
+        }
+    if path.is_dir():
+        files: dict[str, dict[str, object]] = {}
+        for child in sorted(item for item in path.rglob("*") if item.is_file()):
+            stat = child.stat()
+            files[child.relative_to(path).as_posix()] = {
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+                "sha256": _sha256_file(child),
+            }
+        return {"exists": True, "type": "dir", "files": files}
+    return {"exists": True, "type": "other"}
+
+
+def _changed_result_paths(
+    before: dict[str, dict[str, object]],
+    after: dict[str, dict[str, object]],
+) -> list[str]:
+    changed: list[str] = []
+    for rel in sorted(set(before) | set(after)):
+        if before.get(rel) != after.get(rel):
+            changed.append(rel)
+    return changed
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _manifest_source(

@@ -1388,7 +1388,7 @@ class TestWorkspaceAgentStageWiring:
         assert result.status is StageStatus.FAILED
         assert "E12_HARNESS_FAIL" in (result.error or "")
 
-    def test_stage12_all_missing_results_fails(
+    def test_stage12_all_missing_results_records_evidence_for_stage13(
         self,
         tmp_path: Path,
         run_dir: Path,
@@ -1450,8 +1450,8 @@ class TestWorkspaceAgentStageWiring:
             llm=None,
         )
 
-        assert result.status is StageStatus.FAILED
-        assert "E12_HARNESS_FAIL" in (result.error or "")
+        assert result.status is StageStatus.DONE
+        assert result.error is None
         artifacts = json.loads(
             (stage_dir / "result_artifacts.json").read_text(encoding="utf-8")
         )

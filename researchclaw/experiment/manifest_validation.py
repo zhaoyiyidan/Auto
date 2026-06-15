@@ -40,7 +40,7 @@ def validate_manifest(
     if code_commit.strip() and not commit_exists:
         errors.append(f"code_commit does not exist in workspace git: {code_commit}")
 
-    workspace_dirty = _workspace_dirty(workspace)
+    workspace_dirty = _workspace_dirty(workspace, result_paths=result_paths)
     if workspace_dirty and not allow_dirty:
         errors.append("workspace has uncommitted changes")
 
@@ -71,15 +71,51 @@ def _commit_exists(workspace: Path, commit: str) -> bool:
     return proc.returncode == 0
 
 
-def _workspace_dirty(workspace: Path) -> bool:
+def _workspace_dirty(workspace: Path, *, result_paths: list[str] | tuple[str, ...]) -> bool:
     proc = subprocess.run(
-        ["git", "status", "--porcelain"],
+        ["git", "status", "--porcelain", "--untracked-files=all"],
         cwd=workspace,
         capture_output=True,
         text=True,
         check=False,
     )
-    return bool(proc.stdout.strip())
+    dirty_paths = [
+        _status_path(line)
+        for line in proc.stdout.splitlines()
+        if line.strip()
+    ]
+    return any(
+        path and not _is_result_artifact_path(path, result_paths)
+        for path in dirty_paths
+    )
+
+
+def _status_path(line: str) -> str:
+    path = line[3:] if len(line) > 3 else line
+    if " -> " in path:
+        path = path.rsplit(" -> ", 1)[-1]
+    return path.strip().strip("/")
+
+
+def _is_result_artifact_path(
+    path: str,
+    result_paths: list[str] | tuple[str, ...],
+) -> bool:
+    rel = path.replace("\\", "/").strip("/")
+    if not rel:
+        return False
+    for result_path in result_paths:
+        result = str(result_path).replace("\\", "/").strip("/")
+        if not result:
+            continue
+        if "/" not in result:
+            if rel == result:
+                return True
+            continue
+        root = result.split("/", 1)[0]
+        if rel == root or rel.startswith(root + "/"):
+            return True
+    return False
 
 
 def _utcnow_iso() -> str:

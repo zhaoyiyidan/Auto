@@ -43,7 +43,7 @@ def _execute_manifest_validate_and_prepare(
     prompts: PromptManager | None = None,
 ) -> StageResult:
     _ = adapters, llm, prompts
-    manifest_text = _read_prior_artifact(run_dir, "run_manifest.json")
+    manifest_text = _read_stage_artifact(run_dir, 10, "run_manifest.json")
     if not manifest_text:
         return _failed(Stage.MANIFEST_VALIDATE_AND_PREPARE, "E11_MANIFEST_INVALID: missing run_manifest.json")
     manifest_payload = _load_json_text(manifest_text)
@@ -122,8 +122,8 @@ def _execute_harness_submit_and_collect(
     prompts: PromptManager | None = None,
 ) -> StageResult:
     _ = adapters, llm, prompts
-    validation_text = _read_prior_artifact(run_dir, "manifest_validation.json")
-    manifest_text = _read_prior_artifact(run_dir, "run_manifest.json")
+    validation_text = _read_stage_artifact(run_dir, 11, "manifest_validation.json")
+    manifest_text = _read_stage_artifact(run_dir, 11, "run_manifest.json")
     if not validation_text or not manifest_text:
         return _failed(Stage.HARNESS_SUBMIT_AND_COLLECT, "E12_HARNESS_FAIL: missing validated run manifest")
     try:
@@ -170,14 +170,6 @@ def _execute_harness_submit_and_collect(
         "submit_result.json",
         "result_artifacts.json",
     )
-    artifacts = _read_result_artifacts(stage_dir)
-    if artifacts and not any(bool(item.get("exists")) for item in artifacts):
-        return StageResult(
-            stage=Stage.HARNESS_SUBMIT_AND_COLLECT,
-            status=StageStatus.FAILED,
-            artifacts=output_artifacts,
-            error="E12_HARNESS_FAIL: all declared result_paths are missing",
-        )
     return StageResult(
         stage=Stage.HARNESS_SUBMIT_AND_COLLECT,
         status=StageStatus.DONE,
@@ -299,6 +291,14 @@ def _load_json_file(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _read_stage_artifact(run_dir: Path, stage_num: int, filename: str) -> str | None:
+    path = run_dir / f"stage-{stage_num:02d}" / filename
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
 
 
 def _load_expected_outputs(run_dir: Path) -> list[str]:

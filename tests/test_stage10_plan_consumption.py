@@ -253,6 +253,51 @@ def test_stage11_run_manifest_must_cover_expected_outputs(tmp_path: Path) -> Non
     assert any("outputs/summary.md" in item for item in validation["errors"])
 
 
+def test_stage11_reads_stage10_manifest_when_stage11_has_stale_copy(
+    tmp_path: Path,
+) -> None:
+    from researchclaw.pipeline.stage_impls._execution import (
+        _execute_manifest_validate_and_prepare,
+    )
+
+    workspace = tmp_path / "workspace"
+    old_commit = _init_git_workspace(workspace)
+    (workspace / "train.py").write_text("print('new')\n", encoding="utf-8")
+    subprocess.run(["git", "add", "train.py"], cwd=workspace, check=True)
+    subprocess.run(["git", "commit", "-m", "new implementation"], cwd=workspace, check=True)
+    new_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=workspace,
+        text=True,
+    ).strip()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_stage9(run_dir, ["outputs/results.json"])
+    stage10 = run_dir / "stage-10"
+    stage10.mkdir()
+    (stage10 / "run_manifest.json").write_text(
+        json.dumps(_manifest(new_commit, ["outputs/results.json"])),
+        encoding="utf-8",
+    )
+    stage11 = run_dir / "stage-11"
+    stage11.mkdir()
+    (stage11 / "run_manifest.json").write_text(
+        json.dumps(_manifest(old_commit, ["outputs/results.json"])),
+        encoding="utf-8",
+    )
+
+    result = _execute_manifest_validate_and_prepare(
+        stage11,
+        run_dir,
+        _config(tmp_path, workspace),
+        AdapterBundle(),
+    )
+
+    copied = json.loads((stage11 / "run_manifest.json").read_text(encoding="utf-8"))
+    assert result.status is StageStatus.DONE
+    assert copied["code_commit"] == new_commit
+
+
 def test_run_manifest_no_primary_metric_field() -> None:
     from researchclaw.experiment.workspace import RunManifest
 

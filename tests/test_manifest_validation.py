@@ -84,6 +84,44 @@ def test_validate_manifest_dirty_workspace_policy(tmp_path: Path) -> None:
     assert allowed.workspace_dirty is True
 
 
+def test_validate_manifest_ignores_generated_result_artifacts(tmp_path: Path) -> None:
+    workspace = _tmp_git_repo(tmp_path)
+    (workspace / "results").mkdir()
+    (workspace / "plots").mkdir()
+    (workspace / "results" / "metrics.json").write_text("{}\n", encoding="utf-8")
+    (workspace / "results" / "runtime_summary.json").write_text("{}\n", encoding="utf-8")
+    (workspace / "plots" / "figure.png").write_bytes(b"png")
+    manifest = RunManifest(
+        code_commit=_git(workspace, "rev-parse", "HEAD"),
+        launch=LaunchCommand(command="python train.py"),
+        result_paths=["results/metrics.json", "plots/figure.png"],
+    )
+
+    validation = validate_manifest(manifest, workspace, allow_dirty=False)
+
+    assert validation.ok is True
+    assert validation.workspace_dirty is False
+    assert validation.errors == []
+
+
+def test_validate_manifest_still_rejects_dirty_non_result_files(tmp_path: Path) -> None:
+    workspace = _tmp_git_repo(tmp_path)
+    (workspace / "results").mkdir()
+    (workspace / "results" / "metrics.json").write_text("{}\n", encoding="utf-8")
+    (workspace / "train.py").write_text("print('dirty')\n", encoding="utf-8")
+    manifest = RunManifest(
+        code_commit=_git(workspace, "rev-parse", "HEAD"),
+        launch=LaunchCommand(command="python train.py"),
+        result_paths=["results/metrics.json"],
+    )
+
+    validation = validate_manifest(manifest, workspace, allow_dirty=False)
+
+    assert validation.ok is False
+    assert validation.workspace_dirty is True
+    assert any("workspace has uncommitted changes" in item for item in validation.errors)
+
+
 def _unchecked_manifest(
     *,
     code_commit: str,

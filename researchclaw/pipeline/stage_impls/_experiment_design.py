@@ -24,6 +24,27 @@ logger = logging.getLogger(__name__)
 
 EXPECTED_OUTPUTS_SCHEMA_VERSION = "researchclaw.expected_outputs.v1"
 EXPECTED_OUTPUTS_MAX_ATTEMPTS = 3
+_CONTROL_ARTIFACT_NAMES = {
+    "expected_outputs.json",
+    "plan.md",
+    "run_manifest.json",
+}
+_IMPLEMENTATION_ARTIFACT_NAMES = {
+    "config.yaml",
+    "config.yml",
+    "environment.yaml",
+    "environment.yml",
+    "experiment_config.yaml",
+    "experiment_config.yml",
+    "pyproject.toml",
+    "requirements.txt",
+    "setup.py",
+}
+_IMPLEMENTATION_SUFFIXES = {
+    ".ipynb",
+    ".py",
+    ".sh",
+}
 
 
 @dataclass(frozen=True)
@@ -203,7 +224,12 @@ def _expected_outputs_prompt(
         "Based on the experiment plan below, return JSON only. The JSON must "
         "have schema_version 'researchclaw.expected_outputs.v1' and an outputs "
         "array listing relative workspace paths that the later experiment run "
-        "must produce. Do not include metric schemas.\n\n"
+        "must produce. List only files or directories produced by the formal "
+        "experiment when Stage 12 runs the manifest launch command. Exclude "
+        "implementation files, scripts, notebooks, config files, dependency "
+        "files, Stage 9 planning files such as plan.md and expected_outputs.json, "
+        "and control files such as run_manifest.json. Prefer result artifacts "
+        "under outputs/ or results/. Do not include metric schemas.\n\n"
         f"Workspace path: {context.workspace_path}\n\n"
         f"Plan:\n{plan_md}\n"
     )
@@ -230,6 +256,30 @@ def _validate_output_path(path: str, index: int) -> list[str]:
         errors.append(f"outputs[{index}] must not target {pure.parts[0]}")
     if ".git" in pure.parts:
         errors.append(f"outputs[{index}] must not target .git")
+    lower_path = pure.as_posix().lower()
+    lower_name = pure.name.lower()
+    if lower_name in _CONTROL_ARTIFACT_NAMES:
+        errors.append(
+            f"outputs[{index}] must be a Stage 12 result artifact, not "
+            f"ResearchClaw control artifact {pure.as_posix()}"
+        )
+    if lower_name in _IMPLEMENTATION_ARTIFACT_NAMES:
+        errors.append(
+            f"outputs[{index}] must be a Stage 12 result artifact, not "
+            f"implementation artifact {pure.as_posix()}"
+        )
+    if pure.suffix.lower() in _IMPLEMENTATION_SUFFIXES:
+        errors.append(
+            f"outputs[{index}] must be a Stage 12 result artifact, not "
+            f"implementation artifact {pure.as_posix()}"
+        )
+    if lower_name.endswith(("_config.yaml", "_config.yml")) or lower_path.endswith(
+        ("/config.yaml", "/config.yml")
+    ):
+        errors.append(
+            f"outputs[{index}] must be a Stage 12 result artifact, not "
+            f"implementation config artifact {pure.as_posix()}"
+        )
     return errors
 
 

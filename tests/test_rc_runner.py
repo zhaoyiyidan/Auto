@@ -178,6 +178,46 @@ def test_run_experiment_diagnosis_is_read_only(
     assert not (run_dir / "repair_prompt.txt").exists()
 
 
+def test_diagnosis_runs_after_stage12_before_stage13(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    rc_config = replace(
+        rc_config,
+        experiment=replace(
+            rc_config.experiment,
+            repair=replace(rc_config.experiment.repair, enabled=True),
+        ),
+    )
+    order: list[str] = []
+
+    monkeypatch.setattr(
+        rc_runner,
+        "_run_experiment_diagnosis",
+        lambda *args, **kwargs: order.append("diagnosis"),
+    )
+
+    def mock_execute_stage(stage: Stage, **kwargs) -> StageResult:
+        _ = kwargs
+        if stage == Stage.EXPERIMENT_ROUTE_DECISION:
+            order.append("stage13")
+            return _route_result(stage, "continue")
+        _touch_stage_dir(run_dir, stage)
+        return _done(stage)
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-diagnosis-order",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    assert order.index("diagnosis") < order.index("stage13")
+
+
 def test_execute_pipeline_runs_stages_in_sequence(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,

@@ -409,6 +409,11 @@ def is_forward_progress(result: StageResult) -> bool:
     return True
 
 
+def _recurse_pipeline(*, from_stage: Stage, **kwargs: object) -> list[StageResult]:
+    """Re-enter the global stage loop from ``from_stage`` with one run context."""
+    return execute_pipeline(from_stage=from_stage, **kwargs)
+
+
 def _run_experiment_loop(
     *,
     run_dir: Path,
@@ -655,6 +660,20 @@ def execute_pipeline(
         Stage.EXPERIMENT_ROUTE_DECISION,
     }
     experiment_loop_handled = False
+    forward_kwargs = {
+        "run_dir": run_dir,
+        "run_id": run_id,
+        "config": config,
+        "adapters": adapters,
+        "to_stage": to_stage,
+        "auto_approve_gates": auto_approve_gates,
+        "stop_on_gate": stop_on_gate,
+        "skip_noncritical": skip_noncritical,
+        "kb_root": kb_root,
+        "cancel_event": cancel_event,
+        "initialize_run_globals": initialize_run_globals,
+        "on_stage_complete": on_stage_complete,
+    }
 
     for stage in STAGE_SEQUENCE:
         started = _should_start(stage, from_stage, started)
@@ -995,19 +1014,10 @@ def execute_pipeline(
                 _version_rollback_stages(
                     run_dir, rollback_target, pivot_count + 1,
                 )
-                # Recurse from rollback target
-                pivot_results = execute_pipeline(
-                    run_dir=run_dir,
-                    run_id=run_id,
-                    config=config,
-                    adapters=adapters,
+                # Recurse from rollback target.
+                pivot_results = _recurse_pipeline(
                     from_stage=rollback_target,
-                    auto_approve_gates=auto_approve_gates,
-                    stop_on_gate=stop_on_gate,
-                    skip_noncritical=skip_noncritical,
-                    kb_root=kb_root,
-                    cancel_event=cancel_event,
-                    initialize_run_globals=initialize_run_globals,
+                    **forward_kwargs,
                 )
                 results.extend(pivot_results)
                 _promote_best_stage14(run_dir, config)

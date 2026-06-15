@@ -414,134 +414,6 @@ def _recurse_pipeline(*, from_stage: Stage, **kwargs: object) -> list[StageResul
     return execute_pipeline(from_stage=from_stage, **kwargs)
 
 
-def _run_experiment_loop(
-    *,
-    run_dir: Path,
-    run_id: str,
-    config: RCConfig,
-    adapters: AdapterBundle,
-    start_at: Stage = Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
-    auto_approve_gates: bool = False,
-    stop_on_gate: bool = False,
-    cancel_event: threading.Event | None = None,
-) -> tuple[list[StageResult], str]:
-    _ = stop_on_gate
-    results: list[StageResult] = []
-    max_experiment_iterations = _max_experiment_iterations(config)
-    loop_stages = {
-        Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
-        Stage.MANIFEST_VALIDATE_AND_PREPARE,
-        Stage.HARNESS_SUBMIT_AND_COLLECT,
-        Stage.EXPERIMENT_ROUTE_DECISION,
-    }
-    if start_at not in loop_stages:
-        start_at = Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR
-
-    while True:
-        if cancel_event is not None and cancel_event.is_set():
-            return results, "stop"
-
-        if start_at in {
-            Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
-            Stage.MANIFEST_VALIDATE_AND_PREPARE,
-        }:
-            if start_at is Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR:
-                result = execute_stage(
-                    Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
-                    run_dir=run_dir,
-                    run_id=run_id,
-                    config=config,
-                    adapters=adapters,
-                    auto_approve_gates=auto_approve_gates,
-                )
-                results.append(result)
-                if result.status is not StageStatus.DONE:
-                    return results, "stop"
-
-            result = execute_stage(
-                Stage.MANIFEST_VALIDATE_AND_PREPARE,
-                run_dir=run_dir,
-                run_id=run_id,
-                config=config,
-                adapters=adapters,
-                auto_approve_gates=auto_approve_gates,
-            )
-            results.append(result)
-            if (
-                result.status is StageStatus.FAILED
-                and result.decision == "fix_code"
-            ):
-                if len(_read_experiment_iterations(run_dir)) >= max_experiment_iterations:
-                    return results, "continue"
-                attempt = _record_experiment_iteration(
-                    run_dir,
-                    route="fix_code",
-                    jump="11->10",
-                    target=Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
-                )
-                _version_rollback_stages(
-                    run_dir,
-                    Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
-                    attempt,
-                    incremental=True,
-                )
-                start_at = Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR
-                continue
-            if result.status is not StageStatus.DONE:
-                return results, "stop"
-
-        if start_at in {
-            Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
-            Stage.MANIFEST_VALIDATE_AND_PREPARE,
-            Stage.HARNESS_SUBMIT_AND_COLLECT,
-        }:
-            result = execute_stage(
-                Stage.HARNESS_SUBMIT_AND_COLLECT,
-                run_dir=run_dir,
-                run_id=run_id,
-                config=config,
-                adapters=adapters,
-                auto_approve_gates=auto_approve_gates,
-            )
-            results.append(result)
-            if result.status is not StageStatus.DONE:
-                return results, "stop"
-
-        if config.experiment.repair.enabled:
-            _run_experiment_diagnosis(run_dir, config, run_id)
-
-        result = execute_stage(
-            Stage.EXPERIMENT_ROUTE_DECISION,
-            run_dir=run_dir,
-            run_id=run_id,
-            config=config,
-            adapters=adapters,
-            auto_approve_gates=auto_approve_gates,
-        )
-        results.append(result)
-        if result.status is not StageStatus.DONE:
-            return results, "stop"
-
-        route = result.decision or "continue"
-        if route in {"continue", "proceed"}:
-            return results, "continue"
-        if route in {"abort", "hitl"}:
-            return results, route
-        target = _route_to_stage(route)
-        if target is None:
-            return results, "stop"
-        if len(_read_experiment_iterations(run_dir)) >= max_experiment_iterations:
-            return results, "continue"
-        attempt = _record_experiment_iteration(
-            run_dir,
-            route=route,
-            jump=f"13->{route}",
-            target=target,
-        )
-        _version_rollback_stages(run_dir, target, attempt, incremental=True)
-        start_at = target
-
-
 def _run_per_hypothesis_coordinator(
     *,
     run_dir: Path,
@@ -653,13 +525,6 @@ def execute_pipeline(
     ):
         per_hypothesis_validation_ran = True
 
-    experiment_loop_stages = {
-        Stage.CODE_AGENT_IMPLEMENT_OR_REPAIR,
-        Stage.MANIFEST_VALIDATE_AND_PREPARE,
-        Stage.HARNESS_SUBMIT_AND_COLLECT,
-        Stage.EXPERIMENT_ROUTE_DECISION,
-    }
-    experiment_loop_handled = False
     forward_kwargs = {
         "run_dir": run_dir,
         "run_id": run_id,
@@ -707,63 +572,6 @@ def execute_pipeline(
         if cancel_event is not None and cancel_event.is_set():
             logger.info("[%s] Pipeline cancelled before stage %s", run_id, stage.name)
             print(f"[{run_id}] Pipeline cancelled by user.")
-            break
-
-        if stage in experiment_loop_stages:
-            if experiment_loop_handled:
-                continue
-            loop_results, outcome = _run_experiment_loop(
-                run_dir=run_dir,
-                run_id=run_id,
-                config=config,
-                adapters=adapters,
-                start_at=stage,
-                auto_approve_gates=auto_approve_gates,
-                stop_on_gate=stop_on_gate,
-                cancel_event=cancel_event,
-            )
-            results.extend(loop_results)
-            for loop_result in loop_results:
-                if loop_result.status is StageStatus.DONE:
-                    _write_checkpoint(
-                        run_dir,
-                        loop_result.stage,
-                        run_id,
-                        adapters=adapters,
-                    )
-                    _notify_stage_complete(on_stage_complete, loop_result.stage)
-                    if kb_root is not None:
-                        try:
-                            loop_stage_dir = run_dir / f"stage-{int(loop_result.stage):02d}"
-                            write_stage_to_kb(
-                                kb_root,
-                                stage_id=int(loop_result.stage),
-                                stage_name=loop_result.stage.name.lower(),
-                                run_id=run_id,
-                                artifacts=list(loop_result.artifacts),
-                                stage_dir=loop_stage_dir,
-                                backend=config.knowledge_base.backend,
-                                topic=config.research.topic,
-                            )
-                        except Exception:  # noqa: BLE001
-                            pass
-            experiment_loop_handled = True
-            if outcome == "continue":
-                continue
-            if (
-                outcome == "stop"
-                and loop_results
-                and loop_results[-1].status is StageStatus.FAILED
-            ):
-                last = loop_results[-1]
-                notify_terminal_failure(
-                    config=config,
-                    run_id=run_id,
-                    stage_name=last.stage.name,
-                    stage_num=int(last.stage),
-                    error=last.error,
-                    run_dir=run_dir,
-                )
             break
 
         stage_num = int(stage)
@@ -902,6 +710,44 @@ def execute_pipeline(
             err = result.error or "paused"
             print(f"{prefix} {stage.name} -- PAUSED ({elapsed:.1f}s) -- {err}")
         results.append(result)
+
+        experiment_route: str | None = None
+        if (
+            stage == Stage.MANIFEST_VALIDATE_AND_PREPARE
+            and result.status == StageStatus.DONE
+            and result.decision == "fix_code"
+        ):
+            experiment_route = "fix_code"
+        elif (
+            stage == Stage.EXPERIMENT_ROUTE_DECISION
+            and result.status == StageStatus.DONE
+        ):
+            decision = result.decision or "continue"
+            if decision in {"fix_code", "rerun"}:
+                experiment_route = decision
+            elif decision not in {"continue", "proceed", "abort", "hitl"}:
+                break
+
+        if experiment_route is not None:
+            target = _route_to_stage(experiment_route)
+            if target is None:
+                break
+            if len(_read_experiment_iterations(run_dir)) >= _max_experiment_iterations(config):
+                continue
+            attempt = _record_experiment_iteration(
+                run_dir,
+                route=experiment_route,
+                jump=f"{int(stage)}->{experiment_route}",
+                target=target,
+            )
+            # Experiment route targets must stay inside the Stage 10/12 repair band.
+            _version_rollback_stages(run_dir, target, attempt, incremental=True)
+            routed_results = _recurse_pipeline(
+                from_stage=target,
+                **forward_kwargs,
+            )
+            results.extend(routed_results)
+            break
 
         if kb_root is not None and result.status == StageStatus.DONE:
             try:

@@ -805,7 +805,7 @@ def execute_pipeline(
             except Exception:  # noqa: BLE001
                 pass
 
-        if result.status == StageStatus.DONE:
+        if is_forward_progress(result):
             _write_checkpoint(run_dir, stage, run_id, adapters=adapters)
             _notify_stage_complete(on_stage_complete, stage)
             if (

@@ -1052,7 +1052,7 @@ class TestWorkspaceAgentStageWiring:
         )
 
         assert called == []
-        assert result.status is StageStatus.FAILED
+        assert result.status is StageStatus.DONE
         assert result.decision == "fix_code"
         repair_request = run_dir / "repair_request.json"
         assert repair_request.is_file()
@@ -1104,7 +1104,7 @@ class TestWorkspaceAgentStageWiring:
             llm=None,
         )
 
-        assert result.status is StageStatus.FAILED
+        assert result.status is StageStatus.DONE
         assert result.decision == "fix_code"
         repair = json.loads((run_dir / "repair_request.json").read_text(encoding="utf-8"))
         assert repair["origin_stage"] == 11

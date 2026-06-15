@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from researchclaw.experiment.protocol import parse_hypotheses_md
+from researchclaw.pipeline.branch_checkpoint import (
+    BRANCH_STAGE_MAX,
+    BRANCH_STAGE_MIN,
+    read_branch_state,
+)
 from researchclaw.pipeline.hypothesis_store import (
     HypothesisNode,
     HypothesisStore,
@@ -38,6 +43,37 @@ def _followup_payload(result: Any) -> dict[str, Any] | None:
 
 def _attempt_name(attempt: ValidationAttempt) -> str:
     return attempt.attempt_id.split("/", 1)[-1]
+
+
+def _coerce_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _attempt_file_class(branch_run_dir: Path) -> str:
+    result_path = branch_run_dir / "attempt_result.json"
+    if result_path.exists():
+        try:
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, TypeError, ValueError):
+            return "pending"
+        if isinstance(payload, dict):
+            status = str(payload.get("status") or "").lower()
+            if status == "failed":
+                return "failed"
+            return "completed"
+
+    state = read_branch_state(branch_run_dir)
+    if state is not None:
+        last_completed = _coerce_int(state.get("last_completed_stage"))
+        if (
+            last_completed is not None
+            and int(BRANCH_STAGE_MIN) <= last_completed <= int(BRANCH_STAGE_MAX)
+        ):
+            return "interrupted"
+    return "pending"
 
 
 def _session_name(
@@ -257,6 +293,37 @@ class HypothesisValidationCoordinator:
             workspace_path=workspace_path,
             agent_session_name=session_name,
             started_at=created_at,
+        )
+
+    def _sync_attempt_from_branch_state(
+        self,
+        attempt: ValidationAttempt,
+    ) -> ValidationAttempt:
+        state = read_branch_state(Path(attempt.branch_run_dir))
+        if state is None:
+            return attempt
+
+        raw_stage_status = state.get("stage_status")
+        stage_status: dict[int, str] = {}
+        if isinstance(raw_stage_status, dict):
+            for stage, status in raw_stage_status.items():
+                stage_number = _coerce_int(stage)
+                if stage_number is None:
+                    continue
+                stage_status[stage_number] = str(status)
+
+        workspace_path = state.get("workspace_path")
+        workspace = (
+            str(workspace_path)
+            if isinstance(workspace_path, str) and workspace_path.strip()
+            else attempt.workspace_path
+        )
+        if stage_status == attempt.stage_status and workspace == attempt.workspace_path:
+            return attempt
+        return self.store.update_attempt(
+            attempt.attempt_id,
+            stage_status=stage_status,
+            workspace_path=workspace,
         )
 
     def _release_attempt_workspace(
@@ -707,8 +774,10 @@ class HypothesisValidationCoordinator:
 
         resumed: list[ValidationAttempt] = []
         for item in DurableWorkQueue(self.run_dir).read_items():
-            result_path = Path(item.branch_run_dir) / "attempt_result.json"
-            if result_path.exists():
+            branch_run_dir = Path(item.branch_run_dir)
+            item_class = _attempt_file_class(branch_run_dir)
+            result_path = branch_run_dir / "attempt_result.json"
+            if item_class in {"completed", "failed"}:
                 try:
                     finished = self.reduce_attempt_result(
                         result_path,
@@ -725,6 +794,8 @@ class HypothesisValidationCoordinator:
                     continue
             node = self.store._read_node(item.node_id)
             attempt = self.store._read_attempt(item.attempt_id)
+            if item_class == "interrupted":
+                attempt = self._sync_attempt_from_branch_state(attempt)
             self._seed_branch_for_attempt(node, attempt)
             self.store.set_node_status(
                 node.id,
@@ -773,8 +844,10 @@ class HypothesisValidationCoordinator:
         jobs: list[tuple[HypothesisNode, ValidationAttempt]] = []
         reduced: list[ValidationAttempt] = []
         for item in DurableWorkQueue(self.run_dir).read_items():
-            result_path = Path(item.branch_run_dir) / "attempt_result.json"
-            if result_path.exists():
+            branch_run_dir = Path(item.branch_run_dir)
+            item_class = _attempt_file_class(branch_run_dir)
+            result_path = branch_run_dir / "attempt_result.json"
+            if item_class in {"completed", "failed"}:
                 try:
                     finished = self.reduce_attempt_result(
                         result_path,
@@ -795,6 +868,8 @@ class HypothesisValidationCoordinator:
                     continue
             node = self.store._read_node(item.node_id)
             attempt = self.store._read_attempt(item.attempt_id)
+            if item_class == "interrupted":
+                attempt = self._sync_attempt_from_branch_state(attempt)
             self._seed_branch_for_attempt(node, attempt)
             self.store.set_node_status(
                 node.id,

@@ -371,3 +371,179 @@ def test_evidence_aggregator_write_all_is_idempotent_and_overwrites_atomically(
     assert (aggregate_dir / "evidence_registry.jsonl").is_file()
     assert (aggregate_dir / "paper_context.md").is_file()
     assert not list(aggregate_dir.glob("*.tmp"))
+
+
+def test_aggregate_writes_root_schema_and_recommended_supported(
+    tmp_path: Path,
+) -> None:
+    from researchclaw.pipeline.hypothesis_store import HypothesisStore
+
+    EvidenceAggregator = _aggregator_cls()
+    store = HypothesisStore(tmp_path)
+    supported = store.create_node(
+        statement="Supported hypothesis.",
+        prediction="Supported prediction.",
+        falsification="Supported falsification.",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    inconclusive = store.create_node(
+        statement="Inconclusive hypothesis.",
+        created_at="2026-01-01T00:00:01+00:00",
+    )
+    for node, status, decision, score in [
+        (supported, "supported", "proceed", 0.91),
+        (inconclusive, "inconclusive", "inconclusive", 0.2),
+    ]:
+        attempt = store.add_attempt(
+            node_id=node.id,
+            branch_run_dir=str(tmp_path / "branches" / node.id / "attempt-001"),
+            created_at="2026-01-01T00:01:00+00:00",
+        )
+        store.update_attempt(
+            attempt.attempt_id,
+            status="succeeded",
+            metrics={"score": score},
+            artifacts=["stage-15/verdict.json"],
+            decision=decision,
+            finished_at="2026-01-01T00:02:00+00:00",
+        )
+        store.set_node_status(
+            node.id,
+            "validating",
+            created_at="2026-01-01T00:03:00+00:00",
+        )
+        store.set_node_status(
+            node.id,
+            status,
+            created_at="2026-01-01T00:04:00+00:00",
+        )
+
+    aggregate = EvidenceAggregator(tmp_path).aggregate(
+        generated_at="2026-01-01T00:05:00+00:00",
+    )
+
+    assert aggregate["run_id"] == tmp_path.name
+    assert aggregate["hypothesis_tree"] == {
+        "total_nodes": 2,
+        "terminal_nodes": 2,
+        "supported": 1,
+        "inconclusive": 1,
+        "superseded": 0,
+    }
+    assert len(aggregate["validation_summary"]) == 2
+    assert aggregate["validation_summary"][0]["decision"] == "supported"
+    assert aggregate["validation_summary"][0]["stage15_decision"] == "proceed"
+    assert aggregate["validation_summary"][1]["decision"] == "inconclusive"
+    assert aggregate["validation_summary"][1]["stage15_decision"] == "inconclusive"
+    assert aggregate["recommended_hypotheses"] == [
+        {
+            "node_id": supported.id,
+            "statement": "Supported hypothesis.",
+            "prediction": "Supported prediction.",
+            "falsification": "Supported falsification.",
+        }
+    ]
+    assert json.loads((tmp_path / "hypothesis_aggregate.json").read_text()) == aggregate
+
+
+def test_aggregate_includes_terminal_failed_attempt_for_diagnostics(
+    tmp_path: Path,
+) -> None:
+    from researchclaw.pipeline.hypothesis_store import HypothesisStore
+
+    EvidenceAggregator = _aggregator_cls()
+    store = HypothesisStore(tmp_path)
+    node = store.create_node(
+        statement="Failed validation hypothesis.",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    attempt = store.add_attempt(
+        node_id=node.id,
+        branch_run_dir=str(tmp_path / "branches" / node.id / "attempt-001"),
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+    store.update_attempt(
+        attempt.attempt_id,
+        status="failed",
+        artifacts=["stage-10/stage-10-workspace-agent-result.json"],
+        error="E10_CODE_AGENT_FAIL: timeout",
+        finished_at="2026-01-01T00:02:00+00:00",
+    )
+    store.set_node_status(
+        node.id,
+        "validating",
+        created_at="2026-01-01T00:03:00+00:00",
+    )
+    store.set_node_status(
+        node.id,
+        "inconclusive",
+        created_at="2026-01-01T00:04:00+00:00",
+    )
+
+    aggregate = EvidenceAggregator(tmp_path).aggregate(
+        generated_at="2026-01-01T00:05:00+00:00",
+    )
+
+    row = aggregate["validation_summary"][0]
+    assert row["decision"] == "inconclusive"
+    assert row["branch_run_dir"].endswith("branches/h-001/attempt-001")
+    assert row["artifacts"] == ["stage-10/stage-10-workspace-agent-result.json"]
+    assert aggregate["evidence_registry"][node.id]["attempt_id"] == attempt.attempt_id
+
+
+def test_write_root_handoff_marks_zero_supported_as_inconclusive(
+    tmp_path: Path,
+) -> None:
+    from researchclaw.pipeline.hypothesis_store import HypothesisStore
+
+    EvidenceAggregator = _aggregator_cls()
+    store = HypothesisStore(tmp_path)
+    node = store.create_node(
+        statement="Unvalidated hypothesis.",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    attempt = store.add_attempt(
+        node_id=node.id,
+        branch_run_dir=str(tmp_path / "branches" / node.id / "attempt-001"),
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+    store.update_attempt(
+        attempt.attempt_id,
+        status="failed",
+        artifacts=["stage-10/stage-10-workspace-agent-result.json"],
+        error="E10_CODE_AGENT_FAIL: timeout",
+        finished_at="2026-01-01T00:02:00+00:00",
+    )
+    store.set_node_status(
+        node.id,
+        "validating",
+        created_at="2026-01-01T00:03:00+00:00",
+    )
+    store.set_node_status(
+        node.id,
+        "inconclusive",
+        created_at="2026-01-01T00:04:00+00:00",
+    )
+    aggregator = EvidenceAggregator(tmp_path)
+    aggregate = aggregator.aggregate(
+        generated_at="2026-01-01T00:05:00+00:00",
+    )
+
+    handoff = aggregator.write_root_handoff(
+        aggregate,
+        generated_at="2026-01-01T00:05:00+00:00",
+    )
+
+    analysis = (tmp_path / "stage-14" / "analysis.md").read_text(encoding="utf-8")
+    decision_md = (tmp_path / "stage-15" / "decision.md").read_text(
+        encoding="utf-8"
+    )
+    verdict = json.loads((tmp_path / "stage-15" / "verdict.json").read_text())
+    provenance = json.loads((tmp_path / "stage-14" / "provenance.json").read_text())
+
+    assert handoff["decision"] == "inconclusive"
+    assert "Result quality: 2/10" in analysis
+    assert "No branch produced a supported verdict" in decision_md
+    assert verdict["decision"] == "inconclusive"
+    assert verdict["key_metrics"]["supported"] == 0
+    assert provenance["source"] == "hypothesis_aggregate.json"

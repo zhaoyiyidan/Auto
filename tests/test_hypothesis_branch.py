@@ -100,6 +100,16 @@ def _workspace_config(tmp_path: Path) -> Any:
     )
 
 
+def test_branch_config_clears_hitl_required_stages(tmp_path: Path) -> None:
+    from researchclaw.pipeline.hypothesis_branch import branch_config
+
+    config = _workspace_config(tmp_path)
+    branch = branch_config(config)
+
+    assert config.security.hitl_required_stages
+    assert branch.security.hitl_required_stages == ()
+
+
 def test_seed_branch_dir_links_shared_context_and_writes_single_hypothesis(
     tmp_path: Path,
 ) -> None:
@@ -221,6 +231,8 @@ def test_validate_branch_runs_stage9_to_stage15_and_writes_attempt_result(
     assert recorded["to_stage"] is Stage.RESEARCH_DECISION
     assert recorded["config"] is not None
     assert recorded["adapters"] is not None
+    assert recorded["auto_approve_gates"] is True
+    assert recorded["initialize_run_globals"] is False
     assert result["decision"] == "pivot"
     assert result["artifacts"] == ["decision.md"]
 
@@ -432,6 +444,46 @@ def test_provision_workspace_creates_distinct_git_worktrees(
     assert (path_two / "README.md").read_text(encoding="utf-8") == "base workspace\n"
 
 
+def test_provision_workspace_resolves_relative_workspace_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    try:
+        from researchclaw.pipeline.hypothesis_branch import (
+            provision_workspace,
+            release_workspace,
+        )
+        from researchclaw.pipeline.hypothesis_store import ValidationAttempt
+    except ImportError:
+        pytest.fail("provision_workspace dependencies are not implemented")
+
+    repo = tmp_path / "repo"
+    _init_git_repo(repo)
+    monkeypatch.chdir(tmp_path)
+    attempt = ValidationAttempt(
+        attempt_id="h-001/attempt-001",
+        node_id="h-001",
+        branch_run_dir=str(tmp_path / "branch"),
+    )
+
+    provisioned = provision_workspace(
+        attempt,
+        source_workspace=repo,
+        workspace_root=Path("branch-worktrees"),
+    )
+    workspace_path = Path(provisioned.workspace_path or "")
+
+    assert workspace_path.is_absolute()
+    assert workspace_path == tmp_path / "branch-worktrees" / "h-001-attempt-001"
+    assert workspace_path.exists()
+    assert not (repo / "branch-worktrees").exists()
+
+    release_workspace(
+        replace(provisioned, status="succeeded"),
+        source_workspace=repo,
+    )
+
+
 def test_release_workspace_removes_terminal_worktree_idempotently(
     tmp_path: Path,
 ) -> None:
@@ -524,6 +576,7 @@ def test_validate_branch_disables_runner_global_initialization(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from researchclaw.adapters import AdapterBundle
     from researchclaw.pipeline import hypothesis_branch
     from researchclaw.pipeline.executor import StageResult
     from researchclaw.pipeline.hypothesis_branch import validate_branch
@@ -558,7 +611,8 @@ def test_validate_branch_disables_runner_global_initialization(
             branch_run_dir=str(branch_run_dir),
         ),
         config=_workspace_config(tmp_path),
-        adapters=object(),
+        adapters=AdapterBundle(hitl=object()),
     )
 
     assert recorded["initialize_run_globals"] is False
+    assert recorded["adapters"].hitl is None

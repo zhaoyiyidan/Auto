@@ -831,6 +831,120 @@ def test_default_hypothesis_validation_skips_cycle_archive_wiring(
     assert calls == []
 
 
+def test_per_hypothesis_mode_bypasses_single_line_stage9_to_15(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    from researchclaw.pipeline.hypothesis_coordinator import (
+        HypothesisValidationCoordinator,
+    )
+
+    seen: list[Stage] = []
+    coordinator_calls: list[Path] = []
+
+    def mock_execute_stage(stage: Stage, **kwargs: Any) -> StageResult:
+        stage_dir = run_dir / f"stage-{int(stage):02d}"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        seen.append(stage)
+        if stage is Stage.HYPOTHESIS_GEN:
+            (stage_dir / "hypotheses.md").write_text(
+                """
+## H1
+Statement: First branch hypothesis.
+Prediction: First prediction.
+Falsification: First falsification.
+
+## H2
+Statement: Second branch hypothesis.
+Prediction: Second prediction.
+Falsification: Second falsification.
+""",
+                encoding="utf-8",
+            )
+            return _done(stage, artifacts=("hypotheses.md",))
+        return _done(stage)
+
+    def fake_run_until_queue_empty(self: Any, **kwargs: Any) -> list[Any]:
+        _ = kwargs
+        coordinator_calls.append(self.run_dir)
+        (self.run_dir / "hypothesis_aggregate.json").write_text(
+            json.dumps({"validation_summary": [{}, {}]}),
+            encoding="utf-8",
+        )
+        return []
+
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+    monkeypatch.setattr(
+        HypothesisValidationCoordinator,
+        "run_until_queue_empty",
+        fake_run_until_queue_empty,
+    )
+
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-per-hypothesis",
+        config=rc_config,
+        adapters=adapters,
+    )
+
+    assert coordinator_calls == [run_dir]
+    assert not any(
+        Stage.EXPERIMENT_TASK_SPEC <= stage <= Stage.RESEARCH_DECISION
+        for stage in seen
+    )
+    assert Stage.PAPER_OUTLINE in seen
+    assert (run_dir / "hypothesis_aggregate.json").is_file()
+    assert not (run_dir / "hypothesis_tree" / "current_node.txt").exists()
+
+
+def test_resume_stage16_drains_per_hypothesis_queue_before_writing(
+    monkeypatch: pytest.MonkeyPatch,
+    run_dir: Path,
+    rc_config: RCConfig,
+    adapters: AdapterBundle,
+) -> None:
+    from researchclaw.pipeline.hypothesis_coordinator import (
+        HypothesisValidationCoordinator,
+    )
+
+    (run_dir / "hypothesis_tree").mkdir()
+    seen: list[str] = []
+
+    def fake_run_until_queue_empty(self: Any, **kwargs: Any) -> list[Any]:
+        _ = self, kwargs
+        seen.append("coordinator")
+        (run_dir / "hypothesis_aggregate.json").write_text(
+            json.dumps({"validation_summary": []}),
+            encoding="utf-8",
+        )
+        return []
+
+    def mock_execute_stage(stage: Stage, **kwargs: Any) -> StageResult:
+        _ = kwargs
+        seen.append(stage.name)
+        return _done(stage)
+
+    monkeypatch.setattr(
+        HypothesisValidationCoordinator,
+        "run_until_queue_empty",
+        fake_run_until_queue_empty,
+    )
+    monkeypatch.setattr(rc_runner, "execute_stage", mock_execute_stage)
+
+    rc_runner.execute_pipeline(
+        run_dir=run_dir,
+        run_id="run-resume-per-hypothesis",
+        config=rc_config,
+        adapters=adapters,
+        from_stage=Stage.PAPER_OUTLINE,
+        to_stage=Stage.PAPER_OUTLINE,
+    )
+
+    assert seen[:2] == ["coordinator", "PAPER_OUTLINE"]
+
+
 def test_experiment_loop_continue_runs_10_11_12_13_then_14(
     monkeypatch: pytest.MonkeyPatch,
     run_dir: Path,

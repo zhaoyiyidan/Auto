@@ -56,7 +56,8 @@ def test_workspace_codegen_prompt_preserves_constraints() -> None:
     assert "Stage 10 validation boundary" in prompt
     assert "MUST NOT run the formal experiment" in prompt
     assert "Required run_manifest.json format example" in prompt
-    assert "manifest.code_commit to the final HEAD commit" in prompt
+    assert "manifest.code_commit to the git commit that contains" in prompt
+    assert "not necessarily final HEAD" in prompt
     assert "schema_version, code_commit, launch.command, launch.cwd" in prompt
     manifest_example = _extract_run_manifest_example(prompt)
     assert manifest_example["result_paths"] == ["outputs/metrics.json"]

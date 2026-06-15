@@ -151,6 +151,51 @@ def test_cmd_run_reports_paused_pipeline(
     assert "1 paused" in captured.out
 
 
+def test_cmd_run_per_hypothesis_flags_override_runtime_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_valid_config(config_path)
+    output_dir = tmp_path / "artifacts" / "per-hypothesis-run"
+
+    from researchclaw.pipeline import runner as rc_runner
+
+    captured: dict[str, object] = {}
+
+    def fake_execute_pipeline(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(rc_runner, "execute_pipeline", fake_execute_pipeline)
+    monkeypatch.setattr(rc_runner, "read_checkpoint", lambda run_dir: None)
+
+    args = argparse.Namespace(
+        config=str(config_path),
+        topic=None,
+        output=str(output_dir),
+        from_stage=None,
+        to_stage=None,
+        auto_approve=False,
+        skip_preflight=True,
+        resume=False,
+        per_hypothesis=True,
+        max_concurrent=3,
+        skip_noncritical_stage=False,
+        no_graceful_degradation=False,
+        mode=None,
+        profile=None,
+        interventions=None,
+    )
+
+    code = rc_cli.cmd_run(args)
+
+    assert code == 0
+    config = captured["config"]
+    assert config.hypothesis_validation.enabled is True
+    assert config.hypothesis_validation.max_concurrent_branches == 3
+
+
 def test_cmd_run_lark_notify_uses_file_polling(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

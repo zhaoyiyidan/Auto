@@ -170,6 +170,7 @@ Rationale: Independent signal.
     ]
     assert verdicts == [
         ("h-001", "h-001/attempt-001", "proceed"),
+        ("h-002", "h-002/attempt-001", "inconclusive"),
         ("h-003", "h-003/attempt-001", "inconclusive"),
     ]
 
@@ -678,12 +679,763 @@ def test_coordinator_requeues_abandoned_attempts_up_to_cap(
         (node.id, "abandoned", "worker died")
     ]
     assert [item.attempt_id for item in DurableWorkQueue(tmp_path).read_items()] == [
+        "h-001/attempt-002",
+    ]
+    assert [
+        item.attempt_id
+        for item in DurableWorkQueue(tmp_path).read_items(include_done=True)
+    ] == [
         "h-001/attempt-001",
         "h-001/attempt-002",
     ]
-    assert (
-        Path(
-            DurableWorkQueue(tmp_path).read_items()[1].branch_run_dir
-        ).relative_to(tmp_path).as_posix()
-        == "hypothesis_branches/h-001/attempt-002"
+    retry_dir = Path(DurableWorkQueue(tmp_path).read_items()[0].branch_run_dir)
+    assert retry_dir.relative_to(tmp_path).as_posix() == (
+        "hypothesis_branches/h-001/attempt-002"
     )
+    retry_hypotheses = retry_dir / "stage-08" / "hypotheses.md"
+    assert retry_hypotheses.is_file()
+    assert "Statement: Treatment improves accuracy." in retry_hypotheses.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_failed_branch_result_marks_attempt_failed_and_node_inconclusive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from researchclaw.pipeline.hypothesis_queue import DurableWorkQueue, WorkItem
+
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    node = coordinator.store.create_node(
+        statement="Treatment improves accuracy.",
+        prediction="Accuracy improves.",
+        falsification="Accuracy does not improve.",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    attempt = coordinator.store.add_attempt(
+        node_id=node.id,
+        branch_run_dir=str(
+            tmp_path / "hypothesis_branches" / node.id / "attempt-001"
+        ),
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+    DurableWorkQueue(tmp_path).append(
+        WorkItem(
+            node_id=node.id,
+            attempt_id=attempt.attempt_id,
+            branch_run_dir=attempt.branch_run_dir,
+        ),
+        created_at="2026-01-01T00:02:00+00:00",
+    )
+
+    def fake_validate_branch(
+        node: Any,
+        attempt: Any,
+        config: Any,
+        adapters: Any,
+    ) -> Any:
+        return {
+            "attempt_id": attempt.attempt_id,
+            "node_id": node.id,
+            "status": "failed",
+            "decision": None,
+            "artifacts": ["stage-10/stage-10-workspace-agent-result.json"],
+            "error": "E10_CODE_AGENT_FAIL: timeout",
+        }
+
+    monkeypatch.setattr(coordinator, "validate_branch", fake_validate_branch)
+
+    completed = coordinator.run_pending_work_concurrent(
+        config=object(),
+        adapters=object(),
+        max_concurrent=1,
+        created_at="2026-01-01T00:03:00+00:00",
+    )
+
+    assert [(item.node_id, item.status, item.error) for item in completed] == [
+        (node.id, "failed", "E10_CODE_AGENT_FAIL: timeout")
+    ]
+    assert _node_payload(tmp_path, node.id)["status"] == "inconclusive"
+    verdicts = [
+        event
+        for event in _events(tmp_path)
+        if event["event_type"] == "node_verdict"
+    ]
+    assert verdicts[-1]["data"] == {
+        "from": "validating",
+        "to": "inconclusive",
+        "attempt_id": attempt.attempt_id,
+        "decision": "inconclusive",
+        "error": "E10_CODE_AGENT_FAIL: timeout",
+    }
+
+
+def test_abandoned_attempt_marks_node_inconclusive_when_retry_cap_exhausted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from researchclaw.pipeline.hypothesis_coordinator import WorkerAbandoned
+    from researchclaw.pipeline.hypothesis_queue import DurableWorkQueue, WorkItem
+
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    node = coordinator.store.create_node(
+        statement="Treatment improves accuracy.",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    attempt = coordinator.store.add_attempt(
+        node_id=node.id,
+        branch_run_dir=str(
+            tmp_path / "hypothesis_branches" / node.id / "attempt-001"
+        ),
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+    DurableWorkQueue(tmp_path).append(
+        WorkItem(
+            node_id=node.id,
+            attempt_id=attempt.attempt_id,
+            branch_run_dir=attempt.branch_run_dir,
+        ),
+        created_at="2026-01-01T00:02:00+00:00",
+    )
+
+    def fake_validate_branch(
+        node: Any,
+        attempt: Any,
+        config: Any,
+        adapters: Any,
+    ) -> Any:
+        raise WorkerAbandoned("worker died")
+
+    monkeypatch.setattr(coordinator, "validate_branch", fake_validate_branch)
+
+    completed = coordinator.run_pending_work_concurrent(
+        config=object(),
+        adapters=object(),
+        max_concurrent=1,
+        max_attempts_per_node=1,
+        created_at="2026-01-01T00:03:00+00:00",
+    )
+
+    assert [(item.node_id, item.status, item.error) for item in completed] == [
+        (node.id, "abandoned", "worker died")
+    ]
+    assert DurableWorkQueue(tmp_path).read_items() == []
+    assert _node_payload(tmp_path, node.id)["status"] == "inconclusive"
+
+
+def test_run_until_queue_empty_terminates_and_writes_aggregate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    coordinator.split_and_queue(
+        """
+## H1
+Statement: First hypothesis.
+Prediction: First prediction.
+Falsification: First falsification.
+
+## H2
+Statement: Second hypothesis.
+Prediction: Second prediction.
+Falsification: Second falsification.
+""",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    calls: list[str] = []
+
+    def fake_validate_branch(
+        node: Any,
+        attempt: Any,
+        config: Any,
+        adapters: Any,
+    ) -> Any:
+        calls.append(node.id)
+        return SimpleNamespace(
+            decision="proceed",
+            artifacts=("stage-15/verdict.json",),
+            metrics={"score": 0.9},
+        )
+
+    monkeypatch.setattr(coordinator, "validate_branch", fake_validate_branch)
+
+    nodes = coordinator.run_until_queue_empty(
+        config=object(),
+        adapters=object(),
+        max_concurrent=1,
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+
+    assert sorted(calls) == ["h-001", "h-002"]
+    assert [node.status for node in nodes] == ["supported", "supported"]
+    aggregate = json.loads((tmp_path / "hypothesis_aggregate.json").read_text())
+    assert aggregate["hypothesis_tree"]["total_nodes"] == 2
+    assert len(aggregate["validation_summary"]) == 2
+
+
+def test_run_until_queue_empty_runs_extend_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    coordinator.split_and_queue(
+        """
+## H1
+Statement: Parent hypothesis.
+Prediction: Parent prediction.
+Falsification: Parent falsification.
+
+## H2
+Statement: Sibling hypothesis.
+Prediction: Sibling prediction.
+Falsification: Sibling falsification.
+""",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    seen: list[str] = []
+
+    def fake_validate_branch(
+        node: Any,
+        attempt: Any,
+        config: Any,
+        adapters: Any,
+    ) -> Any:
+        _ = attempt, config, adapters
+        seen.append(node.id)
+        if node.id == "h-001":
+            return SimpleNamespace(
+                decision="extend",
+                artifacts=("stage-15/verdict.json",),
+                metrics={"score": 0.7},
+                next_hypothesis={
+                    "statement": "Child hypothesis.",
+                    "prediction": "Child prediction.",
+                    "falsification": "Child falsification.",
+                    "rationale": "Follow-up.",
+                },
+            )
+        return SimpleNamespace(
+            decision="proceed",
+            artifacts=("stage-15/verdict.json",),
+            metrics={"score": 0.9},
+        )
+
+    monkeypatch.setattr(coordinator, "validate_branch", fake_validate_branch)
+
+    nodes = coordinator.run_until_queue_empty(
+        config=object(),
+        adapters=object(),
+        max_concurrent=1,
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+
+    assert seen == ["h-001", "h-002", "h-003"]
+    assert [(node.id, node.status, node.parent_id) for node in nodes] == [
+        ("h-001", "superseded", None),
+        ("h-002", "supported", None),
+        ("h-003", "supported", "h-001"),
+    ]
+    child_hypotheses = (
+        tmp_path
+        / "hypothesis_branches"
+        / "h-003"
+        / "attempt-001"
+        / "stage-08"
+        / "hypotheses.md"
+    )
+    assert child_hypotheses.is_file()
+    assert "Statement: Child hypothesis." in child_hypotheses.read_text(
+        encoding="utf-8"
+    )
+    aggregate = json.loads((tmp_path / "hypothesis_aggregate.json").read_text())
+    assert aggregate["hypothesis_tree"]["total_nodes"] == 3
+
+
+def test_run_until_queue_empty_honors_max_tree_depth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from researchclaw.pipeline.hypothesis_queue import DurableWorkQueue
+
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    coordinator.split_and_queue(
+        """
+## H1
+Statement: Depth-limited hypothesis.
+Prediction: Depth-limited prediction.
+Falsification: Depth-limited falsification.
+""",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+
+    def fake_validate_branch(
+        node: Any,
+        attempt: Any,
+        config: Any,
+        adapters: Any,
+    ) -> Any:
+        _ = node, attempt, config, adapters
+        return SimpleNamespace(
+            decision="extend",
+            artifacts=("stage-15/verdict.json",),
+            metrics={"score": 0.5},
+            next_hypothesis={
+                "statement": "Skipped child hypothesis.",
+                "prediction": "Skipped child prediction.",
+                "falsification": "Skipped child falsification.",
+            },
+        )
+
+    monkeypatch.setattr(coordinator, "validate_branch", fake_validate_branch)
+
+    nodes = coordinator.run_until_queue_empty(
+        config=SimpleNamespace(
+            hypothesis_validation=SimpleNamespace(
+                max_tree_depth=0,
+                max_total_attempts=10,
+            )
+        ),
+        adapters=object(),
+        max_concurrent=1,
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+
+    assert [(node.id, node.status) for node in nodes] == [
+        ("h-001", "superseded")
+    ]
+    assert DurableWorkQueue(tmp_path).read_items() == []
+    events = _events(tmp_path)
+    assert any(
+        event["event_type"] == "followup_skipped"
+        and event["data"]["reason"] == "max_tree_depth"
+        for event in events
+    )
+
+
+def test_run_until_queue_empty_dedupes_followup_hypotheses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    coordinator.split_and_queue(
+        """
+## H1
+Statement: First parent hypothesis.
+Prediction: First parent prediction.
+Falsification: First parent falsification.
+
+## H2
+Statement: Second parent hypothesis.
+Prediction: Second parent prediction.
+Falsification: Second parent falsification.
+""",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+
+    def fake_validate_branch(
+        node: Any,
+        attempt: Any,
+        config: Any,
+        adapters: Any,
+    ) -> Any:
+        _ = attempt, config, adapters
+        if node.id in {"h-001", "h-002"}:
+            return SimpleNamespace(
+                decision="extend",
+                artifacts=("stage-15/verdict.json",),
+                metrics={"score": 0.5},
+                next_hypothesis={
+                    "statement": "Shared follow-up hypothesis.",
+                    "prediction": "Shared follow-up prediction.",
+                    "falsification": "Shared follow-up falsification.",
+                },
+            )
+        return SimpleNamespace(
+            decision="proceed",
+            artifacts=("stage-15/verdict.json",),
+            metrics={"score": 0.9},
+        )
+
+    monkeypatch.setattr(coordinator, "validate_branch", fake_validate_branch)
+
+    nodes = coordinator.run_until_queue_empty(
+        config=SimpleNamespace(
+            hypothesis_validation=SimpleNamespace(
+                max_tree_depth=3,
+                max_total_attempts=10,
+            )
+        ),
+        adapters=object(),
+        max_concurrent=2,
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+
+    assert [(node.id, node.status) for node in nodes] == [
+        ("h-001", "superseded"),
+        ("h-002", "superseded"),
+        ("h-003", "supported"),
+    ]
+    dedup_events = [
+        event for event in _events(tmp_path) if event["event_type"] == "followup_deduped"
+    ]
+    assert len(dedup_events) == 1
+    assert dedup_events[0]["data"]["existing_node_id"] == "h-003"
+
+
+def test_resume_skips_completed_attempts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from researchclaw.pipeline.hypothesis_queue import DurableWorkQueue, WorkItem
+
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    node = coordinator.store.create_node(
+        statement="Completed hypothesis.",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    attempt = coordinator.store.add_attempt(
+        node_id=node.id,
+        branch_run_dir=str(tmp_path / "hypothesis_branches" / node.id / "attempt-001"),
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+    DurableWorkQueue(tmp_path).append(
+        WorkItem(
+            node_id=node.id,
+            attempt_id=attempt.attempt_id,
+            branch_run_dir=attempt.branch_run_dir,
+        ),
+        created_at="2026-01-01T00:02:00+00:00",
+    )
+    result_path = Path(attempt.branch_run_dir) / "attempt_result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "attempt_id": attempt.attempt_id,
+                "node_id": node.id,
+                "status": "succeeded",
+                "decision": "proceed",
+                "artifacts": ["stage-15/verdict.json"],
+                "metrics": {"score": 0.93},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_validate_branch(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        raise AssertionError("completed attempt should not rerun")
+
+    monkeypatch.setattr(coordinator, "validate_branch", fail_validate_branch)
+
+    resumed = coordinator.resume_pending_work(
+        config=object(),
+        adapters=object(),
+        created_at="2026-01-01T00:03:00+00:00",
+    )
+
+    assert [(attempt.status, attempt.decision) for attempt in resumed] == [
+        ("succeeded", "proceed")
+    ]
+    assert DurableWorkQueue(tmp_path).read_items() == []
+
+
+def test_run_until_queue_empty_reduces_existing_branch_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    node = coordinator.store.create_node(
+        statement="Completed unqueued hypothesis.",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    attempt = coordinator.store.add_attempt(
+        node_id=node.id,
+        branch_run_dir=str(tmp_path / "hypothesis_branches" / node.id / "attempt-001"),
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+    coordinator.store.set_node_status(
+        node.id,
+        "validating",
+        created_at="2026-01-01T00:02:00+00:00",
+    )
+    result_path = Path(attempt.branch_run_dir) / "attempt_result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "attempt_id": attempt.attempt_id,
+                "node_id": node.id,
+                "status": "succeeded",
+                "decision": "proceed",
+                "artifacts": ["stage-15/verdict.json"],
+                "metrics": {"score": 0.88},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_validate_branch(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        raise AssertionError("existing result should be reduced without rerun")
+
+    monkeypatch.setattr(coordinator, "validate_branch", fail_validate_branch)
+
+    nodes = coordinator.run_until_queue_empty(
+        config=object(),
+        adapters=object(),
+        max_concurrent=1,
+        created_at="2026-01-01T00:03:00+00:00",
+    )
+
+    assert [(node.id, node.status) for node in nodes] == [
+        ("h-001", "supported")
+    ]
+    assert (tmp_path / "hypothesis_aggregate.json").is_file()
+
+
+def test_concurrent_branches_get_unique_workspaces_and_session_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    from researchclaw.pipeline import hypothesis_branch
+
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    coordinator.split_and_queue(
+        """
+## H1
+Statement: First workspace hypothesis.
+Prediction: First prediction.
+Falsification: First falsification.
+
+## H2
+Statement: Second workspace hypothesis.
+Prediction: Second prediction.
+Falsification: Second falsification.
+""",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    provisioned: list[str] = []
+    released: list[str] = []
+    seen: list[tuple[str | None, str | None]] = []
+
+    def fake_provision_workspace(
+        attempt: Any,
+        *,
+        source_workspace: Path,
+        workspace_root: Path | None = None,
+    ) -> Any:
+        _ = source_workspace
+        workspace = Path(workspace_root or tmp_path / ".worktrees") / (
+            attempt.attempt_id.replace("/", "-")
+        )
+        workspace.mkdir(parents=True, exist_ok=True)
+        provisioned.append(str(workspace))
+        return replace(attempt, workspace_path=str(workspace))
+
+    def fake_release_workspace(attempt: Any, *, source_workspace: Path | None = None) -> None:
+        _ = source_workspace
+        released.append(str(attempt.workspace_path))
+
+    def fake_validate_branch(
+        node: Any,
+        attempt: Any,
+        config: Any,
+        adapters: Any,
+    ) -> Any:
+        _ = node, config, adapters
+        seen.append((attempt.workspace_path, attempt.agent_session_name))
+        return SimpleNamespace(
+            decision="proceed",
+            artifacts=("stage-15/verdict.json",),
+            metrics={"score": 0.9},
+        )
+
+    monkeypatch.setattr(
+        hypothesis_branch,
+        "provision_workspace",
+        fake_provision_workspace,
+    )
+    monkeypatch.setattr(
+        hypothesis_branch,
+        "release_workspace",
+        fake_release_workspace,
+    )
+    monkeypatch.setattr(coordinator, "validate_branch", fake_validate_branch)
+
+    config = SimpleNamespace(
+        hypothesis_validation=SimpleNamespace(
+            workspace_isolation="shared",
+            max_tree_depth=3,
+            max_total_attempts=10,
+        ),
+        experiment=SimpleNamespace(
+            workspace_agent=SimpleNamespace(workspace_path=str(tmp_path / "source"))
+        ),
+    )
+    completed = coordinator.run_pending_work_concurrent(
+        config=config,
+        adapters=object(),
+        max_concurrent=2,
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+
+    assert [attempt.status for attempt in completed] == ["succeeded", "succeeded"]
+    assert len({workspace for workspace, _session in seen}) == 2
+    assert len({session for _workspace, session in seen}) == 2
+    assert all(session and session.startswith(f"{tmp_path.name}-h-") for _, session in seen)
+    assert sorted(provisioned) == sorted(released)
+
+
+def test_workspace_provisioning_is_limited_to_active_workers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+    from researchclaw.pipeline import hypothesis_branch
+
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    coordinator.split_and_queue(
+        """
+## H1
+Statement: First hypothesis.
+
+## H2
+Statement: Second hypothesis.
+
+## H3
+Statement: Third hypothesis.
+
+## H4
+Statement: Fourth hypothesis.
+""",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    lock = threading.Lock()
+    active_workspaces = 0
+    max_active_workspaces = 0
+
+    def fake_provision_workspace(
+        attempt: Any,
+        *,
+        source_workspace: Path,
+        workspace_root: Path | None = None,
+    ) -> Any:
+        nonlocal active_workspaces, max_active_workspaces
+        _ = source_workspace
+        workspace = Path(workspace_root or tmp_path / ".worktrees") / (
+            attempt.attempt_id.replace("/", "-")
+        )
+        workspace.mkdir(parents=True, exist_ok=True)
+        with lock:
+            active_workspaces += 1
+            max_active_workspaces = max(max_active_workspaces, active_workspaces)
+        return replace(attempt, workspace_path=str(workspace))
+
+    def fake_release_workspace(
+        attempt: Any,
+        *,
+        source_workspace: Path | None = None,
+    ) -> None:
+        nonlocal active_workspaces
+        _ = attempt, source_workspace
+        with lock:
+            active_workspaces -= 1
+
+    def fake_validate_branch(
+        node: Any,
+        attempt: Any,
+        config: Any,
+        adapters: Any,
+    ) -> Any:
+        _ = node, attempt, config, adapters
+        time.sleep(0.03)
+        return SimpleNamespace(
+            decision="proceed",
+            artifacts=("stage-15/verdict.json",),
+            metrics={"score": 0.9},
+        )
+
+    monkeypatch.setattr(
+        hypothesis_branch,
+        "provision_workspace",
+        fake_provision_workspace,
+    )
+    monkeypatch.setattr(
+        hypothesis_branch,
+        "release_workspace",
+        fake_release_workspace,
+    )
+    monkeypatch.setattr(coordinator, "validate_branch", fake_validate_branch)
+    config = SimpleNamespace(
+        hypothesis_validation=SimpleNamespace(
+            workspace_isolation="shared",
+            max_tree_depth=3,
+            max_total_attempts=10,
+        ),
+        experiment=SimpleNamespace(
+            workspace_agent=SimpleNamespace(workspace_path=str(tmp_path / "source"))
+        ),
+    )
+
+    completed = coordinator.run_pending_work_concurrent(
+        config=config,
+        adapters=object(),
+        max_concurrent=2,
+        created_at="2026-01-01T00:01:00+00:00",
+    )
+
+    assert [attempt.status for attempt in completed] == ["succeeded"] * 4
+    assert max_active_workspaces == 2
+    assert active_workspaces == 0
+
+
+def test_coordinator_gate_written_when_required(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    HypothesisValidationCoordinator = _coordinator_cls()
+    coordinator = HypothesisValidationCoordinator(tmp_path)
+    coordinator.split_and_queue(
+        """
+## H1
+Statement: Gate hypothesis.
+Prediction: Gate prediction.
+Falsification: Gate falsification.
+""",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+
+    def fake_validate_branch(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        return SimpleNamespace(
+            decision="proceed",
+            artifacts=("stage-15/verdict.json",),
+            metrics={"score": 0.9},
+        )
+
+    monkeypatch.setattr(coordinator, "validate_branch", fake_validate_branch)
+
+    coordinator.run_until_queue_empty(
+        config=object(),
+        adapters=object(),
+        max_concurrent=1,
+        created_at="2026-01-01T00:01:00+00:00",
+        require_coordinator_gate=True,
+    )
+
+    gate = json.loads((tmp_path / "coordinator_gate.json").read_text())
+    assert gate["status"] == "blocked_approval"
+    assert gate["reason"] == "coordinator_gate_required"

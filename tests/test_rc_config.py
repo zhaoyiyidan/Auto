@@ -242,6 +242,9 @@ def test_hypothesis_validation_config_defaults_enabled() -> None:
     assert defaults.enabled is True
     assert defaults.max_concurrent_branches == 1
     assert defaults.max_attempts_per_node == 1
+    assert defaults.max_tree_depth == 3
+    assert defaults.max_total_attempts == 100
+    assert defaults.require_coordinator_gate is False
     assert defaults.workspace_isolation == "shared"
 
 
@@ -253,6 +256,9 @@ def test_rcconfig_from_dict_parses_hypothesis_validation_config(
         "enabled": True,
         "max_concurrent_branches": 3,
         "max_attempts_per_node": 2,
+        "max_tree_depth": 4,
+        "max_total_attempts": 25,
+        "require_coordinator_gate": True,
         "workspace_isolation": "worktree",
     }
 
@@ -261,6 +267,9 @@ def test_rcconfig_from_dict_parses_hypothesis_validation_config(
     assert config.hypothesis_validation.enabled is True
     assert config.hypothesis_validation.max_concurrent_branches == 3
     assert config.hypothesis_validation.max_attempts_per_node == 2
+    assert config.hypothesis_validation.max_tree_depth == 4
+    assert config.hypothesis_validation.max_total_attempts == 25
+    assert config.hypothesis_validation.require_coordinator_gate is True
     assert config.hypothesis_validation.workspace_isolation == "worktree"
 
 

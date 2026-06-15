@@ -164,6 +164,62 @@ def test_stage10_reads_plan_md_not_task_spec(
     assert "task_spec.yaml" not in captured_prompt["prompt"]
 
 
+def test_stage10_rejects_agent_that_writes_final_result_paths(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from researchclaw.pipeline.stage_impls import _code_generation
+
+    workspace = tmp_path / "workspace"
+    commit = _init_git_workspace(workspace)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_stage9(run_dir, ["outputs/results.json"])
+    stage_dir = run_dir / "stage-10"
+    stage_dir.mkdir()
+    (workspace / "run_manifest.json").write_text(
+        json.dumps(_manifest(commit, ["outputs/results.json"])),
+        encoding="utf-8",
+    )
+
+    def fake_create_workspace_agent(*args, **kwargs):
+        return object()
+
+    def fake_run_workspace_agent_implement(**kwargs):
+        final_output = workspace / "outputs" / "results.json"
+        final_output.parent.mkdir(parents=True, exist_ok=True)
+        final_output.write_text('{"status": "premature"}\n', encoding="utf-8")
+        return WorkspaceAgentResult(
+            base_sha="base",
+            agent_commit_sha=commit,
+            manifest_path="run_manifest.json",
+            diff_stat="",
+            raw_log="",
+            provider_name="fake",
+            elapsed_sec=0.1,
+        )
+
+    monkeypatch.setattr(
+        "researchclaw.experiment.workspace_agent.create_workspace_agent",
+        fake_create_workspace_agent,
+    )
+    monkeypatch.setattr(
+        "researchclaw.pipeline.workspace_orchestrator.run_workspace_agent_implement",
+        fake_run_workspace_agent_implement,
+    )
+
+    result = _code_generation._execute_code_agent_implement_or_repair(
+        stage_dir,
+        run_dir,
+        _config(tmp_path, workspace),
+        AdapterBundle(),
+    )
+
+    assert result.status is StageStatus.FAILED
+    assert "Stage 10 created or modified final result artifacts" in (result.error or "")
+    assert "outputs/results.json" in (result.error or "")
+
+
 def test_stage11_run_manifest_must_cover_expected_outputs(tmp_path: Path) -> None:
     from researchclaw.pipeline.stage_impls._execution import (
         _execute_manifest_validate_and_prepare,

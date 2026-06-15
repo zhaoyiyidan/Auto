@@ -21,16 +21,23 @@ def _config(tmp_path: Path) -> RCConfig:
             "knowledge_base": {"backend": "markdown", "root": str(tmp_path / "kb")},
             "openclaw_bridge": {},
             "llm": {
-                "provider": "openai-compatible",
+                "provider": "acp",
                 "base_url": "http://localhost:1234/v1",
                 "api_key_env": "RC_TEST_KEY",
                 "api_key": "inline-test-key",
+                "acp": {
+                    "session_name": "main-session",
+                },
             },
             "experiment": {
                 "workspace_agent": {
                     "enabled": True,
                     "workspace_path": "/original/workspace",
                     "session_name": "base-session",
+                    "agent": "codex",
+                },
+                "result_analysis_agent": {
+                    "session_name": "analysis-session",
                     "agent": "codex",
                 }
             },
@@ -60,6 +67,10 @@ def test_branch_config_replaces_workspace_agent_without_mutating_original(
         cfg = kwargs["config"]
         seen["workspace_path"] = cfg.experiment.workspace_agent.workspace_path
         seen["session_name"] = cfg.experiment.workspace_agent.session_name
+        seen["llm_session_name"] = cfg.llm.acp.session_name
+        seen["analysis_session_name"] = (
+            cfg.experiment.result_analysis_agent.session_name
+        )
         return StageResult(
             stage=stage,
             status=StageStatus.DONE,
@@ -82,6 +93,10 @@ def test_branch_config_replaces_workspace_agent_without_mutating_original(
     assert seen == {
         "workspace_path": str(branch_workspace),
         "session_name": "base-session-h-001-attempt-001",
+        "llm_session_name": "base-session-h-001-attempt-001",
+        "analysis_session_name": "base-session-h-001-attempt-001-analysis",
     }
     assert config.experiment.workspace_agent.workspace_path == "/original/workspace"
     assert config.experiment.workspace_agent.session_name == "base-session"
+    assert config.experiment.result_analysis_agent.session_name == "analysis-session"
+    assert config.llm.acp.session_name == "main-session"

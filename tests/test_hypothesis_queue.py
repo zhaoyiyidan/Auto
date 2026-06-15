@@ -54,3 +54,30 @@ def test_durable_work_queue_appends_reads_and_dedupes_by_attempt_id(
     assert items[0].branch_run_dir == str(
         tmp_path / "branches" / "h-001" / "attempt-001"
     )
+
+
+def test_queue_complete_item_marks_done(tmp_path: Path) -> None:
+    DurableWorkQueue, WorkItem = _queue_classes()
+    queue = DurableWorkQueue(tmp_path)
+    first = WorkItem(
+        node_id="h-001",
+        attempt_id="h-001/attempt-001",
+        branch_run_dir=str(tmp_path / "branches" / "h-001" / "attempt-001"),
+    )
+    second = WorkItem(
+        node_id="h-002",
+        attempt_id="h-002/attempt-001",
+        branch_run_dir=str(tmp_path / "branches" / "h-002" / "attempt-001"),
+    )
+
+    queue.append(first, created_at="2026-01-01T00:00:00+00:00")
+    queue.append(second, created_at="2026-01-01T00:00:01+00:00")
+    queue.complete_item(first.attempt_id, created_at="2026-01-01T00:00:02+00:00")
+
+    assert [item.attempt_id for item in queue.read_items()] == [
+        "h-002/attempt-001",
+    ]
+    assert [item.attempt_id for item in queue.read_items(include_done=True)] == [
+        "h-001/attempt-001",
+        "h-002/attempt-001",
+    ]

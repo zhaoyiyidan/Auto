@@ -7,6 +7,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 from typing import Any
 
@@ -205,6 +206,32 @@ def _attempt_workspace_name(attempt: Any) -> str:
     return name or "attempt"
 
 
+def _is_git_worktree(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--is-inside-work-tree"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    return completed.stdout.strip() == "true"
+
+
+def _run_source_git(source_workspace: Path, *args: str, check: bool = True) -> None:
+    subprocess.run(
+        ["git", "-C", str(source_workspace), *args],
+        check=check,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
 def provision_workspace(
     attempt: Any,
     *,
@@ -218,23 +245,32 @@ def provision_workspace(
         else source_workspace.parent / ".worktrees"
     ).resolve()
     workspace_root.mkdir(parents=True, exist_ok=True)
-    target = workspace_root / _attempt_workspace_name(attempt)
-    if not target.exists():
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                str(source_workspace),
-                "worktree",
-                "add",
-                "--detach",
-                str(target),
-                "HEAD",
-            ],
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+    recorded_workspace = getattr(attempt, "workspace_path", None)
+    target = (
+        Path(recorded_workspace).resolve()
+        if recorded_workspace
+        else workspace_root / _attempt_workspace_name(attempt)
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not _is_git_worktree(target):
+        _run_source_git(source_workspace, "worktree", "prune")
+        _run_source_git(
+            source_workspace,
+            "worktree",
+            "repair",
+            str(target),
+            check=False,
+        )
+    if not _is_git_worktree(target):
+        if target.exists():
+            shutil.rmtree(target)
+        _run_source_git(
+            source_workspace,
+            "worktree",
+            "add",
+            "--detach",
+            str(target),
+            "HEAD",
         )
     return replace(attempt, workspace_path=str(target.resolve()))
 

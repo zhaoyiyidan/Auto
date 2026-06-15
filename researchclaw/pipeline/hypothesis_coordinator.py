@@ -92,6 +92,10 @@ class WorkerAbandoned(RuntimeError):
     """Raised when a branch worker dies before producing a terminal result."""
 
 
+class WorkspaceIsolationError(RuntimeError):
+    """Raised when an isolated branch workspace cannot be provisioned."""
+
+
 class HypothesisValidationCoordinator:
     def __init__(self, run_dir: Path) -> None:
         self.run_dir = Path(run_dir)
@@ -243,11 +247,10 @@ class HypothesisValidationCoordinator:
                 )
                 workspace_path = provisioned.workspace_path
             except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Workspace provisioning failed for %s; using shared workspace: %s",
-                    attempt.attempt_id,
-                    exc,
-                )
+                raise WorkspaceIsolationError(
+                    "Workspace isolation is enabled but provisioning failed for "
+                    f"{attempt.attempt_id}: {exc}"
+                ) from exc
         return self.store.update_attempt(
             attempt.attempt_id,
             status="running",
